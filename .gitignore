@@ -1,0 +1,28 @@
+# Rust
+/target/
+.DS_Store
+
+# For library projects, you might want to ignore Cargo.lock
+# Cargo.lock
+
+# Editor backups
+*~
+*.bak
+*.swp
+*.swo
+
+# IDEs
+## VSCode
+.vscode/
+
+## IntelliJ
+.idea/
+
+## Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vagrant
+.vagrant/
+# Vagrantfile is often versioned, but can be ignored.
+# Vagrantfile

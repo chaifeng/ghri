@@ -1,0 +1,16 @@
+# This is a project-specific configuration file for Cargo.
+# For more information, see the official documentation:
+# https://doc.rust-lang.org/cargo/reference/config.html
+
+# Configuration for building a fully static binary for Linux.
+# To use this, you need the musl target installed: `rustup target add x86_64-unknown-linux-musl`
+# Then, build with: `cargo build --release --target x86_64-unknown-linux-musl`
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+# This flag tells the linker to use a static C runtime library.
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# Optional: On any Linux target, strip the binary to reduce its size.
+# This removes debug symbols and other unnecessary information.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-s"]
