@@ -1,9 +1,9 @@
 use crate::{
     archive::extract_archive,
     download::download_file,
-    github::{get_latest_release, GitHubRepo},
+    github::{GitHubRepo, get_latest_release},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use std::fs;
 
@@ -44,6 +44,32 @@ pub async fn install(repo_str: &str) -> Result<()> {
 
     fs::remove_file(&temp_file_path)
         .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
+
+    let current_link = target_dir
+        .parent()
+        .expect("target_dir must have a parent")
+        .join("current");
+    match fs::symlink_metadata(&current_link) {
+        Ok(metadata) => {
+            if metadata.is_symlink() {
+                fs::remove_file(&current_link).with_context(|| {
+                    format!("Failed to remove existing symlink at {:?}", current_link)
+                })?;
+            } else {
+                bail!("Path {:?} exists but is not a symlink", current_link);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No processing needed if it doesn't exist
+        }
+        Err(e) => {
+            return Err(e).context(format!("Failed to read metadata for {:?}", current_link));
+        }
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target_dir.file_name().unwrap(), &current_link)
+        .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
 
     println!(
         "\nSuccessfully installed {} version {} to {:?}",
