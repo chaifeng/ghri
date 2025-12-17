@@ -29,32 +29,50 @@ pub async fn install(repo_str: &str) -> Result<()> {
             "Directory {:?} already exists. Skipping download and extraction.",
             target_dir
         );
-        return Ok(());
+    } else {
+        println!("Creating target directory: {:?}", target_dir);
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("Failed to create target directory at {:?}", target_dir))?;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
+
+        download_file(&release.tarball_url, &temp_file_path, &client).await?;
+        extract_archive(&temp_file_path, &target_dir)?;
+
+        fs::remove_file(&temp_file_path)
+            .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
     }
-
-    println!("Creating target directory: {:?}", target_dir);
-    fs::create_dir_all(&target_dir)
-        .with_context(|| format!("Failed to create target directory at {:?}", target_dir))?;
-
-    let temp_dir = std::env::temp_dir();
-    let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
-
-    download_file(&release.tarball_url, &temp_file_path, &client).await?;
-    extract_archive(&temp_file_path, &target_dir)?;
-
-    fs::remove_file(&temp_file_path)
-        .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
 
     let current_link = target_dir
         .parent()
         .expect("target_dir must have a parent")
         .join("current");
+
+    let link_target = target_dir
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get target directory name"))?;
+
+    let mut create_symlink = true;
+
     match fs::symlink_metadata(&current_link) {
         Ok(metadata) => {
             if metadata.is_symlink() {
-                fs::remove_file(&current_link).with_context(|| {
-                    format!("Failed to remove existing symlink at {:?}", current_link)
+                let current_dest = fs::read_link(&current_link).with_context(|| {
+                    format!("Failed to read symlink target of {:?}", current_link)
                 })?;
+
+                if current_dest == std::path::Path::new(link_target) {
+                    println!(
+                        "Symlink 'current' already points to version {}",
+                        release.tag_name
+                    );
+                    create_symlink = false;
+                } else {
+                    fs::remove_file(&current_link).with_context(|| {
+                        format!("Failed to remove existing symlink at {:?}", current_link)
+                    })?;
+                }
             } else {
                 bail!("Path {:?} exists but is not a symlink", current_link);
             }
@@ -67,9 +85,11 @@ pub async fn install(repo_str: &str) -> Result<()> {
         }
     }
 
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target_dir.file_name().unwrap(), &current_link)
-        .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
+    if create_symlink {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(link_target, &current_link)
+            .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
+    }
 
     println!(
         "\nSuccessfully installed {} version {} to {:?}",
