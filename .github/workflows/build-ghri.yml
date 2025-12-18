@@ -11,20 +11,28 @@ env:
 
 jobs:
   build-ghri:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build -vv --release
     - name: Run tests
-      run: env RUST_BACKTRACE=1 RUST_LOG=trace cargo test --verbose
+      env:
+        RUST_BACKTRACE: 1
+        RUST_LOG: trace
+      run: cargo test --verbose
     - name: ghri bach-sh/bach
       shell: bash
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUST_LOG: trace
       run: |
         set -ex
-        RUST_LOG=trace target/release/ghri --root ./ghri-root bach-sh/bach
+        cargo run --release -- --root ./ghri-root bach-sh/bach
         find ./ghri-root
         if command -v jq > /dev/null; then
           jq . ./ghri-root/bach-sh/bach/meta.json
