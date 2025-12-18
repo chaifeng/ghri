@@ -2,9 +2,17 @@ use anyhow::Result;
 use clap::Parser;
 use ghri::install::install;
 
-/// Command line arguments
+/// ghri - GitHub Release Installer
+///
+/// Download and install binaries from GitHub releases.
+///
+/// If the GITHUB_TOKEN environment variable is set, it will be used for authentication.
+/// This is useful for accessing private repositories or avoiding rate limits.
+///
+/// Examples:
+///   ghri owner/repo     # Install the latest release from owner/repo
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about)]
 struct Cli {
     /// The GitHub repository in the format "owner/repo"
     #[arg(value_name = "OWNER/REPO")]
