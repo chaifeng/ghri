@@ -1,14 +1,15 @@
 use crate::{
     archive::{ArchiveExtractor, Extractor},
     download::download_file,
-    github::{GetReleases, GitHub, GitHubRepo, Release},
+    github::{GetReleases, GitHub, GitHubRepo, Release, ReleaseAsset, RepoInfo},
 };
 use anyhow::{Context, Result, bail};
-use log::{debug, info};
+use log::{debug, info, warn};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
+use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,6 +66,14 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
         ensure_installed(&target_dir, &repo, &release, &self.client, &self.extractor).await?;
         update_current_symlink(&target_dir, &release.tag_name)?;
 
+        // Metadata handling
+        if let Err(e) = self
+            .save_metadata(&repo, &release.tag_name, &target_dir)
+            .await
+        {
+            warn!("Failed to save package metadata: {}. Continuing.", e);
+        }
+
         println!(
             "installed {}/{} {} {}",
             repo.owner,
@@ -74,6 +83,90 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
         );
 
         Ok(())
+    }
+
+    async fn save_metadata(
+        &self,
+        repo: &GitHubRepo,
+        current_version: &str,
+        target_dir: &Path,
+    ) -> Result<()> {
+        let package_root = target_dir.parent().context("Failed to get package root")?;
+        let meta_path = package_root.join("meta.json");
+
+        let repo_info = self.github.get_repo_info(repo).await?;
+        let releases = self.github.get_releases(repo).await?;
+
+        let meta = Meta::from(repo.clone(), repo_info, releases, current_version);
+        let json = serde_json::to_string_pretty(&meta)?;
+        fs::write(&meta_path, json).context("Failed to write meta.json")?;
+
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+struct Meta {
+    name: String,
+    description: Option<String>,
+    homepage: Option<String>,
+    license: Option<String>,
+    updated_at: String,
+    current_version: String,
+    releases: Vec<MetaRelease>,
+}
+
+impl Meta {
+    fn from(repo: GitHubRepo, info: RepoInfo, releases: Vec<Release>, current: &str) -> Self {
+        Meta {
+            name: format!("{}/{}", repo.owner, repo.repo),
+            description: info.description,
+            homepage: info.homepage,
+            license: info.license.map(|l| l.name),
+            updated_at: info.updated_at,
+            current_version: current.to_string(),
+            releases: releases.into_iter().map(MetaRelease::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MetaRelease {
+    version: String,
+    title: Option<String>,
+    published_at: Option<String>,
+    is_prerelease: bool,
+    tarball_url: String,
+    assets: Vec<MetaAsset>,
+}
+
+impl From<Release> for MetaRelease {
+    fn from(r: Release) -> Self {
+        MetaRelease {
+            version: r.tag_name,
+            title: r.name,
+            published_at: r.published_at,
+            is_prerelease: r.prerelease,
+            tarball_url: r.tarball_url,
+            assets: r.assets.into_iter().map(MetaAsset::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MetaAsset {
+    name: String,
+    size: u64,
+    download_url: String,
+}
+
+impl From<ReleaseAsset> for MetaAsset {
+    fn from(a: ReleaseAsset) -> Self {
+        MetaAsset {
+            name: a.name,
+            size: a.size,
+            download_url: a.browser_download_url,
+        }
     }
 }
 
@@ -231,13 +324,13 @@ mod tests {
         let release = Release {
             tag_name: "v1.0.0".to_string(),
             tarball_url: "http://example.com".to_string(),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
         };
 
-        // This test assumes HOME is set or that dirs::home_dir retrieves something.
-        // We mainly check the structure relative to the home dir.
         let target_dir = get_target_dir(&repo, &release, None).unwrap();
-        // Since we can't easily mock dirs::home_dir without external crates or env var tricks safely
-        // across all OSes, we just assert the suffix.
         assert!(target_dir.ends_with(".ghri/owner/repo/v1.0.0"));
     }
 
@@ -250,6 +343,10 @@ mod tests {
         let release = Release {
             tag_name: "v1.0.0".to_string(),
             tarball_url: "http://example.com".to_string(),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
         };
 
         let custom_root = tempdir().unwrap();
@@ -287,13 +384,11 @@ mod tests {
         fs::create_dir(&v1).unwrap();
         fs::create_dir(&v2).unwrap();
 
-        // Point to v1 initially
         #[cfg(unix)]
         std::os::unix::fs::symlink("v1.0.0", base_path.join("current")).unwrap();
         #[cfg(windows)]
         std::os::windows::fs::symlink_dir("v1.0.0", base_path.join("current")).unwrap();
 
-        // Update to v2
         update_current_symlink(&v2, "v2.0.0").unwrap();
 
         let link_path = base_path.join("current");
@@ -311,7 +406,6 @@ mod tests {
         fs::create_dir(&v1).unwrap();
 
         update_current_symlink(&v1, "v1.0.0").unwrap();
-        // Run again
         update_current_symlink(&v1, "v1.0.0").unwrap();
 
         let link_path = base_path.join("current");
@@ -328,7 +422,6 @@ mod tests {
         let v1 = base_path.join("v1.0.0");
         fs::create_dir(&v1).unwrap();
 
-        // Create a regular file named 'current'
         let current_path = base_path.join("current");
         File::create(&current_path).unwrap();
 
@@ -350,6 +443,22 @@ mod tests {
     impl GetReleases for MockGitHub {
         async fn get_latest_release(&self, _repo: &GitHubRepo) -> Result<Release> {
             Ok(self.release.clone())
+        }
+
+        async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
+            Ok(RepoInfo {
+                description: Some("description".into()),
+                homepage: Some("homepage".into()),
+                license: Some(crate::github::License {
+                    key: "mit".into(),
+                    name: "MIT".into(),
+                }),
+                updated_at: "2020-01-01T00:00:00Z".into(),
+            })
+        }
+
+        async fn get_releases(&self, _repo: &GitHubRepo) -> Result<Vec<Release>> {
+            Ok(vec![self.release.clone()])
         }
     }
 
@@ -374,6 +483,10 @@ mod tests {
         let release = Release {
             tag_name: "v1.0.0".to_string(),
             tarball_url: format!("{}/download", url),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
         };
 
         let mock_github = MockGitHub {
@@ -404,5 +517,11 @@ mod tests {
         let current_link = install_root.join("owner/repo/current");
         assert!(current_link.is_symlink());
         assert_eq!(fs::read_link(&current_link).unwrap(), Path::new("v1.0.0"));
+
+        let meta_file = install_root.join("owner/repo/meta.json");
+        assert!(meta_file.exists());
+        let meta_content = fs::read_to_string(meta_file).unwrap();
+        assert!(meta_content.contains("v1.0.0"));
+        assert!(meta_content.contains("owner/repo"));
     }
 }
