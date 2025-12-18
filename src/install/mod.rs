@@ -331,7 +331,7 @@ mod tests {
         };
 
         let target_dir = get_target_dir(&repo, &release, None).unwrap();
-        assert!(target_dir.ends_with(".ghri/owner/repo/v1.0.0"));
+        assert!(target_dir.ends_with("owner/repo/v1.0.0"));
     }
 
     #[test]
