@@ -92,7 +92,12 @@ fn update_current_symlink(target_dir: &Path, tag_name: &str) -> Result<()> {
                     println!("Symlink 'current' already points to version {}", tag_name);
                     create_symlink = false;
                 } else {
+                    #[cfg(not(windows))]
                     fs::remove_file(&current_link).with_context(|| {
+                        format!("Failed to remove existing symlink at {:?}", current_link)
+                    })?;
+                    #[cfg(windows)]
+                    fs::remove_dir(&current_link).with_context(|| {
                         format!("Failed to remove existing symlink at {:?}", current_link)
                     })?;
                 }
@@ -111,6 +116,9 @@ fn update_current_symlink(target_dir: &Path, tag_name: &str) -> Result<()> {
     if create_symlink {
         #[cfg(unix)]
         std::os::unix::fs::symlink(link_target, &current_link)
+            .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(link_target, &current_link)
             .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
     }
 
@@ -172,6 +180,8 @@ mod tests {
         // Point to v1 initially
         #[cfg(unix)]
         std::os::unix::fs::symlink("v1.0.0", base_path.join("current")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir("v1.0.0", base_path.join("current")).unwrap();
 
         // Update to v2
         update_current_symlink(&v2, "v2.0.0").unwrap();
