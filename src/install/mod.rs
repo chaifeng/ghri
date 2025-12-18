@@ -5,7 +5,11 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use log::{debug, info};
-use reqwest::Client;
+use reqwest::{
+    Client,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
+};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +17,23 @@ const GITHUB_API_URL: &str = "https://api.github.com";
 
 pub async fn install(repo_str: &str) -> Result<()> {
     let repo = repo_str.parse::<GitHubRepo>()?;
-    let client = Client::builder().user_agent("ghri-cli").build()?;
+
+    let mut headers = HeaderMap::new();
+    if let Ok(token) = env::var("GITHUB_TOKEN") {
+        let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", token))?;
+        auth_value.set_sensitive(true);
+        headers.insert(AUTHORIZATION, auth_value);
+        debug!(
+            "Using GITHUB_TOKEN for authentication: {}*********{}",
+            &token[..8],
+            &token[token.len() - 4..]
+        );
+    }
+
+    let client = Client::builder()
+        .user_agent("ghri-cli")
+        .default_headers(headers)
+        .build()?;
 
     let release = get_latest_release(&repo, &client, GITHUB_API_URL).await?;
     info!("Found latest version: {}", release.tag_name);
