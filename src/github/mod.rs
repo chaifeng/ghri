@@ -1,8 +1,57 @@
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use log::debug;
 use reqwest::Client;
 use serde::Deserialize;
 use std::str::FromStr;
+
+const GITHUB_API_URL: &str = "https://api.github.com";
+
+#[async_trait]
+pub trait GetReleases {
+    async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release>;
+}
+
+pub struct GitHub {
+    pub client: Client,
+}
+
+#[async_trait]
+impl GetReleases for GitHub {
+    async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release> {
+        GitHub::get_latest_release(repo, &self.client, GITHUB_API_URL).await
+    }
+}
+
+impl GitHub {
+    /// Fetches the latest release information from GitHub.
+    pub async fn get_latest_release(
+        repo: &GitHubRepo,
+        client: &Client,
+        api_url: &str,
+    ) -> Result<Release> {
+        let url = format!(
+            "{}/repos/{}/{}/releases/latest",
+            api_url, repo.owner, repo.repo
+        );
+
+        debug!("Fetching latest release from {}...", url);
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to send request to GitHub API")?;
+
+        let release = response
+            .error_for_status()?
+            .json::<Release>()
+            .await
+            .context("Failed to parse JSON response from GitHub API")?;
+
+        Ok(release)
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct GitHubRepo {
@@ -27,38 +76,10 @@ impl FromStr for GitHubRepo {
 }
 
 /// Represents a GitHub release asset
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct Release {
     pub tag_name: String,
     pub tarball_url: String,
-}
-
-/// Fetches the latest release information from GitHub.
-pub async fn get_latest_release(
-    repo: &GitHubRepo,
-    client: &Client,
-    api_url: &str,
-) -> Result<Release> {
-    let url = format!(
-        "{}/repos/{}/{}/releases/latest",
-        api_url, repo.owner, repo.repo
-    );
-
-    debug!("Fetching latest release from {}...", url);
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .context("Failed to send request to GitHub API")?;
-
-    let release = response
-        .error_for_status()?
-        .json::<Release>()
-        .await
-        .context("Failed to parse JSON response from GitHub API")?;
-
-    Ok(release)
 }
 
 #[cfg(test)]
@@ -109,7 +130,7 @@ mod tests {
         let release = rt
             .block_on(async {
                 let client = Client::new();
-                get_latest_release(&repo, &client, &url).await
+                GitHub::get_latest_release(&repo, &client, &url).await
             })
             .unwrap();
 

@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-clap = { version = "4.5.53", features = ["derive"] }
+async-trait = "0.1.80"
+clap = { version = "4.5.53", features = ["derive", "env"] }
 dirs = "6.0.0"
 env_logger = "0.11.8"
 flate2 = "1.1.5"
@@ -21,3 +22,9 @@ tokio = { version = "1.48.0", features = ["full"] }
 [dev-dependencies]
 mockito = "1.6.0"
 tempfile = "3.10.1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["user"] }
+
+[target.'cfg(windows)'.dependencies]
+is_elevated = "0.1.2"

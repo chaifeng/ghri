@@ -1,7 +1,7 @@
 use crate::{
-    archive::extract_archive,
+    archive::{ArchiveExtractor, Extractor},
     download::download_file,
-    github::{GitHubRepo, Release, get_latest_release},
+    github::{GetReleases, GitHub, GitHubRepo, Release},
 };
 use anyhow::{Context, Result, bail};
 use log::{debug, info};
@@ -13,9 +13,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const GITHUB_API_URL: &str = "https://api.github.com";
-
-pub async fn install(repo_str: &str) -> Result<()> {
+pub async fn install(repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
     let repo = repo_str.parse::<GitHubRepo>()?;
 
     let mut headers = HeaderMap::new();
@@ -35,38 +33,107 @@ pub async fn install(repo_str: &str) -> Result<()> {
         .default_headers(headers)
         .build()?;
 
-    let release = get_latest_release(&repo, &client, GITHUB_API_URL).await?;
-    info!("Found latest version: {}", release.tag_name);
-
-    let target_dir = get_target_dir(&repo, &release)?;
-
-    ensure_installed(&target_dir, &repo, &release, &client).await?;
-    update_current_symlink(&target_dir, &release.tag_name)?;
-
-    println!(
-        "installed {} {} {}",
-        repo_str,
-        release.tag_name,
-        target_dir.display()
-    );
-
-    Ok(())
+    let github = GitHub {
+        client: client.clone(),
+    };
+    let extractor = ArchiveExtractor;
+    let installer = Installer::new(github, client, extractor);
+    installer.install(repo, install_root).await
 }
 
-fn get_target_dir(repo: &GitHubRepo, release: &Release) -> Result<PathBuf> {
-    let home_dir = dirs::home_dir().context("Could not find home directory")?;
-    Ok(home_dir
-        .join(".ghri")
+struct Installer<G: GetReleases, E: Extractor> {
+    github: G,
+    client: Client,
+    extractor: E,
+}
+
+impl<G: GetReleases, E: Extractor> Installer<G, E> {
+    fn new(github: G, client: Client, extractor: E) -> Self {
+        Self {
+            github,
+            client,
+            extractor,
+        }
+    }
+
+    async fn install(&self, repo: GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
+        let release = self.github.get_latest_release(&repo).await?;
+        info!("Found latest version: {}", release.tag_name);
+
+        let target_dir = get_target_dir(&repo, &release, install_root)?;
+
+        ensure_installed(&target_dir, &repo, &release, &self.client, &self.extractor).await?;
+        update_current_symlink(&target_dir, &release.tag_name)?;
+
+        println!(
+            "installed {}/{} {} {}",
+            repo.owner,
+            repo.repo,
+            release.tag_name,
+            target_dir.display()
+        );
+
+        Ok(())
+    }
+}
+
+fn get_target_dir(
+    repo: &GitHubRepo,
+    release: &Release,
+    install_root: Option<PathBuf>,
+) -> Result<PathBuf> {
+    let root = match install_root {
+        Some(path) => path,
+        None => default_install_root()?,
+    };
+
+    info!("Using install root: {}", root.display());
+
+    Ok(root
         .join(&repo.owner)
         .join(&repo.repo)
         .join(&release.tag_name))
 }
 
-async fn ensure_installed(
+fn default_install_root() -> Result<PathBuf> {
+    if is_privileged() {
+        Ok(system_install_root())
+    } else {
+        let home_dir = dirs::home_dir().context("Could not find home directory")?;
+        Ok(home_dir.join(".ghri"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn system_install_root() -> PathBuf {
+    PathBuf::from("/opt/ghri")
+}
+
+#[cfg(target_os = "windows")]
+fn system_install_root() -> PathBuf {
+    PathBuf::from(r"C:\ProgramData\ghri")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn system_install_root() -> PathBuf {
+    PathBuf::from("/usr/local/ghri")
+}
+
+#[cfg(unix)]
+fn is_privileged() -> bool {
+    nix::unistd::geteuid().as_raw() == 0
+}
+
+#[cfg(windows)]
+fn is_privileged() -> bool {
+    is_elevated::is_elevated()
+}
+async fn ensure_installed<E: Extractor>(
     target_dir: &Path,
     repo: &GitHubRepo,
     release: &Release,
     client: &Client,
+    extractor: &E,
 ) -> Result<()> {
     if target_dir.exists() {
         info!(
@@ -84,7 +151,7 @@ async fn ensure_installed(
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
     download_file(&release.tarball_url, &temp_file_path, client).await?;
-    extract_archive(&temp_file_path, target_dir)?;
+    extractor.extract(&temp_file_path, target_dir)?;
 
     fs::remove_file(&temp_file_path)
         .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
@@ -151,6 +218,7 @@ fn update_current_symlink(target_dir: &Path, tag_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use std::fs::File;
     use tempfile::tempdir;
 
@@ -167,10 +235,29 @@ mod tests {
 
         // This test assumes HOME is set or that dirs::home_dir retrieves something.
         // We mainly check the structure relative to the home dir.
-        let target_dir = get_target_dir(&repo, &release).unwrap();
+        let target_dir = get_target_dir(&repo, &release, None).unwrap();
         // Since we can't easily mock dirs::home_dir without external crates or env var tricks safely
         // across all OSes, we just assert the suffix.
         assert!(target_dir.ends_with(".ghri/owner/repo/v1.0.0"));
+    }
+
+    #[test]
+    fn test_get_target_dir_with_custom_root() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: "http://example.com".to_string(),
+        };
+
+        let custom_root = tempdir().unwrap();
+        let target_dir =
+            get_target_dir(&repo, &release, Some(custom_root.path().to_path_buf())).unwrap();
+
+        assert!(target_dir.starts_with(custom_root.path()));
+        assert!(target_dir.ends_with("owner/repo/v1.0.0"));
     }
 
     #[test]
@@ -253,5 +340,69 @@ mod tests {
                 .to_string()
                 .contains("exists but is not a symlink")
         );
+    }
+
+    struct MockGitHub {
+        release: Release,
+    }
+
+    #[async_trait]
+    impl GetReleases for MockGitHub {
+        async fn get_latest_release(&self, _repo: &GitHubRepo) -> Result<Release> {
+            Ok(self.release.clone())
+        }
+    }
+
+    struct MockExtractor;
+
+    impl Extractor for MockExtractor {
+        fn extract(&self, _archive_path: &Path, _extract_to: &Path) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_install() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: format!("{}/download", url),
+        };
+
+        let mock_github = MockGitHub {
+            release: release.clone(),
+        };
+
+        let client = Client::new();
+        let mock_extractor = MockExtractor;
+        let installer = Installer::new(mock_github, client, mock_extractor);
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+
+        let _m = server
+            .mock("GET", "/download")
+            .with_status(200)
+            .with_body("test")
+            .create();
+
+        installer
+            .install(repo, Some(install_root.clone()))
+            .await
+            .unwrap();
+
+        let target_dir = install_root.join("owner/repo/v1.0.0");
+        assert!(target_dir.exists());
+
+        let current_link = install_root.join("owner/repo/current");
+        assert!(current_link.is_symlink());
+        assert_eq!(fs::read_link(&current_link).unwrap(), Path::new("v1.0.0"));
     }
 }
