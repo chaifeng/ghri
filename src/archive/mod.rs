@@ -1,12 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use flate2::read::GzDecoder;
+use log::{debug, info};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
 /// Extracts the tar.gz archive to the specified directory.
 pub fn extract_archive(archive_path: &Path, extract_to: &Path) -> Result<()> {
-    println!("Extracting archive to {:?}...", extract_to);
+    debug!("Extracting archive to {:?}...", extract_to);
     let file = File::open(archive_path)
         .with_context(|| format!("Failed to open archive at {:?}", archive_path))?;
     let decoder = GzDecoder::new(file);
@@ -23,7 +24,7 @@ pub fn extract_archive(archive_path: &Path, extract_to: &Path) -> Result<()> {
     }
     fs::create_dir_all(&temp_extract_dir)?;
 
-    println!("Unpacking to temp dir: {:?}", temp_extract_dir);
+    debug!("Unpacking to temp dir: {:?}", temp_extract_dir);
     archive
         .unpack(&temp_extract_dir)
         .with_context(|| format!("Failed to unpack archive to {:?}", temp_extract_dir))?;
@@ -34,7 +35,7 @@ pub fn extract_archive(archive_path: &Path, extract_to: &Path) -> Result<()> {
 
     if let Some(Ok(entry)) = entries.next() {
         let source_dir = entry.path();
-        println!("Found entry in temp dir: {:?}", source_dir);
+        debug!("Found entry in temp dir: {:?}", source_dir);
         let source_dir = if source_dir.is_dir() && entries.next().is_none() {
             source_dir
         } else {
@@ -42,11 +43,11 @@ pub fn extract_archive(archive_path: &Path, extract_to: &Path) -> Result<()> {
         };
 
         // Move contents from temp/{{repo-tag-sha}}/* to {{version}}/*
-        println!("Entry is a directory, moving contents");
+        debug!("Entry is a directory, moving contents");
         for item in fs::read_dir(&source_dir)? {
             let item = item?;
             let dest_path = extract_to.join(item.file_name());
-            println!("Installing {:?}", dest_path);
+            debug!("Installing {:?}", dest_path);
             fs::rename(item.path(), &dest_path)?;
         }
     } else {
@@ -56,7 +57,7 @@ pub fn extract_archive(archive_path: &Path, extract_to: &Path) -> Result<()> {
     // Clean up the temporary extraction directory
     fs::remove_dir_all(&temp_extract_dir)?;
 
-    println!("Extraction complete.");
+    info!("Extraction complete.");
     Ok(())
 }
 

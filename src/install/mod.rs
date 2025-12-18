@@ -4,6 +4,7 @@ use crate::{
     github::{GitHubRepo, Release, get_latest_release},
 };
 use anyhow::{Context, Result, bail};
+use log::{debug, info};
 use reqwest::Client;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ pub async fn install(repo_str: &str) -> Result<()> {
     let client = Client::builder().user_agent("ghri-cli").build()?;
 
     let release = get_latest_release(&repo, &client, GITHUB_API_URL).await?;
-    println!("Found latest version: {}", release.tag_name);
+    info!("Found latest version: {}", release.tag_name);
 
     let target_dir = get_target_dir(&repo, &release)?;
 
@@ -23,8 +24,10 @@ pub async fn install(repo_str: &str) -> Result<()> {
     update_current_symlink(&target_dir, &release.tag_name)?;
 
     println!(
-        "\nSuccessfully installed {} version {} to {:?}",
-        repo_str, release.tag_name, target_dir
+        "installed {} {} {}",
+        repo_str,
+        release.tag_name,
+        target_dir.display()
     );
 
     Ok(())
@@ -46,14 +49,14 @@ async fn ensure_installed(
     client: &Client,
 ) -> Result<()> {
     if target_dir.exists() {
-        println!(
+        info!(
             "Directory {:?} already exists. Skipping download and extraction.",
             target_dir
         );
         return Ok(());
     }
 
-    println!("Creating target directory: {:?}", target_dir);
+    debug!("Creating target directory: {:?}", target_dir);
     fs::create_dir_all(target_dir)
         .with_context(|| format!("Failed to create target directory at {:?}", target_dir))?;
 
@@ -89,7 +92,7 @@ fn update_current_symlink(target_dir: &Path, tag_name: &str) -> Result<()> {
                 })?;
 
                 if current_dest == Path::new(link_target) {
-                    println!("Symlink 'current' already points to version {}", tag_name);
+                    info!("Symlink 'current' already points to version {}", tag_name);
                     create_symlink = false;
                 } else {
                     #[cfg(not(windows))]

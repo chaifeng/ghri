@@ -1,4 +1,5 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
+use log::debug;
 use reqwest::Client;
 use serde::Deserialize;
 use std::str::FromStr;
@@ -15,9 +16,7 @@ impl FromStr for GitHubRepo {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-            Err(anyhow!(
-                "Invalid repository format. Expected 'owner/repo'."
-            ))
+            Err(anyhow!("Invalid repository format. Expected 'owner/repo'."))
         } else {
             Ok(GitHubRepo {
                 owner: parts[0].to_string(),
@@ -35,13 +34,17 @@ pub struct Release {
 }
 
 /// Fetches the latest release information from GitHub.
-pub async fn get_latest_release(repo: &GitHubRepo, client: &Client, api_url: &str) -> Result<Release> {
+pub async fn get_latest_release(
+    repo: &GitHubRepo,
+    client: &Client,
+    api_url: &str,
+) -> Result<Release> {
     let url = format!(
         "{}/repos/{}/{}/releases/latest",
         api_url, repo.owner, repo.repo
     );
 
-    println!("Fetching latest release from {}...", url);
+    debug!("Fetching latest release from {}...", url);
 
     let response = client
         .get(&url)
@@ -93,22 +96,30 @@ mod tests {
             repo: "repo".to_string(),
         };
 
-        let mock = server.mock("GET", "/repos/owner/repo/releases/latest")
+        let mock = server
+            .mock("GET", "/repos/owner/repo/releases/latest")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"tag_name": "v1.0.0", "tarball_url": "https://example.com/v1.0.0.tar.gz"}"#)
+            .with_body(
+                r#"{"tag_name": "v1.0.0", "tarball_url": "https://example.com/v1.0.0.tar.gz"}"#,
+            )
             .create();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let release = rt.block_on(async {
-            let client = Client::new();
-            get_latest_release(&repo, &client, &url).await
-        }).unwrap();
+        let release = rt
+            .block_on(async {
+                let client = Client::new();
+                get_latest_release(&repo, &client, &url).await
+            })
+            .unwrap();
 
         mock.assert();
-        assert_eq!(release, Release {
-            tag_name: "v1.0.0".to_string(),
-            tarball_url: "https://example.com/v1.0.0.tar.gz".to_string()
-        });
+        assert_eq!(
+            release,
+            Release {
+                tag_name: "v1.0.0".to_string(),
+                tarball_url: "https://example.com/v1.0.0.tar.gz".to_string()
+            }
+        );
     }
 }

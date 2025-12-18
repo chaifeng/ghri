@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::{debug, info};
 use reqwest::Client;
 use std::fs::File;
 use std::io::Write;
@@ -6,6 +7,7 @@ use std::path::Path;
 
 /// Downloads a file from a URL to a temporary path.
 pub async fn download_file(url: &str, temp_path: &Path, client: &Client) -> Result<()> {
+    info!("Downloading file from {}...", url);
     let mut response = client
         .get(url)
         .send()
@@ -27,13 +29,12 @@ pub async fn download_file(url: &str, temp_path: &Path, client: &Client) -> Resu
             .write_all(&chunk)
             .context("Failed to write chunk to temporary file")?;
         downloaded_bytes += chunk.len();
-        print!(
-            "\rDownloading... {:.2} MB",
-            downloaded_bytes as f64 / (1024.0 * 1024.0)
-        );
-        std::io::stdout().flush().context("Failed to flush stdout")?;
     }
-    println!("\nDownload complete.");
+    debug!(
+        "Downloaded {:.2} MB",
+        downloaded_bytes as f64 / (1024.0 * 1024.0)
+    );
+    info!("Download complete.");
     Ok(())
 }
 
@@ -48,19 +49,21 @@ mod tests {
         let mut server = mockito::Server::new();
         let url = server.url();
 
-        let mock = server.mock("GET", "/test.file")
+        let mock = server
+            .mock("GET", "/test.file")
             .with_status(200)
             .with_body("test content")
             .create();
 
         let dir = tempdir().unwrap();
         let temp_path = dir.path().join("test.file");
-        
+
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let client = Client::new();
             download_file(&format!("{}/test.file", url), &temp_path, &client).await
-        }).unwrap();
+        })
+        .unwrap();
 
         mock.assert();
         assert_eq!(fs::read_to_string(temp_path).unwrap(), "test content");
