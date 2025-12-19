@@ -23,17 +23,35 @@ struct Cli {
 enum Commands {
     /// Install a package from GitHub
     Install(InstallArgs),
+
+    /// Update release information for all installed packages
+    Update(UpdateArgs),
 }
 
 #[derive(clap::Args, Debug)]
-struct InstallArgs {
+pub struct InstallArgs {
     /// The GitHub repository in the format "owner/repo"
     #[arg(value_name = "OWNER/REPO")]
-    repo: String,
+    pub repo: String,
 
     /// Install root directory (overrides defaults; also via GHRI_ROOT)
     #[arg(long = "root", short = 'r', env = "GHRI_ROOT", value_name = "PATH")]
-    install_root: Option<PathBuf>,
+    pub install_root: Option<PathBuf>,
+
+    /// GitHub API URL (defaults to https://api.github.com)
+    #[arg(long = "api-url", value_name = "URL")]
+    pub api_url: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct UpdateArgs {
+    /// Install root directory (overrides defaults; also via GHRI_ROOT)
+    #[arg(long = "root", short = 'r', env = "GHRI_ROOT", value_name = "PATH")]
+    pub install_root: Option<PathBuf>,
+
+    /// GitHub API URL (defaults to https://api.github.com)
+    #[arg(long = "api-url", value_name = "URL")]
+    pub api_url: Option<String>,
 }
 
 #[tokio::main]
@@ -42,7 +60,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Install(args) => install(&args.repo, args.install_root).await,
+        Commands::Install(args) => install(&args.repo, args.install_root, args.api_url).await,
+        Commands::Update(args) => ghri::install::update(args.install_root, args.api_url).await,
     }
 }
 
@@ -59,6 +78,18 @@ mod tests {
                 assert_eq!(args.repo, "owner/repo");
                 assert_eq!(args.install_root, None);
             }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_update_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "update"]).unwrap();
+        match cli.command {
+            Commands::Update(args) => {
+                assert_eq!(args.install_root, None);
+            }
+            _ => panic!("Expected Update command"),
         }
     }
 
@@ -71,6 +102,7 @@ mod tests {
                 assert_eq!(args.repo, "owner/repo");
                 assert_eq!(args.install_root, Some(PathBuf::from("/tmp")));
             }
+            _ => panic!("Expected Install command"),
         }
     }
 

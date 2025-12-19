@@ -87,7 +87,8 @@ fn test_end_to_end_install() {
         .arg("owner/repo")
         .arg("--root")
         .arg(install_root)
-        .env("GITHUB_API_URL", &url);
+        .arg("--api-url")
+        .arg(&url);
 
     cmd.assert().success();
 

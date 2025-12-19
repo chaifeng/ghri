@@ -5,14 +5,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use std::env;
-
-fn github_api_url() -> String {
-    env::var("GITHUB_API_URL").unwrap_or_else(|_| "https://api.github.com".to_string())
-}
-
 #[async_trait]
-pub trait GetReleases {
+pub trait GetReleases: Send + Sync {
     async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release>;
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo>;
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>>;
@@ -20,20 +14,28 @@ pub trait GetReleases {
 
 pub struct GitHub {
     pub client: Client,
+    pub api_url: String,
+}
+
+impl GitHub {
+    pub fn new(client: Client, api_url: Option<String>) -> Self {
+        let api_url = api_url.unwrap_or_else(|| "https://api.github.com".to_string());
+        Self { client, api_url }
+    }
 }
 
 #[async_trait]
 impl GetReleases for GitHub {
     async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release> {
-        GitHub::get_latest_release(repo, &self.client, &github_api_url()).await
+        GitHub::get_latest_release(repo, &self.client, &self.api_url).await
     }
 
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
-        GitHub::get_repo_info(repo, &self.client, &github_api_url()).await
+        GitHub::get_repo_info(repo, &self.client, &self.api_url).await
     }
 
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
-        GitHub::get_releases(repo, &self.client, &github_api_url()).await
+        GitHub::get_releases(repo, &self.client, &self.api_url).await
     }
 }
 
@@ -215,9 +217,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_repo_info_not_found() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_repo_info_not_found() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -228,21 +230,19 @@ mod tests {
         let mock = server
             .mock("GET", "/repos/test-owner/test-repo")
             .with_status(404)
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let client = Client::new();
-            GitHub::get_repo_info(&repo, &client, &url).await
-        });
+        let client = Client::new();
+        let result = GitHub::get_repo_info(&repo, &client, &url).await;
 
-        mock.assert();
+        mock.assert_async().await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_get_latest_release_not_found() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_latest_release_not_found() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -253,15 +253,13 @@ mod tests {
         let mock = server
             .mock("GET", "/repos/owner/repo/releases/latest")
             .with_status(404)
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let client = Client::new();
-            GitHub::get_latest_release(&repo, &client, &url).await
-        });
+        let client = Client::new();
+        let result = GitHub::get_latest_release(&repo, &client, &url).await;
 
-        mock.assert();
+        mock.assert_async().await;
         assert!(result.is_err());
     }
 
@@ -273,9 +271,9 @@ mod tests {
         assert!(GitHubRepo::from_str("owner/repo/extra").is_err());
     }
 
-    #[test]
-    fn test_get_latest_release() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_latest_release() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -290,17 +288,15 @@ mod tests {
             .with_body(
                 r#"{"tag_name": "v1.0.0", "tarball_url": "https://example.com/v1.0.0.tar.gz", "prerelease": false, "assets": []}"#,
             )
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let release = rt
-            .block_on(async {
-                let client = Client::new();
-                GitHub::get_latest_release(&repo, &client, &url).await
-            })
+        let client = Client::new();
+        let release = GitHub::get_latest_release(&repo, &client, &url)
+            .await
             .unwrap();
 
-        mock.assert();
+        mock.assert_async().await;
         assert_eq!(
             release,
             Release {
@@ -314,9 +310,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_repo_info() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_repo_info() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -336,17 +332,13 @@ mod tests {
                     "updated_at": "2023-01-01T00:00:00Z"
                 }"#,
             )
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let repo_info = rt
-            .block_on(async {
-                let client = Client::new();
-                GitHub::get_repo_info(&repo, &client, &url).await
-            })
-            .unwrap();
+        let client = Client::new();
+        let repo_info = GitHub::get_repo_info(&repo, &client, &url).await.unwrap();
 
-        mock.assert();
+        mock.assert_async().await;
         assert_eq!(
             repo_info,
             RepoInfo {
@@ -361,9 +353,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_repo_info_minimal() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_repo_info_minimal() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -383,17 +375,13 @@ mod tests {
                     "updated_at": "2023-01-01T00:00:00Z"
                 }"#,
             )
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let repo_info = rt
-            .block_on(async {
-                let client = Client::new();
-                GitHub::get_repo_info(&repo, &client, &url).await
-            })
-            .unwrap();
+        let client = Client::new();
+        let repo_info = GitHub::get_repo_info(&repo, &client, &url).await.unwrap();
 
-        mock.assert();
+        mock.assert_async().await;
         assert_eq!(
             repo_info,
             RepoInfo {
@@ -405,9 +393,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_releases_single_page() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_releases_single_page() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -438,26 +426,22 @@ mod tests {
                     }
                 ]"#,
             )
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let releases = rt
-            .block_on(async {
-                let client = Client::new();
-                GitHub::get_releases(&repo, &client, &url).await
-            })
-            .unwrap();
+        let client = Client::new();
+        let releases = GitHub::get_releases(&repo, &client, &url).await.unwrap();
 
-        mock.assert();
+        mock.assert_async().await;
         assert_eq!(releases.len(), 2);
         assert_eq!(releases[0].tag_name, "v1.0.0");
         assert_eq!(releases[1].tag_name, "v0.9.0");
         assert!(releases[1].prerelease);
     }
 
-    #[test]
-    fn test_get_releases_multiple_pages() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_releases_multiple_pages() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -486,7 +470,8 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(&page1_body)
-            .create();
+            .create_async()
+            .await;
 
         let mock_p2 = server
             .mock(
@@ -500,25 +485,21 @@ mod tests {
                 {"tag_name": "v0.0.1", "tarball_url": "url", "prerelease": false, "assets": []}
             ]"#,
             )
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let releases = rt
-            .block_on(async {
-                let client = Client::new();
-                GitHub::get_releases(&repo, &client, &url).await
-            })
-            .unwrap();
+        let client = Client::new();
+        let releases = GitHub::get_releases(&repo, &client, &url).await.unwrap();
 
-        mock_p1.assert();
-        mock_p2.assert();
+        mock_p1.assert_async().await;
+        mock_p2.assert_async().await;
         assert_eq!(releases.len(), 101);
         assert_eq!(releases[100].tag_name, "v0.0.1");
     }
 
-    #[test]
-    fn test_get_releases_not_found() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_get_releases_not_found() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let repo = GitHubRepo {
@@ -532,15 +513,13 @@ mod tests {
                 "/repos/test-owner/test-repo/releases?per_page=100&page=1",
             )
             .with_status(404)
-            .create();
+            .create_async()
+            .await;
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let client = Client::new();
-            GitHub::get_releases(&repo, &client, &url).await
-        });
+        let client = Client::new();
+        let result = GitHub::get_releases(&repo, &client, &url).await;
 
-        mock.assert();
+        mock.assert_async().await;
         assert!(result.is_err());
     }
 }

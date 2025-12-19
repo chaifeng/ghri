@@ -5,6 +5,7 @@ use reqwest::{
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use std::env;
+
 use std::path::PathBuf;
 
 use crate::{
@@ -20,7 +21,7 @@ pub struct Config<G: GetReleases, E: Extractor> {
 }
 
 impl Config<GitHub, ArchiveExtractor> {
-    pub fn new(install_root: Option<PathBuf>) -> Result<Self> {
+    pub fn new(install_root: Option<PathBuf>, api_url: Option<String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         if let Ok(token) = env::var("GITHUB_TOKEN") {
             let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", token))?;
@@ -38,9 +39,7 @@ impl Config<GitHub, ArchiveExtractor> {
             .default_headers(headers)
             .build()?;
 
-        let github = GitHub {
-            client: client.clone(),
-        };
+        let github = GitHub::new(client.clone(), api_url);
 
         let extractor = ArchiveExtractor;
 
@@ -59,6 +58,7 @@ mod tests {
     use mockito::Server;
     use std::env;
 
+    // when GITHUB_TOKEN is set, Config::new should use it for authentication
     #[tokio::test]
     async fn test_config_new_with_github_token() {
         let token = "test_token";
@@ -72,7 +72,7 @@ mod tests {
             .match_header("Authorization", format!("Bearer {}", token).as_str())
             .create();
 
-        let config = Config::new(None).unwrap();
+        let config = Config::new(None, None).unwrap();
         let client = &config.client;
         let _ = client.get(server.url()).send().await;
 
