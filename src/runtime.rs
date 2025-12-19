@@ -15,6 +15,8 @@ pub trait Runtime: Send + Sync {
     fn rename(&self, from: &Path, to: &Path) -> Result<()>;
     fn create_dir_all(&self, path: &Path) -> Result<()>;
     fn remove_file(&self, path: &Path) -> Result<()>;
+    fn remove_dir(&self, path: &Path) -> Result<()>;
+    fn remove_symlink(&self, path: &Path) -> Result<()>;
     fn exists(&self, path: &Path) -> bool;
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>>;
     fn symlink(&self, original: &Path, link: &Path) -> Result<()>;
@@ -59,6 +61,28 @@ impl Runtime for RealRuntime {
 
     fn remove_file(&self, path: &Path) -> Result<()> {
         fs::remove_file(path).context("Failed to remove file")?;
+        Ok(())
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        fs::remove_dir(path).context("Failed to remove directory")?;
+        Ok(())
+    }
+
+    fn remove_symlink(&self, path: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            fs::remove_file(path).context("Failed to remove symlink")?;
+        }
+        #[cfg(windows)]
+        {
+            let metadata = fs::symlink_metadata(path).context("Failed to get symlink metadata")?;
+            if metadata.file_type().is_dir() {
+                fs::remove_dir(path).context("Failed to remove directory symlink")?;
+            } else {
+                fs::remove_file(path).context("Failed to remove file symlink")?;
+            }
+        }
         Ok(())
     }
 
@@ -202,6 +226,19 @@ impl Runtime for MockRuntime {
         let mut files = self.files.lock().unwrap();
         files.remove(path);
         Ok(())
+    }
+
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        // In MockRuntime, directories are not explicitly stored,
+        // but we can simulate removal by removing all files with this prefix.
+        let mut files = self.files.lock().unwrap();
+        files.retain(|p, _| !p.starts_with(path));
+        Ok(())
+    }
+
+    fn remove_symlink(&self, path: &Path) -> Result<()> {
+        // In MockRuntime, we treat symlinks as files.
+        self.remove_file(path)
     }
 
     fn exists(&self, path: &Path) -> bool {

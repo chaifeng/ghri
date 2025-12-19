@@ -435,7 +435,7 @@ fn update_current_symlink<R: Runtime>(
             }
             _ => {
                 debug!("'current' symlink exists but points to a different version, updating...");
-                runtime.remove_file(&current_link)?;
+                runtime.remove_symlink(&current_link)?;
             }
         }
     }
