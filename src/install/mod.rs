@@ -429,12 +429,24 @@ fn update_current_symlink<R: Runtime>(
         }
 
         match runtime.read_link(&current_link) {
-            Ok(target) if target == link_target => {
-                debug!("'current' symlink already points to the correct version");
-                create_symlink = false;
+            Ok(target) => {
+                // Normalize paths for comparison to handle minor differences like trailing slashes
+                let existing_target_path = Path::new(&target).components().as_path();
+                let new_target_path = Path::new(link_target).components().as_path();
+
+                if existing_target_path == new_target_path {
+                    debug!("'current' symlink already points to the correct version");
+                    create_symlink = false;
+                } else {
+                    debug!(
+                        "'current' symlink points to {:?}, but should point to {:?}. Updating...",
+                        existing_target_path, new_target_path
+                    );
+                    runtime.remove_symlink(&current_link)?;
+                }
             }
-            _ => {
-                debug!("'current' symlink exists but points to a different version, updating...");
+            Err(_) => {
+                debug!("'current' symlink is unreadable, recreating...");
                 runtime.remove_symlink(&current_link)?;
             }
         }
