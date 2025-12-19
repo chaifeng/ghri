@@ -5,7 +5,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-const GITHUB_API_URL: &str = "https://api.github.com";
+use std::env;
+
+fn github_api_url() -> String {
+    env::var("GITHUB_API_URL").unwrap_or_else(|_| "https://api.github.com".to_string())
+}
 
 #[async_trait]
 pub trait GetReleases {
@@ -21,15 +25,15 @@ pub struct GitHub {
 #[async_trait]
 impl GetReleases for GitHub {
     async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release> {
-        GitHub::get_latest_release(repo, &self.client, GITHUB_API_URL).await
+        GitHub::get_latest_release(repo, &self.client, &github_api_url()).await
     }
 
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
-        GitHub::get_repo_info(repo, &self.client, GITHUB_API_URL).await
+        GitHub::get_repo_info(repo, &self.client, &github_api_url()).await
     }
 
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
-        GitHub::get_releases(repo, &self.client, GITHUB_API_URL).await
+        GitHub::get_releases(repo, &self.client, &github_api_url()).await
     }
 }
 
