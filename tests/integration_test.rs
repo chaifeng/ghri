@@ -83,7 +83,8 @@ fn test_end_to_end_install() {
     let install_root = root_dir.path();
 
     let mut cmd = Command::new(cargo::cargo_bin!("ghri"));
-    cmd.arg("owner/repo")
+    cmd.arg("install")
+        .arg("owner/repo")
         .arg("--root")
         .arg(install_root)
         .env("GITHUB_API_URL", &url);

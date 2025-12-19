@@ -32,14 +32,14 @@ jobs:
     - name: Run llvm-cov
       if: matrix.os == 'ubuntu-latest'
       run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-    - name: ghri bach-sh/bach
+    - name: ghri install bach-sh/bach
       shell: bash
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         RUST_LOG: trace
       run: |
         set -ex
-        cargo run --release -- --root ./ghri-root bach-sh/bach
+        cargo run --release -- --root ./ghri-root install bach-sh/bach
         find ./ghri-root -ls
         if command -v jq > /dev/null; then
           jq . ./ghri-root/bach-sh/bach/meta.json
