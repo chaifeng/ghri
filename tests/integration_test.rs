@@ -1,9 +1,9 @@
-use assert_cmd::prelude::*;
-use flate2::write::GzEncoder;
+use assert_cmd::Command;
+use assert_cmd::cargo;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use mockito::Server;
 use std::io::prelude::*;
-use std::process::Command;
 use tar::Builder;
 use tempfile::tempdir;
 
@@ -82,7 +82,7 @@ fn test_end_to_end_install() {
     let root_dir = tempdir().unwrap();
     let install_root = root_dir.path();
 
-    let mut cmd = Command::cargo_bin("ghri").unwrap();
+    let mut cmd = Command::new(cargo::cargo_bin!("ghri"));
     cmd.arg("owner/repo")
         .arg("--root")
         .arg(install_root)

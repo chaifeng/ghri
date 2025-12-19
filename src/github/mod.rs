@@ -210,6 +210,56 @@ mod tests {
     }
 
     #[test]
+    fn test_get_repo_info_not_found() {
+        let mut server = mockito::Server::new();
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+        };
+
+        let mock = server
+            .mock("GET", "/repos/test-owner/test-repo")
+            .with_status(404)
+            .create();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let client = Client::new();
+            GitHub::get_repo_info(&repo, &client, &url).await
+        });
+
+        mock.assert();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_latest_release_not_found() {
+        let mut server = mockito::Server::new();
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+
+        let mock = server
+            .mock("GET", "/repos/owner/repo/releases/latest")
+            .with_status(404)
+            .create();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let client = Client::new();
+            GitHub::get_latest_release(&repo, &client, &url).await
+        });
+
+        mock.assert();
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_parse_github_repo_invalid() {
         assert!(GitHubRepo::from_str("owner").is_err());
         assert!(GitHubRepo::from_str("owner/").is_err());
@@ -458,5 +508,33 @@ mod tests {
         mock_p2.assert();
         assert_eq!(releases.len(), 101);
         assert_eq!(releases[100].tag_name, "v0.0.1");
+    }
+
+    #[test]
+    fn test_get_releases_not_found() {
+        let mut server = mockito::Server::new();
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "test-owner".to_string(),
+            repo: "test-repo".to_string(),
+        };
+
+        let mock = server
+            .mock(
+                "GET",
+                "/repos/test-owner/test-repo/releases?per_page=100&page=1",
+            )
+            .with_status(404)
+            .create();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let client = Client::new();
+            GitHub::get_releases(&repo, &client, &url).await
+        });
+
+        mock.assert();
+        assert!(result.is_err());
     }
 }

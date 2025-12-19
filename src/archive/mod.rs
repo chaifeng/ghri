@@ -157,4 +157,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_extract_empty_archive() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path).unwrap();
+
+        create_test_archive(&archive_path, HashMap::new()).unwrap();
+
+        let result = ArchiveExtractor.extract(&archive_path, &extract_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_corrupted_archive() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path).unwrap();
+
+        fs::write(&archive_path, "corrupted data").unwrap();
+
+        let result = ArchiveExtractor.extract(&archive_path, &extract_path);
+        assert!(result.is_err());
+    }
 }

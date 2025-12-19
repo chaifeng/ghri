@@ -68,4 +68,24 @@ mod tests {
         mock.assert();
         assert_eq!(fs::read_to_string(temp_path).unwrap(), "test content");
     }
+
+    #[test]
+    fn test_download_file_not_found() {
+        let mut server = mockito::Server::new();
+        let url = server.url();
+
+        let mock = server.mock("GET", "/test.file").with_status(404).create();
+
+        let dir = tempdir().unwrap();
+        let temp_path = dir.path().join("test.file");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let client = Client::new();
+            download_file(&format!("{}/test.file", url), &temp_path, &client).await
+        });
+
+        mock.assert();
+        assert!(result.is_err());
+    }
 }

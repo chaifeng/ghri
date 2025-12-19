@@ -564,4 +564,36 @@ mod tests {
         assert!(meta_content.contains("v1.0.0"));
         assert!(meta_content.contains("owner/repo-run"));
     }
+
+    #[tokio::test]
+    async fn test_ensure_installed_already_exists() {
+        let dir = tempdir().unwrap();
+        let target_dir = dir.path().join("owner/repo/v1.0.0");
+        fs::create_dir_all(&target_dir).unwrap();
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: "http://example.com".to_string(),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
+        };
+
+        struct FailExtractor;
+        impl Extractor for FailExtractor {
+            fn extract(&self, _archive_path: &Path, _extract_to: &Path) -> Result<()> {
+                panic!("should not be called");
+            }
+        }
+
+        let client = Client::new();
+        ensure_installed(&target_dir, &repo, &release, &client, &FailExtractor)
+            .await
+            .unwrap();
+    }
 }
