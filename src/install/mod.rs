@@ -24,7 +24,7 @@ pub async fn run<G: GetReleases, E: Extractor>(
 ) -> Result<()> {
     let repo = repo_str.parse::<GitHubRepo>()?;
     let installer = Installer::new(config.github, config.client, config.extractor);
-    installer.install(repo, config.install_root).await
+    installer.install(&repo, config.install_root).await
 }
 
 pub struct Installer<G: GetReleases, E: Extractor> {
@@ -42,8 +42,8 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
         }
     }
 
-    pub async fn install(&self, repo: GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
-        let release = self.github.get_latest_release(&repo).await?;
+    pub async fn install(&self, repo: &GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
+        let release = self.github.get_latest_release(repo).await?;
         info!("Found latest version: {}", release.tag_name);
 
         let target_dir = get_target_dir(&repo, &release, install_root)?;
@@ -59,15 +59,19 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
             warn!("Failed to save package metadata: {}. Continuing.", e);
         }
 
+        self.print_install_success(repo, &release.tag_name, &target_dir);
+
+        Ok(())
+    }
+
+    fn print_install_success(&self, repo: &GitHubRepo, tag: &str, target_dir: &Path) {
         println!(
             "installed {}/{} {} {}",
             repo.owner,
             repo.repo,
-            release.tag_name,
+            tag,
             target_dir.display()
         );
-
-        Ok(())
     }
 
     async fn save_metadata(
@@ -197,14 +201,19 @@ fn system_install_root() -> PathBuf {
     PathBuf::from("/usr/local/ghri")
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "test_in_root")))]
 fn is_privileged() -> bool {
     nix::unistd::geteuid().as_raw() == 0
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "test_in_root")))]
 fn is_privileged() -> bool {
     is_elevated::is_elevated()
+}
+
+#[cfg(feature = "test_in_root")]
+fn is_privileged() -> bool {
+    true
 }
 async fn ensure_installed<E: Extractor>(
     target_dir: &Path,
@@ -420,6 +429,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_update_current_symlink_no_op_if_already_correct() {
+        let dir = tempdir().unwrap();
+        let base_path = dir.path().join("owner/repo");
+        fs::create_dir_all(&base_path).unwrap();
+        let target_ver = base_path.join("v1.0.0");
+        fs::create_dir(&target_ver).unwrap();
+        let link_path = base_path.join("current");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("v1.0.0", &link_path).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir("v1.0.0", &link_path).unwrap();
+
+        let metadata_before = fs::symlink_metadata(&link_path).unwrap();
+        update_current_symlink(&target_ver, "v1.0.0").unwrap();
+        let metadata_after = fs::symlink_metadata(&link_path).unwrap();
+
+        assert_eq!(metadata_before.modified().unwrap(), metadata_after.modified().unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "test_in_root")]
+    fn test_default_install_root_privileged() {
+        let root = default_install_root().unwrap();
+        assert_eq!(root, system_install_root());
+    }
+
     struct MockGitHub {
         release: Release,
     }
@@ -493,7 +529,7 @@ mod tests {
             .create();
 
         installer
-            .install(repo, Some(install_root.clone()))
+            .install(&repo, Some(install_root.clone()))
             .await
             .unwrap();
 
@@ -509,6 +545,72 @@ mod tests {
         let meta_content = fs::read_to_string(meta_file).unwrap();
         assert!(meta_content.contains("v1.0.0"));
         assert!(meta_content.contains("owner/repo-install"));
+    }
+
+    #[tokio::test]
+    async fn test_install_save_metadata_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-metadata-fails".to_string(),
+        };
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: format!("{}/download", url),
+            ..Default::default()
+        };
+
+        struct MockGitHubFails {
+            release: Release,
+        }
+
+        #[async_trait]
+        impl GetReleases for MockGitHubFails {
+            async fn get_latest_release(&self, _repo: &GitHubRepo) -> Result<Release> {
+                Ok(self.release.clone())
+            }
+
+            async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
+                Err(anyhow::anyhow!("Failed to get repo info"))
+            }
+
+            async fn get_releases(&self, _repo: &GitHubRepo) -> Result<Vec<Release>> {
+                Ok(vec![self.release.clone()])
+            }
+        }
+
+        let mock_github = MockGitHubFails {
+            release: release.clone(),
+        };
+        let client = Client::new();
+        let mock_extractor = MockExtractor;
+        let installer = Installer::new(mock_github, client, mock_extractor);
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+
+        let _m = server
+            .mock("GET", "/download")
+            .with_status(200)
+            .with_body("test")
+            .create();
+
+        // This should not panic, even though save_metadata fails.
+        installer
+            .install(&repo, Some(install_root.clone()))
+            .await
+            .unwrap();
+
+        // Verify that the installation still completed
+        let target_dir = install_root.join("owner/repo-metadata-fails/v1.0.0");
+        assert!(target_dir.exists());
+
+        // Verify that the metadata file was not created
+        let meta_file = install_root.join("owner/repo-metadata-fails/meta.json");
+        assert!(!meta_file.exists());
     }
 
     #[tokio::test]
@@ -566,6 +668,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_run_invalid_repo_str() {
+        let repo_str = "invalid-repo-str";
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: "http://example.com/download".to_string(),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
+        };
+
+        let mock_github = MockGitHub { release };
+        let client = Client::new();
+        let mock_extractor = MockExtractor;
+
+        let config = Config {
+            github: mock_github,
+            client,
+            extractor: mock_extractor,
+            install_root: None,
+        };
+
+        let result = run(repo_str, config).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid repository format"));
+    }
+
+    #[tokio::test]
     async fn test_ensure_installed_already_exists() {
         let dir = tempdir().unwrap();
         let target_dir = dir.path().join("owner/repo/v1.0.0");
@@ -595,5 +729,39 @@ mod tests {
         ensure_installed(&target_dir, &repo, &release, &client, &FailExtractor)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ensure_installed_creates_dir_and_extracts() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let dir = tempdir().unwrap();
+        let target_dir = dir.path().join("owner/repo/v1.0.0");
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: format!("{}/download", url),
+            ..Default::default()
+        };
+
+        let mock_extractor = MockExtractor;
+
+        let _m = server
+            .mock("GET", "/download")
+            .with_status(200)
+            .with_body("test")
+            .create();
+
+        let client = Client::new();
+        ensure_installed(&target_dir, &repo, &release, &client, &mock_extractor)
+            .await
+            .unwrap();
+
+        assert!(target_dir.exists());
     }
 }

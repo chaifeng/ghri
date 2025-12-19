@@ -29,3 +29,8 @@ nix = { version = "0.29", default-features = false, features = ["user"] }
 
 [target.'cfg(windows)'.dependencies]
 is_elevated = "0.1.2"
+
+[features]
+default = []
+# This feature is used to enable tests that require special conditions, such as running as root.
+test_in_root = []
