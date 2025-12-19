@@ -26,6 +26,11 @@ jobs:
         RUST_BACKTRACE: 1
         RUST_LOG: trace
       run: cargo test --verbose
+    - name: Run tarpaulin
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        cargo install cargo-tarpaulin
+        cargo tarpaulin
     - name: ghri bach-sh/bach
       shell: bash
       env:
