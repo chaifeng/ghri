@@ -72,8 +72,16 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
     pub async fn install(&self, repo: &GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
         println!("   resolving {}", repo);
-        let release = self.github.get_latest_release(repo).await?;
-        info!("Found latest version: {}", release.tag_name);
+        let (mut meta, meta_path) = self
+            .get_or_fetch_meta(repo, install_root.as_deref())
+            .await?;
+
+        let meta_release = meta
+            .get_latest_stable_release()
+            .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, please use the update command or specify the version (not yet supported).", repo))?;
+
+        info!("Found latest version: {}", meta_release.version);
+        let release: Release = meta_release.clone().into();
 
         let target_dir = get_target_dir(&self.runtime, &repo, &release, install_root)?;
 
@@ -89,10 +97,8 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
 
         // Metadata handling
-        if let Err(e) = self
-            .save_metadata(&repo, &release.tag_name, &target_dir)
-            .await
-        {
+        meta.current_version = release.tag_name.clone();
+        if let Err(e) = self.save_meta(&meta_path, &meta) {
             warn!("Failed to save package metadata: {}. Continuing.", e);
         }
 
@@ -133,6 +139,59 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         println!("   installed {} {} {}", repo, tag, target_dir.display());
     }
 
+    async fn get_or_fetch_meta(
+        &self,
+        repo: &GitHubRepo,
+        install_root: Option<&Path>,
+    ) -> Result<(Meta, PathBuf)> {
+        let root = match install_root {
+            Some(path) => path.to_path_buf(),
+            None => default_install_root(&self.runtime)?,
+        };
+        let meta_path = root.join(&repo.owner).join(&repo.repo).join("meta.json");
+
+        if self.runtime.exists(&meta_path) {
+            match Meta::load(&self.runtime, &meta_path) {
+                Ok(meta) => return Ok((meta, meta_path)),
+                Err(e) => {
+                    warn!(
+                        "Failed to load existing meta.json at {:?}: {}. Re-fetching.",
+                        meta_path, e
+                    );
+                }
+            }
+        }
+
+        let meta = self.fetch_meta(repo, "").await?;
+
+        if let Some(parent) = meta_path.parent() {
+            self.runtime.create_dir_all(parent)?;
+        }
+        self.save_meta(&meta_path, &meta)?;
+
+        Ok((meta, meta_path))
+    }
+
+    async fn fetch_meta(&self, repo: &GitHubRepo, current_version: &str) -> Result<Meta> {
+        let repo_info = self.github.get_repo_info(repo).await?;
+        let releases = self.github.get_releases(repo).await?;
+        Ok(Meta::from(
+            repo.clone(),
+            repo_info,
+            releases,
+            current_version,
+        ))
+    }
+
+    fn save_meta(&self, meta_path: &Path, meta: &Meta) -> Result<()> {
+        let json = serde_json::to_string_pretty(meta)?;
+        let tmp_path = meta_path.with_extension("json.tmp");
+
+        self.runtime.write(&tmp_path, json.as_bytes())?;
+        self.runtime.rename(&tmp_path, &meta_path)?;
+        Ok(())
+    }
+
     async fn save_metadata(
         &self,
         repo: &GitHubRepo,
@@ -146,9 +205,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
             package_root.join("meta.json")
         };
 
-        let repo_info = self.github.get_repo_info(repo).await?;
-        let releases = self.github.get_releases(repo).await?;
-        let new_meta = Meta::from(repo.clone(), repo_info, releases, current_version);
+        let new_meta = self.fetch_meta(repo, current_version).await?;
 
         let mut final_meta = if self.runtime.exists(&meta_path) {
             let mut existing = Meta::load(&self.runtime, &meta_path)?;
@@ -163,11 +220,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         // Ensure current_version is always correct (e.g. if we just installed a new version)
         final_meta.current_version = current_version.to_string();
 
-        let json = serde_json::to_string_pretty(&final_meta)?;
-        let tmp_path = meta_path.with_extension("json.tmp");
-
-        self.runtime.write(&tmp_path, json.as_bytes())?;
-        self.runtime.rename(&tmp_path, &meta_path)?;
+        self.save_meta(&meta_path, &final_meta)?;
 
         Ok(())
     }
@@ -209,7 +262,7 @@ struct Meta {
 }
 
 impl Meta {
-    fn from(repo: GitHubRepo, info: RepoInfo, releases: Vec<Release>, current: &str) -> Self {
+    pub fn from(repo: GitHubRepo, info: RepoInfo, releases: Vec<Release>, current: &str) -> Self {
         Meta {
             name: format!("{}/{}", repo.owner, repo.repo),
             description: info.description,
@@ -219,6 +272,21 @@ impl Meta {
             current_version: current.to_string(),
             releases: releases.into_iter().map(MetaRelease::from).collect(),
         }
+    }
+
+    pub fn get_latest_stable_release(&self) -> Option<&MetaRelease> {
+        self.releases
+            .iter()
+            .filter(|r| !r.is_prerelease)
+            .max_by(|a, b| {
+                // Simplified version comparison: tag_name might not be semver-compliant,
+                // but published_at is a good proxy for "latest".
+                // If published_at is missing, fall back to version string comparison.
+                match (&a.published_at, &b.published_at) {
+                    (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
+                    _ => a.version.cmp(&b.version),
+                }
+            })
     }
 
     fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
@@ -286,6 +354,19 @@ impl From<Release> for MetaRelease {
     }
 }
 
+impl From<MetaRelease> for Release {
+    fn from(r: MetaRelease) -> Self {
+        Release {
+            tag_name: r.version,
+            tarball_url: r.tarball_url,
+            name: r.title,
+            published_at: r.published_at,
+            prerelease: r.is_prerelease,
+            assets: r.assets.into_iter().map(ReleaseAsset::from).collect(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct MetaAsset {
     name: String,
@@ -299,6 +380,16 @@ impl From<ReleaseAsset> for MetaAsset {
             name: a.name,
             size: a.size,
             download_url: a.browser_download_url,
+        }
+    }
+}
+
+impl From<MetaAsset> for ReleaseAsset {
+    fn from(a: MetaAsset) -> Self {
+        ReleaseAsset {
+            name: a.name,
+            size: a.size,
+            browser_download_url: a.download_url,
         }
     }
 }
@@ -596,6 +687,114 @@ mod tests {
     }
 
     #[test]
+    fn test_meta_get_latest_stable_release() {
+        let meta = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![
+                MetaRelease {
+                    version: "v1.0.0".to_string(),
+                    title: None,
+                    published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                    is_prerelease: false,
+                    tarball_url: "url1".to_string(),
+                    assets: vec![],
+                },
+                MetaRelease {
+                    version: "v1.1.0-rc.1".to_string(),
+                    title: None,
+                    published_at: Some("2023-02-01T00:00:00Z".to_string()),
+                    is_prerelease: true,
+                    tarball_url: "url2".to_string(),
+                    assets: vec![],
+                },
+                MetaRelease {
+                    version: "v0.9.0".to_string(),
+                    title: None,
+                    published_at: Some("2022-12-01T00:00:00Z".to_string()),
+                    is_prerelease: false,
+                    tarball_url: "url3".to_string(),
+                    assets: vec![],
+                },
+            ],
+        };
+
+        let latest = meta.get_latest_stable_release().unwrap();
+        assert_eq!(latest.version, "v1.0.0");
+    }
+
+    #[test]
+    fn test_meta_get_latest_stable_release_empty() {
+        let meta = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "".to_string(),
+            releases: vec![],
+        };
+        assert!(meta.get_latest_stable_release().is_none());
+    }
+
+    #[test]
+    fn test_meta_get_latest_stable_release_only_prerelease() {
+        let meta = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "".to_string(),
+            releases: vec![MetaRelease {
+                version: "v1.0.0-rc.1".to_string(),
+                title: None,
+                published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                is_prerelease: true,
+                tarball_url: "url1".to_string(),
+                assets: vec![],
+            }],
+        };
+        assert!(meta.get_latest_stable_release().is_none());
+    }
+
+    #[test]
+    fn test_meta_conversions() {
+        let meta_asset = MetaAsset {
+            name: "test.tar.gz".to_string(),
+            size: 1234,
+            download_url: "http://example.com/test.tar.gz".to_string(),
+        };
+
+        let asset: ReleaseAsset = meta_asset.clone().into();
+        assert_eq!(asset.name, meta_asset.name);
+        assert_eq!(asset.size, meta_asset.size);
+        assert_eq!(asset.browser_download_url, meta_asset.download_url);
+
+        let meta_release = MetaRelease {
+            version: "v1.0.0".to_string(),
+            title: Some("Release v1.0.0".to_string()),
+            published_at: Some("2023-01-01T00:00:00Z".to_string()),
+            is_prerelease: false,
+            tarball_url: "http://example.com/v1.0.0.tar.gz".to_string(),
+            assets: vec![meta_asset],
+        };
+
+        let release: Release = meta_release.clone().into();
+        assert_eq!(release.tag_name, meta_release.version);
+        assert_eq!(release.tarball_url, meta_release.tarball_url);
+        assert_eq!(release.name, meta_release.title);
+        assert_eq!(release.published_at, meta_release.published_at);
+        assert_eq!(release.prerelease, meta_release.is_prerelease);
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].name, "test.tar.gz");
+    }
+
+    #[test]
     fn test_update_current_symlink_no_op_if_already_correct() {
         let dir = tempdir().unwrap();
         let base_path = dir.path().join("owner/repo");
@@ -631,10 +830,6 @@ mod tests {
 
     #[async_trait]
     impl GetReleases for MockGitHub {
-        async fn get_latest_release(&self, _repo: &GitHubRepo) -> Result<Release> {
-            Ok(self.release.clone())
-        }
-
         async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
             Ok(RepoInfo {
                 description: Some("description".into()),
@@ -664,6 +859,154 @@ mod tests {
             runtime.create_dir_all(extract_to)?;
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_meta_missing() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-missing".to_string(),
+        };
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: "url".to_string(),
+            ..Default::default()
+        };
+
+        let mock_github = MockGitHub {
+            release: release.clone(),
+        };
+
+        let client = Client::new();
+        let installer = Installer::new(RealRuntime, mock_github, client, MockExtractor);
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+
+        let (meta, path) = installer
+            .get_or_fetch_meta(&repo, Some(&install_root))
+            .await
+            .unwrap();
+
+        assert_eq!(meta.name, "owner/repo-missing");
+        assert!(path.exists());
+        assert!(path.ends_with("owner/repo-missing/meta.json"));
+
+        let loaded = Meta::load(&RealRuntime, &path).unwrap();
+        assert_eq!(loaded, meta);
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_meta_exists() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-exists".to_string(),
+        };
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+        let meta_dir = install_root.join("owner/repo-exists");
+        fs::create_dir_all(&meta_dir).unwrap();
+        let meta_path = meta_dir.join("meta.json");
+
+        let existing_meta = Meta {
+            name: "owner/repo-exists".to_string(),
+            description: Some("old description".into()),
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "v0.1.0".to_string(),
+            releases: vec![],
+        };
+        let json = serde_json::to_string_pretty(&existing_meta).unwrap();
+        fs::write(&meta_path, json).unwrap();
+
+        struct PanicGitHub;
+        #[async_trait]
+        impl GetReleases for PanicGitHub {
+            async fn get_repo_info(&self, _: &GitHubRepo) -> Result<RepoInfo> {
+                panic!("Should not be called")
+            }
+            async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
+                panic!("Should not be called")
+            }
+        }
+
+        let installer = Installer::new(RealRuntime, PanicGitHub, Client::new(), MockExtractor);
+
+        let (meta, path) = installer
+            .get_or_fetch_meta(&repo, Some(&install_root))
+            .await
+            .unwrap();
+
+        assert_eq!(meta, existing_meta);
+        assert_eq!(path, meta_path);
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_meta_invalid_on_disk() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-invalid".to_string(),
+        };
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+        let meta_dir = install_root.join("owner/repo-invalid");
+        fs::create_dir_all(&meta_dir).unwrap();
+        let meta_path = meta_dir.join("meta.json");
+        fs::write(&meta_path, "invalid json").unwrap();
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: "url".to_string(),
+            ..Default::default()
+        };
+        let mock_github = MockGitHub {
+            release: release.clone(),
+        };
+
+        let installer = Installer::new(RealRuntime, mock_github, Client::new(), MockExtractor);
+
+        let (meta, path) = installer
+            .get_or_fetch_meta(&repo, Some(&install_root))
+            .await
+            .unwrap();
+
+        assert_eq!(meta.name, "owner/repo-invalid");
+        assert!(path.exists());
+        // Verify it was overwritten with valid data
+        let loaded = Meta::load(&RealRuntime, &path).unwrap();
+        assert_eq!(loaded, meta);
+    }
+
+    #[tokio::test]
+    async fn test_get_or_fetch_meta_fetch_fail() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-fail".to_string(),
+        };
+
+        struct FailGitHub;
+        #[async_trait]
+        impl GetReleases for FailGitHub {
+            async fn get_repo_info(&self, _: &GitHubRepo) -> Result<RepoInfo> {
+                Err(anyhow::anyhow!("API Error"))
+            }
+            async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
+                Err(anyhow::anyhow!("API Error"))
+            }
+        }
+
+        let installer = Installer::new(RealRuntime, FailGitHub, Client::new(), MockExtractor);
+
+        let root_dir = tempdir().unwrap();
+        let result = installer
+            .get_or_fetch_meta(&repo, Some(root_dir.path()))
+            .await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -743,10 +1086,6 @@ mod tests {
 
         #[async_trait]
         impl GetReleases for MockGitHubFails {
-            async fn get_latest_release(&self, _repo: &GitHubRepo) -> Result<Release> {
-                Ok(self.release.clone())
-            }
-
             async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
                 Err(anyhow::anyhow!("Failed to get repo info"))
             }
@@ -772,19 +1111,92 @@ mod tests {
             .with_body("test")
             .create();
 
-        // This should not panic, even though save_metadata fails.
+        // In the new flow, if get_repo_info fails and meta.json is missing,
+        // it's a fatal error because we can't resolve the latest stable version.
+        let result = installer.install(&repo, Some(install_root.clone())).await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get repo info")
+        );
+
+        // Verify that the metadata file was not created
+        let meta_file = install_root.join("owner/repo-metadata-fails/meta.json");
+        assert!(!meta_file.exists());
+    }
+
+    #[tokio::test]
+    async fn test_install_uses_existing_meta() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-existing-meta".to_string(),
+        };
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+        let meta_dir = install_root.join("owner/repo-existing-meta");
+        fs::create_dir_all(&meta_dir).unwrap();
+        let meta_path = meta_dir.join("meta.json");
+
+        let existing_meta = Meta {
+            name: "owner/repo-existing-meta".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![MetaRelease {
+                version: "v1.0.0".to_string(),
+                title: None,
+                published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                is_prerelease: false,
+                tarball_url: "http://example.com/v1.0.0.tar.gz".to_string(),
+                assets: vec![],
+            }],
+        };
+        fs::write(&meta_path, serde_json::to_string(&existing_meta).unwrap()).unwrap();
+
+        struct PanicGitHub;
+        #[async_trait]
+        impl GetReleases for PanicGitHub {
+            async fn get_repo_info(&self, _: &GitHubRepo) -> Result<RepoInfo> {
+                panic!("Should not be called")
+            }
+            async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
+                panic!("Should not be called")
+            }
+        }
+
+        // We need a real server for download if we don't mock it,
+        // but ensure_installed is what does the download.
+        // We can mock Extractor too.
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/v1.0.0.tar.gz")
+            .with_status(200)
+            .create();
+
+        // Update tarball_url in meta to point to our mock server
+        let mut meta_with_mock_url = existing_meta.clone();
+        meta_with_mock_url.releases[0].tarball_url = format!("{}/v1.0.0.tar.gz", server.url());
+        fs::write(
+            &meta_path,
+            serde_json::to_string(&meta_with_mock_url).unwrap(),
+        )
+        .unwrap();
+
+        let installer = Installer::new(RealRuntime, PanicGitHub, Client::new(), MockExtractor);
+
         installer
             .install(&repo, Some(install_root.clone()))
             .await
             .unwrap();
 
-        // Verify that the installation still completed
-        let target_dir = install_root.join("owner/repo-metadata-fails/v1.0.0");
+        let target_dir = install_root.join("owner/repo-existing-meta/v1.0.0");
         assert!(target_dir.exists());
-
-        // Verify that the metadata file was not created
-        let meta_file = install_root.join("owner/repo-metadata-fails/meta.json");
-        assert!(!meta_file.exists());
     }
 
     #[tokio::test]

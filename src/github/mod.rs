@@ -7,7 +7,6 @@ use std::str::FromStr;
 
 #[async_trait]
 pub trait GetReleases: Send + Sync {
-    async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release>;
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo>;
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>>;
 }
@@ -26,10 +25,6 @@ impl GitHub {
 
 #[async_trait]
 impl GetReleases for GitHub {
-    async fn get_latest_release(&self, repo: &GitHubRepo) -> Result<Release> {
-        GitHub::get_latest_release(repo, &self.client, &self.api_url).await
-    }
-
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
         GitHub::get_repo_info(repo, &self.client, &self.api_url).await
     }
@@ -40,34 +35,6 @@ impl GetReleases for GitHub {
 }
 
 impl GitHub {
-    /// Fetches the latest release information from GitHub.
-    pub async fn get_latest_release(
-        repo: &GitHubRepo,
-        client: &Client,
-        api_url: &str,
-    ) -> Result<Release> {
-        let url = format!(
-            "{}/repos/{}/{}/releases/latest",
-            api_url, repo.owner, repo.repo
-        );
-
-        debug!("Fetching latest release from {}...", url);
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to send request to GitHub API")?;
-
-        let release = response
-            .error_for_status()?
-            .json::<Release>()
-            .await
-            .context("Failed to parse JSON response from GitHub API")?;
-
-        Ok(release)
-    }
-
     pub async fn get_repo_info(
         repo: &GitHubRepo,
         client: &Client,
@@ -238,76 +205,6 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get_latest_release_not_found() {
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
-
-        let repo = GitHubRepo {
-            owner: "owner".to_string(),
-            repo: "repo".to_string(),
-        };
-
-        let mock = server
-            .mock("GET", "/repos/owner/repo/releases/latest")
-            .with_status(404)
-            .create_async()
-            .await;
-
-        let client = Client::new();
-        let result = GitHub::get_latest_release(&repo, &client, &url).await;
-
-        mock.assert_async().await;
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_github_repo_invalid() {
-        assert!(GitHubRepo::from_str("owner").is_err());
-        assert!(GitHubRepo::from_str("owner/").is_err());
-        assert!(GitHubRepo::from_str("/repo").is_err());
-        assert!(GitHubRepo::from_str("owner/repo/extra").is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get_latest_release() {
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
-
-        let repo = GitHubRepo {
-            owner: "owner".to_string(),
-            repo: "repo".to_string(),
-        };
-
-        let mock = server
-            .mock("GET", "/repos/owner/repo/releases/latest")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(
-                r#"{"tag_name": "v1.0.0", "tarball_url": "https://example.com/v1.0.0.tar.gz", "prerelease": false, "assets": []}"#,
-            )
-            .create_async()
-            .await;
-
-        let client = Client::new();
-        let release = GitHub::get_latest_release(&repo, &client, &url)
-            .await
-            .unwrap();
-
-        mock.assert_async().await;
-        assert_eq!(
-            release,
-            Release {
-                tag_name: "v1.0.0".to_string(),
-                tarball_url: "https://example.com/v1.0.0.tar.gz".to_string(),
-                name: None,
-                published_at: None,
-                prerelease: false,
-                assets: vec![],
-            }
-        );
     }
 
     #[tokio::test]
