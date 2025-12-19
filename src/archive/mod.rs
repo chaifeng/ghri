@@ -183,4 +183,28 @@ mod tests {
         let result = ArchiveExtractor.extract(&archive_path, &extract_path);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_extract_temp_dir_already_exists() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        let temp_extract_dir = extract_path.with_file_name("extracted_temp_extract");
+        fs::create_dir(&temp_extract_dir)?;
+
+        create_test_archive(
+            &archive_path,
+            HashMap::from([("test_dir/file1.txt", "test")]),
+        )?;
+
+        ArchiveExtractor.extract(&archive_path, &extract_path)?;
+
+        let extracted_file = extract_path.join("file1.txt");
+        assert!(extracted_file.exists());
+        assert_eq!(fs::read_to_string(extracted_file)?, "test");
+
+        Ok(())
+    }
 }

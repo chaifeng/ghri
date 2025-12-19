@@ -182,7 +182,7 @@ pub struct ReleaseAsset {
 }
 
 /// Represents a GitHub release
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, Default)]
 pub struct Release {
     pub tag_name: String,
     pub tarball_url: String,
