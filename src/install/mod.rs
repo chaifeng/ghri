@@ -270,8 +270,27 @@ impl Meta {
             license: info.license.map(|l| l.name),
             updated_at: info.updated_at,
             current_version: current.to_string(),
-            releases: releases.into_iter().map(MetaRelease::from).collect(),
+            releases: {
+                let mut r: Vec<MetaRelease> = releases.into_iter().map(MetaRelease::from).collect();
+                Meta::sort_releases_internal(&mut r);
+                r
+            },
         }
+    }
+
+    fn sort_releases_internal(releases: &mut [MetaRelease]) {
+        releases.sort_by(|a, b| {
+            match (&a.published_at, &b.published_at) {
+                (Some(at_a), Some(at_b)) => at_b.cmp(at_a),  // Descending
+                (Some(_), None) => std::cmp::Ordering::Less, // Published comes before unpublished
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => b.version.cmp(&a.version), // Version descending fallback
+            }
+        });
+    }
+
+    pub fn sort_releases(&mut self) {
+        Self::sort_releases_internal(&mut self.releases);
     }
 
     pub fn get_latest_stable_release(&self) -> Option<&MetaRelease> {
@@ -325,6 +344,10 @@ impl Meta {
                 self.releases.push(new_release);
                 changed = true;
             }
+        }
+
+        if changed {
+            self.sort_releases();
         }
 
         changed
@@ -1594,5 +1617,132 @@ mod tests {
             }
         }
         assert!(!tmp_exists);
+    }
+
+    #[test]
+    fn test_meta_releases_sorting() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+        let info = RepoInfo {
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+        };
+        let releases = vec![
+            Release {
+                tag_name: "v1.0.0".to_string(),
+                tarball_url: "url1".to_string(),
+                name: None,
+                published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                prerelease: false,
+                assets: vec![],
+            },
+            Release {
+                tag_name: "v2.0.0".to_string(),
+                tarball_url: "url2".to_string(),
+                name: None,
+                published_at: Some("2023-02-01T00:00:00Z".to_string()),
+                prerelease: false,
+                assets: vec![],
+            },
+            Release {
+                tag_name: "v0.9.0".to_string(),
+                tarball_url: "url3".to_string(),
+                name: None,
+                published_at: Some("2022-12-01T00:00:00Z".to_string()),
+                prerelease: false,
+                assets: vec![],
+            },
+        ];
+
+        let meta = Meta::from(repo, info, releases, "v2.0.0");
+
+        // Should be sorted by published_at DESC: v2.0.0, v1.0.0, v0.9.0
+        assert_eq!(meta.releases[0].version, "v2.0.0");
+        assert_eq!(meta.releases[1].version, "v1.0.0");
+        assert_eq!(meta.releases[2].version, "v0.9.0");
+    }
+
+    #[test]
+    fn test_meta_merge_sorting() {
+        let mut meta = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![MetaRelease {
+                version: "v1.0.0".to_string(),
+                title: None,
+                published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                is_prerelease: false,
+                tarball_url: "url1".to_string(),
+                assets: vec![],
+            }],
+        };
+
+        let other = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-02-01T00:00:00Z".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![MetaRelease {
+                version: "v2.0.0".to_string(),
+                title: None,
+                published_at: Some("2023-02-01T00:00:00Z".to_string()),
+                is_prerelease: false,
+                tarball_url: "url2".to_string(),
+                assets: vec![],
+            }],
+        };
+
+        meta.merge(other);
+
+        // Should be sorted by published_at DESC: v2.0.0, v1.0.0
+        assert_eq!(meta.releases[0].version, "v2.0.0");
+        assert_eq!(meta.releases[1].version, "v1.0.0");
+    }
+
+    #[test]
+    fn test_meta_sorting_fallback() {
+        let mut releases = vec![
+            MetaRelease {
+                version: "v1.0.0".to_string(),
+                title: None,
+                published_at: None,
+                is_prerelease: false,
+                tarball_url: "url1".to_string(),
+                assets: vec![],
+            },
+            MetaRelease {
+                version: "v2.0.0".to_string(),
+                title: None,
+                published_at: None,
+                is_prerelease: false,
+                tarball_url: "url2".to_string(),
+                assets: vec![],
+            },
+            MetaRelease {
+                version: "v1.5.0".to_string(),
+                title: None,
+                published_at: Some("2023-01-01T00:00:00Z".to_string()),
+                is_prerelease: false,
+                tarball_url: "url3".to_string(),
+                assets: vec![],
+            },
+        ];
+
+        Meta::sort_releases_internal(&mut releases);
+
+        // Published comes first (v1.5.0), then version DESC (v2.0.0, v1.0.0)
+        assert_eq!(releases[0].version, "v1.5.0");
+        assert_eq!(releases[1].version, "v2.0.0");
+        assert_eq!(releases[2].version, "v1.0.0");
     }
 }
