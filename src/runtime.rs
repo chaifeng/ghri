@@ -76,12 +76,12 @@ impl Runtime for RealRuntime {
         }
         #[cfg(windows)]
         {
-            let metadata = fs::symlink_metadata(path).context("Failed to get symlink metadata")?;
-            if metadata.file_type().is_dir() {
-                fs::remove_dir(path).context("Failed to remove directory symlink")?;
-            } else {
-                fs::remove_file(path).context("Failed to remove file symlink")?;
-            }
+            // On Windows, removing a symlink requires remove_dir for a directory symlink
+            // and remove_file for a file symlink. We try to remove it as a directory
+            // first, and if that fails, we try to remove it as a file.
+            fs::remove_dir(path)
+                .or_else(|_| fs::remove_file(path))
+                .context("Failed to remove symlink")?;
         }
         Ok(())
     }
@@ -102,8 +102,12 @@ impl Runtime for RealRuntime {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::symlink_dir;
-            symlink_dir(original, link).context("Failed to create symlink")?;
+            use std::os::windows::fs::{symlink_dir, symlink_file};
+            if original.is_dir() {
+                symlink_dir(original, link).context("Failed to create directory symlink")?;
+            } else {
+                symlink_file(original, link).context("Failed to create file symlink")?;
+            }
         }
         Ok(())
     }
@@ -397,6 +401,35 @@ mod tests {
         rt.remove_symlink(&link).unwrap();
         assert!(!rt.exists(&link));
         assert!(rt.exists(&target));
+    }
+
+    #[test]
+    fn test_real_runtime_file_symlink() {
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let target_file = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+
+        // Create target file
+        rt.write(&target_file, "hello").unwrap();
+
+        // Symlink
+        rt.symlink(&target_file, &link).unwrap();
+        assert!(rt.exists(&link));
+        assert!(rt.is_symlink(&link));
+
+        // Read link
+        let read_target = rt.read_link(&link).unwrap();
+        assert_eq!(read_target, target_file);
+
+        // Verify that we can read the file through the symlink
+        let content = rt.read_to_string(&link).unwrap();
+        assert_eq!(content, "hello");
+
+        // Remove symlink
+        rt.remove_symlink(&link).unwrap();
+        assert!(!rt.exists(&link));
+        assert!(rt.exists(&target_file));
     }
 
     #[test]
