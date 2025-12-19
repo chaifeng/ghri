@@ -39,7 +39,7 @@ jobs:
         RUST_LOG: trace
       run: |
         set -ex
-        cargo run --release -- --root ./ghri-root install bach-sh/bach
+        cargo run --release -- install --root ./ghri-root bach-sh/bach
         find ./ghri-root -ls
         if command -v jq > /dev/null; then
           jq . ./ghri-root/bach-sh/bach/meta.json
