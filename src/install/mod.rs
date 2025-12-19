@@ -18,10 +18,7 @@ pub async fn install(repo_str: &str, install_root: Option<PathBuf>) -> Result<()
     run(repo_str, config).await
 }
 
-pub async fn run<G: GetReleases, E: Extractor>(
-    repo_str: &str,
-    config: Config<G, E>,
-) -> Result<()> {
+pub async fn run<G: GetReleases, E: Extractor>(repo_str: &str, config: Config<G, E>) -> Result<()> {
     let repo = repo_str.parse::<GitHubRepo>()?;
     let installer = Installer::new(config.github, config.client, config.extractor);
     installer.install(&repo, config.install_root).await
@@ -43,6 +40,7 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
     }
 
     pub async fn install(&self, repo: &GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
+        println!("   resolving {}", repo);
         let release = self.github.get_latest_release(repo).await?;
         info!("Found latest version: {}", release.tag_name);
 
@@ -65,13 +63,7 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
     }
 
     fn print_install_success(&self, repo: &GitHubRepo, tag: &str, target_dir: &Path) {
-        println!(
-            "installed {}/{} {} {}",
-            repo.owner,
-            repo.repo,
-            tag,
-            target_dir.display()
-        );
+        println!("   installed {} {} {}", repo, tag, target_dir.display());
     }
 
     async fn save_metadata(
@@ -237,7 +229,10 @@ async fn ensure_installed<E: Extractor>(
     let temp_dir = std::env::temp_dir();
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
+    println!(" downloading {} {}", &repo, release.tag_name);
     download_file(&release.tarball_url, &temp_file_path, client).await?;
+
+    println!("  installing {} {}", &repo, release.tag_name);
     extractor.extract(&temp_file_path, target_dir)?;
 
     fs::remove_file(&temp_file_path)
@@ -446,7 +441,10 @@ mod tests {
         update_current_symlink(&target_ver, "v1.0.0").unwrap();
         let metadata_after = fs::symlink_metadata(&link_path).unwrap();
 
-        assert_eq!(metadata_before.modified().unwrap(), metadata_after.modified().unwrap());
+        assert_eq!(
+            metadata_before.modified().unwrap(),
+            metadata_after.modified().unwrap()
+        );
     }
 
     #[test]
@@ -693,10 +691,12 @@ mod tests {
 
         let result = run(repo_str, config).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid repository format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid repository format")
+        );
     }
 
     #[tokio::test]

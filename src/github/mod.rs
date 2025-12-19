@@ -143,6 +143,12 @@ pub struct GitHubRepo {
     pub repo: String,
 }
 
+impl std::fmt::Display for GitHubRepo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.owner, self.repo)
+    }
+}
+
 impl FromStr for GitHubRepo {
     type Err = anyhow::Error;
 
