@@ -26,3 +26,6 @@
 .vagrant/
 # Vagrantfile is often versioned, but can be ignored.
 # Vagrantfile
+
+# Coverage reports
+tarpaulin-report.html

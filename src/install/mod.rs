@@ -1,55 +1,40 @@
 use crate::{
-    archive::{ArchiveExtractor, Extractor},
+    archive::Extractor,
     download::download_file,
-    github::{GetReleases, GitHub, GitHubRepo, Release, ReleaseAsset, RepoInfo},
+    github::{GetReleases, GitHubRepo, Release, ReleaseAsset, RepoInfo},
 };
 use anyhow::{Context, Result, bail};
 use log::{debug, info, warn};
-use reqwest::{
-    Client,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue},
-};
+use reqwest::Client;
 use serde::Serialize;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod config;
+use config::Config;
+
 pub async fn install(repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
-    let repo = repo_str.parse::<GitHubRepo>()?;
-
-    let mut headers = HeaderMap::new();
-    if let Ok(token) = env::var("GITHUB_TOKEN") {
-        let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", token))?;
-        auth_value.set_sensitive(true);
-        headers.insert(AUTHORIZATION, auth_value);
-        debug!(
-            "Using GITHUB_TOKEN for authentication: {}*********{}",
-            &token[..8],
-            &token[token.len() - 4..]
-        );
-    }
-
-    let client = Client::builder()
-        .user_agent("ghri-cli")
-        .default_headers(headers)
-        .build()?;
-
-    let github = GitHub {
-        client: client.clone(),
-    };
-    let extractor = ArchiveExtractor;
-    let installer = Installer::new(github, client, extractor);
-    installer.install(repo, install_root).await
+    let config = Config::new(install_root)?;
+    run(repo_str, config).await
 }
 
-struct Installer<G: GetReleases, E: Extractor> {
-    github: G,
-    client: Client,
-    extractor: E,
+pub async fn run<G: GetReleases, E: Extractor>(
+    repo_str: &str,
+    config: Config<G, E>,
+) -> Result<()> {
+    let repo = repo_str.parse::<GitHubRepo>()?;
+    let installer = Installer::new(config.github, config.client, config.extractor);
+    installer.install(repo, config.install_root).await
+}
+
+pub struct Installer<G: GetReleases, E: Extractor> {
+    pub github: G,
+    pub client: Client,
+    pub extractor: E,
 }
 
 impl<G: GetReleases, E: Extractor> Installer<G, E> {
-    fn new(github: G, client: Client, extractor: E) -> Self {
+    pub fn new(github: G, client: Client, extractor: E) -> Self {
         Self {
             github,
             client,
@@ -57,7 +42,7 @@ impl<G: GetReleases, E: Extractor> Installer<G, E> {
         }
     }
 
-    async fn install(&self, repo: GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
+    pub async fn install(&self, repo: GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
         let release = self.github.get_latest_release(&repo).await?;
         info!("Found latest version: {}", release.tag_name);
 
@@ -465,7 +450,8 @@ mod tests {
     struct MockExtractor;
 
     impl Extractor for MockExtractor {
-        fn extract(&self, _archive_path: &Path, _extract_to: &Path) -> Result<()> {
+        fn extract(&self, _archive_path: &Path, extract_to: &Path) -> Result<()> {
+            fs::create_dir_all(extract_to)?;
             Ok(())
         }
     }
@@ -477,7 +463,7 @@ mod tests {
 
         let repo = GitHubRepo {
             owner: "owner".to_string(),
-            repo: "repo".to_string(),
+            repo: "repo-install".to_string(),
         };
 
         let release = Release {
@@ -511,17 +497,71 @@ mod tests {
             .await
             .unwrap();
 
-        let target_dir = install_root.join("owner/repo/v1.0.0");
+        let target_dir = install_root.join("owner/repo-install/v1.0.0");
         assert!(target_dir.exists());
 
-        let current_link = install_root.join("owner/repo/current");
+        let current_link = install_root.join("owner/repo-install/current");
         assert!(current_link.is_symlink());
         assert_eq!(fs::read_link(&current_link).unwrap(), Path::new("v1.0.0"));
 
-        let meta_file = install_root.join("owner/repo/meta.json");
+        let meta_file = install_root.join("owner/repo-install/meta.json");
         assert!(meta_file.exists());
         let meta_content = fs::read_to_string(meta_file).unwrap();
         assert!(meta_content.contains("v1.0.0"));
-        assert!(meta_content.contains("owner/repo"));
+        assert!(meta_content.contains("owner/repo-install"));
+    }
+
+    #[tokio::test]
+    async fn test_run() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let repo_str = "owner/repo-run";
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: format!("{}/download", url),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
+        };
+
+        let mock_github = MockGitHub {
+            release: release.clone(),
+        };
+
+        let client = Client::new();
+        let mock_extractor = MockExtractor;
+
+        let root_dir = tempdir().unwrap();
+        let install_root = root_dir.path().to_path_buf();
+
+        let config = Config {
+            github: mock_github,
+            client,
+            extractor: mock_extractor,
+            install_root: Some(install_root.clone()),
+        };
+
+        let _m = server
+            .mock("GET", "/download")
+            .with_status(200)
+            .with_body("test")
+            .create();
+
+        run(repo_str, config).await.unwrap();
+
+        let target_dir = install_root.join("owner/repo-run/v1.0.0");
+        assert!(target_dir.exists());
+
+        let current_link = install_root.join("owner/repo-run/current");
+        assert!(current_link.is_symlink());
+        assert_eq!(fs::read_link(&current_link).unwrap(), Path::new("v1.0.0"));
+
+        let meta_file = install_root.join("owner/repo-run/meta.json");
+        assert!(meta_file.exists());
+        let meta_content = fs::read_to_string(meta_file).unwrap();
+        assert!(meta_content.contains("v1.0.0"));
+        assert!(meta_content.contains("owner/repo-run"));
     }
 }
