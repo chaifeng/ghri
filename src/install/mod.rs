@@ -129,6 +129,14 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
                 .await
             {
                 warn!("Failed to update metadata for {}: {}", repo, e);
+            } else {
+                // Check if update is available
+                let updated_meta = Meta::load(&self.runtime, &meta_path)?;
+                if let Some(latest) = updated_meta.get_latest_stable_release() {
+                    if meta.current_version != latest.version {
+                        self.print_update_available(&repo, &meta.current_version, &latest.version);
+                    }
+                }
             }
         }
 
@@ -137,6 +145,15 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
     fn print_install_success(&self, repo: &GitHubRepo, tag: &str, target_dir: &Path) {
         println!("   installed {} {} {}", repo, tag, target_dir.display());
+    }
+
+    fn print_update_available(&self, repo: &GitHubRepo, current: &str, latest: &str) {
+        let current_display = if current.is_empty() {
+            "(none)"
+        } else {
+            current
+        };
+        println!("  updatable {} {} -> {}", repo, current_display, latest);
     }
 
     async fn get_or_fetch_meta(
@@ -1744,5 +1761,47 @@ mod tests {
         assert_eq!(releases[0].version, "v1.5.0");
         assert_eq!(releases[1].version, "v2.0.0");
         assert_eq!(releases[2].version, "v1.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_update_all_feedback() {
+        let mut server = mockito::Server::new_async().await;
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let meta_path = root.join("owner/repo/meta.json");
+        fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
+
+        let initial_meta = Meta {
+            name: "owner/repo".to_string(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "old".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![],
+        };
+        fs::write(&meta_path, serde_json::to_string(&initial_meta).unwrap()).unwrap();
+
+        let _m1 = server
+            .mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_body(r#"{"updated_at": "new"}"#)
+            .create();
+        let _m2 = server
+            .mock("GET", "/repos/owner/repo/releases?per_page=100&page=1")
+            .with_status(200)
+            .with_body(r#"[{"tag_name": "v2.0.0", "tarball_url": "url2", "prerelease": false, "assets": []}]"#)
+            .create();
+
+        let github = crate::github::GitHub::new(reqwest::Client::new(), Some(server.url()));
+        let installer = Installer::new(RealRuntime, github, reqwest::Client::new(), MockExtractor);
+
+        // We can't easily capture stdout in unit tests without extra crates,
+        // but we can verify it doesn't crash and the logic runs.
+        // The manual verification will be more important for "seeing" the output.
+        installer
+            .update_all(Some(root.to_path_buf()))
+            .await
+            .unwrap();
     }
 }
