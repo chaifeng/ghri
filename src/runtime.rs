@@ -298,3 +298,211 @@ impl Runtime for MockRuntime {
         Some(PathBuf::from("/home/user/.config"))
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_real_runtime_file_ops() {
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        // Write
+        rt.write(&file_path, "hello").unwrap();
+        assert!(rt.exists(&file_path));
+
+        // Read
+        let content = rt.read_to_string(&file_path).unwrap();
+        assert_eq!(content, "hello");
+
+        // Open
+        let mut reader = rt.open(&file_path).unwrap();
+        let mut buf = String::new();
+        reader.read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "hello");
+
+        // Rename
+        let new_path = dir.path().join("test_new.txt");
+        rt.rename(&file_path, &new_path).unwrap();
+        assert!(!rt.exists(&file_path));
+        assert!(rt.exists(&new_path));
+
+        // Create file using write stream
+        let file_path2 = dir.path().join("test2.txt");
+        {
+            let mut writer = rt.create_file(&file_path2).unwrap();
+            writer.write_all(b"world").unwrap();
+        }
+        assert_eq!(rt.read_to_string(&file_path2).unwrap(), "world");
+
+        // Remove
+        rt.remove_file(&new_path).unwrap();
+        assert!(!rt.exists(&new_path));
+    }
+
+    #[test]
+    fn test_real_runtime_dir_ops() {
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let sub_dir = dir.path().join("a/b/c");
+
+        // Create
+        rt.create_dir_all(&sub_dir).unwrap();
+        assert!(rt.exists(&sub_dir));
+        assert!(rt.is_dir(&sub_dir));
+
+        // Read dir
+        let parent = sub_dir.parent().unwrap();
+        let entries = rt.read_dir(parent).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], sub_dir);
+
+        // Remove dir
+        rt.remove_dir(&sub_dir).unwrap();
+        assert!(!rt.exists(&sub_dir));
+
+        // Remove dir all
+        let sub_dir_full = dir.path().join("x/y/z");
+        rt.create_dir_all(&sub_dir_full).unwrap();
+        rt.write(&sub_dir_full.join("file.txt"), "data").unwrap();
+        rt.remove_dir_all(&dir.path().join("x")).unwrap();
+        assert!(!rt.exists(&dir.path().join("x")));
+    }
+
+    #[test]
+    fn test_real_runtime_symlink_ops() {
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+
+        // Create target (must be dir for Windows compatibility in some cases)
+        rt.create_dir_all(&target).unwrap();
+
+        // Symlink
+        rt.symlink(&target, &link).unwrap();
+        assert!(rt.exists(&link));
+        assert!(rt.is_symlink(&link));
+
+        // Read link
+        let read_target = rt.read_link(&link).unwrap();
+        // Note: read_link might return relative or absolute depends on how it was created
+        // In our case we passed absolute path
+        assert_eq!(read_target, target);
+
+        // Remove symlink
+        rt.remove_symlink(&link).unwrap();
+        assert!(!rt.exists(&link));
+        assert!(rt.exists(&target));
+    }
+
+    #[test]
+    fn test_real_runtime_env_and_dirs() {
+        let rt = RealRuntime;
+        // Test env_var with a likely existing var
+        if let Ok(path) = std::env::var("PATH") {
+            assert_eq!(rt.env_var("PATH").unwrap(), path);
+        }
+
+        assert!(rt.home_dir().is_some());
+    }
+
+    #[test]
+    fn test_mock_runtime_file_ops() {
+        let rt = MockRuntime::new();
+        let path = Path::new("/test/file.txt");
+
+        // Write/Exists
+        rt.write(path, "mock data").unwrap();
+        assert!(rt.exists(path));
+
+        // Read
+        assert_eq!(rt.read_to_string(path).unwrap(), "mock data");
+
+        // Rename
+        let new_path = Path::new("/test/new_file.txt");
+        rt.rename(path, new_path).unwrap();
+        assert!(!rt.exists(path));
+        assert!(rt.exists(new_path));
+        assert_eq!(rt.read_to_string(new_path).unwrap(), "mock data");
+
+        // Open
+        let mut reader = rt.open(new_path).unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, b"mock data");
+
+        // Create with stream
+        let path2 = Path::new("/test/file2.txt");
+        {
+            let mut writer = rt.create_file(path2).unwrap();
+            writer.write_all(b"streamed data").unwrap();
+        }
+        assert_eq!(rt.read_to_string(path2).unwrap(), "streamed data");
+
+        // Remove
+        rt.remove_file(new_path).unwrap();
+        assert!(!rt.exists(new_path));
+    }
+
+    #[test]
+    fn test_mock_runtime_dir_simulation() {
+        let rt = MockRuntime::new();
+        let file1 = Path::new("/a/b/file1.txt");
+        let file2 = Path::new("/a/c/file2.txt");
+
+        rt.write(file1, "1").unwrap();
+        rt.write(file2, "2").unwrap();
+
+        // is_dir simulation
+        assert!(rt.is_dir(Path::new("/a")));
+        assert!(rt.is_dir(Path::new("/a/b")));
+        assert!(!rt.is_dir(file1));
+
+        // remove_dir (removes all files with prefix)
+        rt.remove_dir(Path::new("/a/b")).unwrap();
+        assert!(!rt.exists(file1));
+        assert!(rt.exists(file2));
+
+        // remove_dir_all
+        rt.remove_dir_all(Path::new("/a")).unwrap();
+        assert!(!rt.exists(file2));
+    }
+
+    #[test]
+    fn test_mock_runtime_env_and_dirs() {
+        let mut rt = MockRuntime::new();
+        rt.env_vars.insert("KEY".to_string(), "VALUE".to_string());
+
+        assert_eq!(rt.env_var("KEY").unwrap(), "VALUE");
+        assert!(rt.env_var("NONEXISTENT").is_err());
+
+        assert_eq!(rt.home_dir().unwrap(), PathBuf::from("/home/user"));
+    }
+
+    #[test]
+    fn test_real_runtime_errors() {
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let non_existent = dir.path().join("non_existent");
+
+        assert!(rt.read_to_string(&non_existent).is_err());
+        assert!(rt.open(&non_existent).is_err());
+        assert!(rt.rename(&non_existent, &dir.path().join("new")).is_err());
+        assert!(rt.remove_file(&non_existent).is_err());
+        assert!(rt.remove_dir(&non_existent).is_err());
+    }
+
+    #[test]
+    fn test_mock_runtime_errors() {
+        let rt = MockRuntime::new();
+        let path = Path::new("/none");
+
+        assert!(rt.read_to_string(path).is_err());
+        assert!(rt.open(path).is_err());
+        assert!(rt.rename(path, Path::new("/new")).is_err());
+    }
+}

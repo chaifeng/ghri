@@ -645,11 +645,11 @@ mod tests {
     impl Extractor for MockExtractor {
         fn extract<R: Runtime>(
             &self,
-            _runtime: &R,
+            runtime: &R,
             _archive_path: &Path,
             extract_to: &Path,
         ) -> Result<()> {
-            fs::create_dir_all(extract_to)?;
+            runtime.create_dir_all(extract_to)?;
             Ok(())
         }
     }
