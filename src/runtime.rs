@@ -103,7 +103,19 @@ impl Runtime for RealRuntime {
         #[cfg(windows)]
         {
             use std::os::windows::fs::{symlink_dir, symlink_file};
-            if original.is_dir() {
+
+            // If `original` is a relative path, `is_dir()` would check it against the
+            // current working directory. We need to check it relative to the directory
+            // where the symlink will be created.
+            let target_path = if original.is_absolute() {
+                original.to_path_buf()
+            } else {
+                link.parent()
+                    .context("Failed to get parent directory for symlink")?
+                    .join(original)
+            };
+
+            if target_path.is_dir() {
                 symlink_dir(original, link).context("Failed to create directory symlink")?;
             } else {
                 symlink_file(original, link).context("Failed to create file symlink")?;
