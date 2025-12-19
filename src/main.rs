@@ -58,11 +58,17 @@ pub struct UpdateArgs {
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
+    let runtime = ghri::runtime::RealRuntime;
 
     match cli.command {
-        Commands::Install(args) => install(&args.repo, args.install_root, args.api_url).await,
-        Commands::Update(args) => ghri::install::update(args.install_root, args.api_url).await,
+        Commands::Install(args) => {
+            install(runtime, &args.repo, args.install_root, args.api_url).await?
+        }
+        Commands::Update(args) => {
+            ghri::install::update(runtime, args.install_root, args.api_url).await?
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]

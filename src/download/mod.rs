@@ -1,12 +1,17 @@
+use crate::runtime::Runtime;
 use anyhow::{Context, Result};
 use log::{debug, info};
 use reqwest::Client;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
 /// Downloads a file from a URL to a temporary path.
-pub async fn download_file(url: &str, temp_path: &Path, client: &Client) -> Result<()> {
+pub async fn download_file<R: Runtime>(
+    runtime: &R,
+    url: &str,
+    temp_path: &Path,
+    client: &Client,
+) -> Result<()> {
     info!("Downloading file from {}...", url);
     let mut response = client
         .get(url)
@@ -16,7 +21,8 @@ pub async fn download_file(url: &str, temp_path: &Path, client: &Client) -> Resu
         .error_for_status()
         .context("Download request failed with an error status")?;
 
-    let mut temp_file = File::create(temp_path)
+    let mut temp_file = runtime
+        .create_file(temp_path)
         .with_context(|| format!("Failed to create temporary file at {:?}", temp_path))?;
 
     let mut downloaded_bytes = 0;
@@ -41,51 +47,51 @@ pub async fn download_file(url: &str, temp_path: &Path, client: &Client) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
+    use crate::runtime::MockRuntime;
 
-    #[test]
-    fn test_download_file() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_download_file() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let mock = server
             .mock("GET", "/test.file")
             .with_status(200)
             .with_body("test content")
-            .create();
+            .create_async()
+            .await;
 
-        let dir = tempdir().unwrap();
-        let temp_path = dir.path().join("test.file");
+        let runtime = MockRuntime::new();
+        let temp_path = Path::new("test.file");
+        let client = Client::new();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let client = Client::new();
-            download_file(&format!("{}/test.file", url), &temp_path, &client).await
-        })
-        .unwrap();
+        let result =
+            download_file(&runtime, &format!("{}/test.file", url), temp_path, &client).await;
 
-        mock.assert();
-        assert_eq!(fs::read_to_string(temp_path).unwrap(), "test content");
+        mock.assert_async().await;
+        assert!(result.is_ok());
+        assert_eq!(runtime.read_to_string(temp_path).unwrap(), "test content");
     }
 
-    #[test]
-    fn test_download_file_not_found() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_download_file_not_found() {
+        let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
-        let mock = server.mock("GET", "/test.file").with_status(404).create();
+        let mock = server
+            .mock("GET", "/test.file")
+            .with_status(404)
+            .create_async()
+            .await;
 
-        let dir = tempdir().unwrap();
-        let temp_path = dir.path().join("test.file");
+        let runtime = MockRuntime::new();
+        let temp_path = Path::new("test.file");
+        let client = Client::new();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let client = Client::new();
-            download_file(&format!("{}/test.file", url), &temp_path, &client).await
-        });
+        let result =
+            download_file(&runtime, &format!("{}/test.file", url), temp_path, &client).await;
 
-        mock.assert();
+        mock.assert_async().await;
         assert!(result.is_err());
     }
 }
