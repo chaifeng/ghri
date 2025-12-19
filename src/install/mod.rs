@@ -609,8 +609,8 @@ mod tests {
     #[test]
     #[cfg(feature = "test_in_root")]
     fn test_default_install_root_privileged() {
-        let root = default_install_root().unwrap();
-        assert_eq!(root, system_install_root());
+        let root = default_install_root(&RealRuntime).unwrap();
+        assert_eq!(root, system_install_root(&RealRuntime));
     }
 
     struct MockGitHub {
