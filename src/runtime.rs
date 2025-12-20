@@ -186,13 +186,10 @@ impl Runtime for RealRuntime {
 
     #[tracing::instrument(skip(self))]
     fn is_privileged(&self) -> bool {
-        #[cfg(feature = "test_in_root")]
-        return true;
-
-        #[cfg(all(unix, not(feature = "test_in_root")))]
+        #[cfg(unix)]
         return nix::unistd::geteuid().as_raw() == 0;
 
-        #[cfg(all(windows, not(feature = "test_in_root")))]
+        #[cfg(windows)]
         return is_elevated::is_elevated();
     }
 }

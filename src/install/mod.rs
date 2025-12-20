@@ -520,10 +520,7 @@ fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
 #[cfg(target_os = "windows")]
 #[tracing::instrument(skip(runtime))]
 fn system_install_root<R: Runtime>(runtime: &R) -> PathBuf {
-    runtime
-        .config_dir()
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData\ghri"))
-        .join("ghri")
+    PathBuf::from(r"C:\ProgramData\ghri")
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -636,11 +633,16 @@ mod tests {
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
+        #[cfg(not(windows))]
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
 
-        #[cfg(all(unix, not(feature = "test_in_root")))]
+        #[cfg(windows)]
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
+
         runtime
             .expect_env_var()
             .with(eq("USER"))
@@ -1155,11 +1157,6 @@ mod tests {
         let mut runtime = MockRuntime::new();
         runtime.expect_is_privileged().returning(|| false);
         runtime.expect_home_dir().returning(|| None);
-        // is_privileged checks user
-        #[cfg(all(unix, not(feature = "test_in_root")))]
-        runtime
-            .expect_env_var()
-            .returning(|_| Err(std::env::VarError::NotPresent));
 
         let result = default_install_root(&runtime);
         assert!(result.is_err());
@@ -1655,6 +1652,8 @@ mod tests {
         assert_eq!(root, PathBuf::from("/opt/ghri"));
         #[cfg(all(unix, not(target_os = "macos")))]
         assert_eq!(root, PathBuf::from("/usr/local/ghri"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(root, PathBuf::from("C:\\ProgramData\\ghri"));
     }
     #[tokio::test]
     async fn test_get_or_fetch_meta_exists_interaction() {
