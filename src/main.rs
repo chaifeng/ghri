@@ -27,10 +27,6 @@ struct Cli {
         global = true
     )]
     pub install_root: Option<PathBuf>,
-
-    /// GitHub API URL (defaults to https://api.github.com)
-    #[arg(long = "api-url", value_name = "URL", global = true)]
-    pub api_url: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -47,6 +43,10 @@ pub struct InstallArgs {
     /// The GitHub repository in the format "owner/repo"
     #[arg(value_name = "OWNER/REPO")]
     pub repo: String,
+
+    /// GitHub API URL (overrides defaults; also via GHRI_API_URL)
+    #[arg(long = "api-url", env = "GHRI_API_URL", value_name = "URL")]
+    pub api_url: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -60,11 +60,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Install(args) => {
-            install(runtime, &args.repo, cli.install_root, cli.api_url).await?
+            install(runtime, &args.repo, cli.install_root, args.api_url).await?
         }
-        Commands::Update(_args) => {
-            ghri::install::update(runtime, cli.install_root, cli.api_url).await?
-        }
+        Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
     }
     Ok(())
 }
@@ -80,6 +78,7 @@ mod tests {
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.api_url, None);
             }
             _ => panic!("Expected Install command"),
         }
@@ -99,10 +98,37 @@ mod tests {
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.api_url, None);
             }
             _ => panic!("Expected Install command"),
         }
         assert_eq!(cli.install_root, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn test_cli_install_api_url_parsing() {
+        let cli = Cli::try_parse_from(&[
+            "ghri",
+            "install",
+            "owner/repo",
+            "--api-url",
+            "https://github.example.com",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.api_url, Some("https://github.example.com".to_string()));
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_update_no_api_url() {
+        // This should fail because update doesn't have api-url
+        let result = Cli::try_parse_from(&["ghri", "update", "--api-url", "https://example.com"]);
+        assert!(result.is_err());
     }
 
     #[test]

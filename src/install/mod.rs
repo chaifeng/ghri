@@ -179,7 +179,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
             }
         }
 
-        let meta = self.fetch_meta(repo, "").await?;
+        let meta = self.fetch_meta(repo, "", None).await?;
 
         if let Some(parent) = meta_path.parent() {
             self.runtime.create_dir_all(parent)?;
@@ -189,14 +189,21 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok((meta, meta_path))
     }
 
-    async fn fetch_meta(&self, repo: &GitHubRepo, current_version: &str) -> Result<Meta> {
-        let repo_info = self.github.get_repo_info(repo).await?;
-        let releases = self.github.get_releases(repo).await?;
+    async fn fetch_meta(
+        &self,
+        repo: &GitHubRepo,
+        current_version: &str,
+        api_url: Option<&str>,
+    ) -> Result<Meta> {
+        let api_url = api_url.unwrap_or(self.github.api_url());
+        let repo_info = self.github.get_repo_info_at(repo, api_url).await?;
+        let releases = self.github.get_releases_at(repo, api_url).await?;
         Ok(Meta::from(
             repo.clone(),
             repo_info,
             releases,
             current_version,
+            api_url,
         ))
     }
 
@@ -222,7 +229,19 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
             package_root.join("meta.json")
         };
 
-        let new_meta = self.fetch_meta(repo, current_version).await?;
+        let existing_meta = if self.runtime.exists(&meta_path) {
+            Meta::load(&self.runtime, &meta_path).ok()
+        } else {
+            None
+        };
+
+        let new_meta = self
+            .fetch_meta(
+                repo,
+                current_version,
+                existing_meta.as_ref().map(|m| m.api_url.as_str()),
+            )
+            .await?;
 
         let mut final_meta = if self.runtime.exists(&meta_path) {
             let mut existing = Meta::load(&self.runtime, &meta_path)?;
@@ -270,6 +289,9 @@ fn find_all_packages<R: Runtime>(runtime: &R, root: &Path) -> Result<Vec<PathBuf
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct Meta {
     name: String,
+    api_url: String,
+    repo_info_url: String,
+    releases_url: String,
     description: Option<String>,
     homepage: Option<String>,
     license: Option<String>,
@@ -279,9 +301,18 @@ struct Meta {
 }
 
 impl Meta {
-    pub fn from(repo: GitHubRepo, info: RepoInfo, releases: Vec<Release>, current: &str) -> Self {
+    pub fn from(
+        repo: GitHubRepo,
+        info: RepoInfo,
+        releases: Vec<Release>,
+        current: &str,
+        api_url: &str,
+    ) -> Self {
         Meta {
             name: format!("{}/{}", repo.owner, repo.repo),
+            api_url: api_url.to_string(),
+            repo_info_url: format!("{}/repos/{}/{}", api_url, repo.owner, repo.repo),
+            releases_url: format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo),
             description: info.description,
             homepage: info.homepage,
             license: info.license.map(|l| l.name),
@@ -730,6 +761,9 @@ mod tests {
     fn test_meta_get_latest_stable_release() {
         let meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -771,6 +805,9 @@ mod tests {
     fn test_meta_get_latest_stable_release_empty() {
         let meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -785,6 +822,9 @@ mod tests {
     fn test_meta_get_latest_stable_release_only_prerelease() {
         let meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -870,7 +910,15 @@ mod tests {
 
     #[async_trait]
     impl GetReleases for MockGitHub {
-        async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
+        async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
+            self.get_repo_info_at(repo, self.api_url()).await
+        }
+
+        async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
+            self.get_releases_at(repo, self.api_url()).await
+        }
+
+        async fn get_repo_info_at(&self, _repo: &GitHubRepo, _api_url: &str) -> Result<RepoInfo> {
             Ok(RepoInfo {
                 description: Some("description".into()),
                 homepage: Some("homepage".into()),
@@ -882,8 +930,16 @@ mod tests {
             })
         }
 
-        async fn get_releases(&self, _repo: &GitHubRepo) -> Result<Vec<Release>> {
+        async fn get_releases_at(
+            &self,
+            _repo: &GitHubRepo,
+            _api_url: &str,
+        ) -> Result<Vec<Release>> {
             Ok(vec![self.release.clone()])
+        }
+
+        fn api_url(&self) -> &str {
+            "https://api.github.com"
         }
     }
 
@@ -952,6 +1008,9 @@ mod tests {
 
         let existing_meta = Meta {
             name: "owner/repo-exists".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo-exists".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo-exists/releases".to_string(),
             description: Some("old description".into()),
             homepage: None,
             license: None,
@@ -970,6 +1029,15 @@ mod tests {
             }
             async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
                 panic!("Should not be called")
+            }
+            async fn get_repo_info_at(&self, _: &GitHubRepo, _: &str) -> Result<RepoInfo> {
+                panic!("Should not be called")
+            }
+            async fn get_releases_at(&self, _: &GitHubRepo, _: &str) -> Result<Vec<Release>> {
+                panic!("Should not be called")
+            }
+            fn api_url(&self) -> &str {
+                "https://api.github.com"
             }
         }
 
@@ -1036,6 +1104,15 @@ mod tests {
             }
             async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
                 Err(anyhow::anyhow!("API Error"))
+            }
+            async fn get_repo_info_at(&self, _: &GitHubRepo, _: &str) -> Result<RepoInfo> {
+                Err(anyhow::anyhow!("API Error"))
+            }
+            async fn get_releases_at(&self, _: &GitHubRepo, _: &str) -> Result<Vec<Release>> {
+                Err(anyhow::anyhow!("API Error"))
+            }
+            fn api_url(&self) -> &str {
+                "https://api.github.com"
             }
         }
 
@@ -1126,12 +1203,32 @@ mod tests {
 
         #[async_trait]
         impl GetReleases for MockGitHubFails {
-            async fn get_repo_info(&self, _repo: &GitHubRepo) -> Result<RepoInfo> {
+            async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
+                self.get_repo_info_at(repo, self.api_url()).await
+            }
+
+            async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
+                self.get_releases_at(repo, self.api_url()).await
+            }
+
+            async fn get_repo_info_at(
+                &self,
+                _repo: &GitHubRepo,
+                _api_url: &str,
+            ) -> Result<RepoInfo> {
                 Err(anyhow::anyhow!("Failed to get repo info"))
             }
 
-            async fn get_releases(&self, _repo: &GitHubRepo) -> Result<Vec<Release>> {
+            async fn get_releases_at(
+                &self,
+                _repo: &GitHubRepo,
+                _api_url: &str,
+            ) -> Result<Vec<Release>> {
                 Ok(vec![self.release.clone()])
+            }
+
+            fn api_url(&self) -> &str {
+                "https://api.github.com"
             }
         }
 
@@ -1183,6 +1280,10 @@ mod tests {
 
         let existing_meta = Meta {
             name: "owner/repo-existing-meta".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo-existing-meta".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo-existing-meta/releases"
+                .to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -1207,6 +1308,15 @@ mod tests {
             }
             async fn get_releases(&self, _: &GitHubRepo) -> Result<Vec<Release>> {
                 panic!("Should not be called")
+            }
+            async fn get_repo_info_at(&self, _: &GitHubRepo, _: &str) -> Result<RepoInfo> {
+                panic!("Should not be called")
+            }
+            async fn get_releases_at(&self, _: &GitHubRepo, _: &str) -> Result<Vec<Release>> {
+                panic!("Should not be called")
+            }
+            fn api_url(&self) -> &str {
+                "https://api.github.com"
             }
         }
 
@@ -1445,6 +1555,9 @@ mod tests {
 
         let meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -1500,6 +1613,9 @@ mod tests {
         // 1. Initial state with one release
         let initial_meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: server.url(),
+            repo_info_url: format!("{}/repos/owner/repo", server.url()),
+            releases_url: format!("{}/repos/owner/repo/releases", server.url()),
             description: None,
             homepage: None,
             license: None,
@@ -1553,6 +1669,9 @@ mod tests {
 
         let initial_meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: server.url(),
+            repo_info_url: format!("{}/repos/owner/repo", server.url()),
+            releases_url: format!("{}/repos/owner/repo/releases", server.url()),
             description: None,
             homepage: None,
             license: None,
@@ -1602,7 +1721,15 @@ mod tests {
         let meta_path = root.join("owner/repo/meta.json");
         fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
 
-        let initial_content = r#"{"name": "owner/repo", "current_version": "v1.0.0", "releases": [], "updated_at": "old"}"#;
+        let initial_content = r#"{
+            "name": "owner/repo",
+            "api_url": "https://api.github.com",
+            "repo_info_url": "https://api.github.com/repos/owner/repo",
+            "releases_url": "https://api.github.com/repos/owner/repo/releases",
+            "current_version": "v1.0.0",
+            "releases": [],
+            "updated_at": "old"
+        }"#;
         fs::write(&meta_path, initial_content).unwrap();
 
         // Mock returns 500 error to simulate failure midway
@@ -1675,7 +1802,7 @@ mod tests {
             },
         ];
 
-        let meta = Meta::from(repo, info, releases, "v2.0.0");
+        let meta = Meta::from(repo, info, releases, "v2.0.0", "https://api.github.com");
 
         // Should be sorted by published_at DESC: v2.0.0, v1.0.0, v0.9.0
         assert_eq!(meta.releases[0].version, "v2.0.0");
@@ -1687,6 +1814,9 @@ mod tests {
     fn test_meta_merge_sorting() {
         let mut meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -1704,6 +1834,9 @@ mod tests {
 
         let other = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -1773,6 +1906,9 @@ mod tests {
 
         let initial_meta = Meta {
             name: "owner/repo".to_string(),
+            api_url: "https://api.github.com".to_string(),
+            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
+            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
             description: None,
             homepage: None,
             license: None,
@@ -1803,5 +1939,34 @@ mod tests {
             .update_all(Some(root.to_path_buf()))
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn test_meta_serialization_with_api_urls() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+        let info = RepoInfo {
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "2023-01-01T00:00:00Z".to_string(),
+        };
+        let api_url = "https://github.custom.com/api/v3";
+        let meta = Meta::from(repo, info, vec![], "v1.0.0", api_url);
+
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: Meta = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.api_url, api_url);
+        assert_eq!(
+            deserialized.repo_info_url,
+            format!("{}/repos/owner/repo", api_url)
+        );
+        assert_eq!(
+            deserialized.releases_url,
+            format!("{}/repos/owner/repo/releases", api_url)
+        );
     }
 }

@@ -9,6 +9,9 @@ use std::str::FromStr;
 pub trait GetReleases: Send + Sync {
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo>;
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>>;
+    async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo>;
+    async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>>;
+    fn api_url(&self) -> &str;
 }
 
 pub struct GitHub {
@@ -26,11 +29,23 @@ impl GitHub {
 #[async_trait]
 impl GetReleases for GitHub {
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
-        GitHub::get_repo_info(repo, &self.client, &self.api_url).await
+        self.get_repo_info_at(repo, &self.api_url).await
     }
 
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
-        GitHub::get_releases(repo, &self.client, &self.api_url).await
+        self.get_releases_at(repo, &self.api_url).await
+    }
+
+    async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo> {
+        GitHub::get_repo_info(repo, &self.client, api_url).await
+    }
+
+    async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>> {
+        GitHub::get_releases(repo, &self.client, api_url).await
+    }
+
+    fn api_url(&self) -> &str {
+        &self.api_url
     }
 }
 
@@ -103,6 +118,14 @@ impl GitHub {
         }
 
         Ok(releases)
+    }
+
+    pub async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo> {
+        GitHub::get_repo_info(repo, &self.client, api_url).await
+    }
+
+    pub async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>> {
+        GitHub::get_releases(repo, &self.client, api_url).await
     }
 }
 
@@ -418,5 +441,52 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_repo_info_at() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+
+        let mock = server
+            .mock("GET", "/repos/owner/repo")
+            .with_status(200)
+            .with_body(r#"{"updated_at": "2023-01-01T00:00:00Z"}"#)
+            .create_async()
+            .await;
+
+        let github = GitHub::new(Client::new(), None);
+        let info = github.get_repo_info_at(&repo, &url).await.unwrap();
+
+        mock.assert_async().await;
+        assert_eq!(info.updated_at, "2023-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_get_releases_at() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        };
+
+        let mock = server
+            .mock("GET", "/repos/owner/repo/releases?per_page=100&page=1")
+            .with_status(200)
+            .with_body(r#"[{"tag_name": "v1.0.0", "tarball_url": "url", "prerelease": false, "assets": []}]"#)
+            .create_async()
+            .await;
+
+        let github = GitHub::new(Client::new(), None);
+        let releases = github.get_releases_at(&repo, &url).await.unwrap();
+
+        mock.assert_async().await;
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].tag_name, "v1.0.0");
     }
 }
