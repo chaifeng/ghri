@@ -17,6 +17,20 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Install root directory (overrides defaults; also via GHRI_ROOT)
+    #[arg(
+        long = "root",
+        short = 'r',
+        env = "GHRI_ROOT",
+        value_name = "PATH",
+        global = true
+    )]
+    pub install_root: Option<PathBuf>,
+
+    /// GitHub API URL (defaults to https://api.github.com)
+    #[arg(long = "api-url", value_name = "URL", global = true)]
+    pub api_url: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -33,26 +47,10 @@ pub struct InstallArgs {
     /// The GitHub repository in the format "owner/repo"
     #[arg(value_name = "OWNER/REPO")]
     pub repo: String,
-
-    /// Install root directory (overrides defaults; also via GHRI_ROOT)
-    #[arg(long = "root", short = 'r', env = "GHRI_ROOT", value_name = "PATH")]
-    pub install_root: Option<PathBuf>,
-
-    /// GitHub API URL (defaults to https://api.github.com)
-    #[arg(long = "api-url", value_name = "URL")]
-    pub api_url: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
-pub struct UpdateArgs {
-    /// Install root directory (overrides defaults; also via GHRI_ROOT)
-    #[arg(long = "root", short = 'r', env = "GHRI_ROOT", value_name = "PATH")]
-    pub install_root: Option<PathBuf>,
-
-    /// GitHub API URL (defaults to https://api.github.com)
-    #[arg(long = "api-url", value_name = "URL")]
-    pub api_url: Option<String>,
-}
+pub struct UpdateArgs {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -62,10 +60,10 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Install(args) => {
-            install(runtime, &args.repo, args.install_root, args.api_url).await?
+            install(runtime, &args.repo, cli.install_root, cli.api_url).await?
         }
-        Commands::Update(args) => {
-            ghri::install::update(runtime, args.install_root, args.api_url).await?
+        Commands::Update(_args) => {
+            ghri::install::update(runtime, cli.install_root, cli.api_url).await?
         }
     }
     Ok(())
@@ -82,21 +80,16 @@ mod tests {
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
-                assert_eq!(args.install_root, None);
             }
             _ => panic!("Expected Install command"),
         }
+        assert_eq!(cli.install_root, None);
     }
 
     #[test]
     fn test_cli_update_parsing() {
         let cli = Cli::try_parse_from(&["ghri", "update"]).unwrap();
-        match cli.command {
-            Commands::Update(args) => {
-                assert_eq!(args.install_root, None);
-            }
-            _ => panic!("Expected Update command"),
-        }
+        assert_eq!(cli.install_root, None);
     }
 
     #[test]
@@ -106,10 +99,16 @@ mod tests {
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
-                assert_eq!(args.install_root, Some(PathBuf::from("/tmp")));
             }
             _ => panic!("Expected Install command"),
         }
+        assert_eq!(cli.install_root, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn test_cli_global_root_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp", "update"]).unwrap();
+        assert_eq!(cli.install_root, Some(PathBuf::from("/tmp")));
     }
 
     #[test]
