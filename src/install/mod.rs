@@ -669,7 +669,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         let target_dir = get_target_dir(&runtime, &repo, &release, None).unwrap();
+        #[cfg(not(windows))]
         assert_eq!(target_dir, PathBuf::from("/home/user/.ghri/o/r/v1"));
+        #[cfg(windows)]
+        assert_eq!(
+            target_dir,
+            PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\v1")
+        );
     }
 
     #[test]
@@ -743,6 +749,7 @@ mod tests {
         update_current_symlink(&runtime, &target_dir, "v2").unwrap();
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn test_install_happy_path() {
         let repo = GitHubRepo {
@@ -848,7 +855,10 @@ mod tests {
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        #[cfg(not(windows))]
         let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
+        #[cfg(windows)]
+        let meta_path = PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\meta.json");
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
@@ -965,7 +975,10 @@ mod tests {
     #[tokio::test]
     async fn test_update_all_happy_path() {
         let mut runtime = MockRuntime::new();
+        #[cfg(not(windows))]
         let root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let root = PathBuf::from("C:\\Users\\user\\.ghri");
         configure_runtime_basics(&mut runtime);
 
         // Find one package
@@ -1084,7 +1097,10 @@ mod tests {
     #[tokio::test]
     async fn test_update_all_no_packages() {
         let mut runtime = MockRuntime::new();
+        #[cfg(not(windows))]
         let root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let root = PathBuf::from("C:\\Users\\user\\.ghri");
         configure_runtime_basics(&mut runtime);
 
         // update_all calls default_install_root (mocked by basics) -> /home/user/.ghri
