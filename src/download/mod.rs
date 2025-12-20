@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::Path;
 
 /// Downloads a file from a URL to a temporary path.
+#[tracing::instrument(skip(runtime, temp_path, client))]
 pub async fn download_file<R: Runtime>(
     runtime: &R,
     url: &str,

@@ -36,39 +36,47 @@ pub struct RealRuntime;
 
 #[async_trait]
 impl Runtime for RealRuntime {
+    #[tracing::instrument(skip(self))]
     fn env_var(&self, key: &str) -> Result<String, env::VarError> {
         env::var(key)
     }
 
+    #[tracing::instrument(skip(self, contents))]
     fn write(&self, path: &Path, contents: impl AsRef<[u8]> + Send) -> Result<()> {
         fs::write(path, contents).context("Failed to write to file")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn read_to_string(&self, path: &Path) -> Result<String> {
         fs::read_to_string(path).context("Failed to read file to string")
     }
 
+    #[tracing::instrument(skip(self))]
     fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         fs::rename(from, to).context("Failed to rename file")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn create_dir_all(&self, path: &Path) -> Result<()> {
         fs::create_dir_all(path).context("Failed to create directory")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn remove_file(&self, path: &Path) -> Result<()> {
         fs::remove_file(path).context("Failed to remove file")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn remove_dir(&self, path: &Path) -> Result<()> {
         fs::remove_dir(path).context("Failed to remove directory")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn remove_symlink(&self, path: &Path) -> Result<()> {
         #[cfg(unix)]
         {
@@ -86,14 +94,17 @@ impl Runtime for RealRuntime {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn exists(&self, path: &Path) -> bool {
         path.exists()
     }
 
+    #[tracing::instrument(skip(self))]
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
         fs::read_dir(path)?.map(|entry| Ok(entry?.path())).collect()
     }
 
+    #[tracing::instrument(skip(self))]
     fn symlink(&self, original: &Path, link: &Path) -> Result<()> {
         #[cfg(unix)]
         {
@@ -124,39 +135,47 @@ impl Runtime for RealRuntime {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn read_link(&self, path: &Path) -> Result<PathBuf> {
         fs::read_link(path).context("Failed to read symlink")
     }
 
+    #[tracing::instrument(skip(self))]
     fn is_symlink(&self, path: &Path) -> bool {
         fs::symlink_metadata(path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
     }
 
+    #[tracing::instrument(skip(self))]
     fn create_file(&self, path: &Path) -> Result<Box<dyn std::io::Write + Send>> {
         let file = std::fs::File::create(path).context("Failed to create file")?;
         Ok(Box::new(file))
     }
 
+    #[tracing::instrument(skip(self))]
     fn open(&self, path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
         let file = std::fs::File::open(path).context("Failed to open file")?;
         Ok(Box::new(file))
     }
 
+    #[tracing::instrument(skip(self))]
     fn remove_dir_all(&self, path: &Path) -> Result<()> {
         fs::remove_dir_all(path).context("Failed to remove directory and its contents")?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     fn is_dir(&self, path: &Path) -> bool {
         path.is_dir()
     }
 
+    #[tracing::instrument(skip(self))]
     fn home_dir(&self) -> Option<PathBuf> {
         dirs::home_dir()
     }
 
+    #[tracing::instrument(skip(self))]
     fn config_dir(&self) -> Option<PathBuf> {
         dirs::config_dir()
     }

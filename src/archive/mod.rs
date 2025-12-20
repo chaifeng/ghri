@@ -17,6 +17,7 @@ pub trait Extractor {
 pub struct ArchiveExtractor;
 
 impl Extractor for ArchiveExtractor {
+    #[tracing::instrument(skip(self, runtime, archive_path, extract_to))]
     fn extract<R: Runtime>(
         &self,
         runtime: &R,

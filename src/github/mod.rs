@@ -20,6 +20,7 @@ pub struct GitHub {
 }
 
 impl GitHub {
+    #[tracing::instrument(skip(client, api_url))]
     pub fn new(client: Client, api_url: Option<String>) -> Self {
         let api_url = api_url.unwrap_or_else(|| "https://api.github.com".to_string());
         Self { client, api_url }
@@ -28,28 +29,34 @@ impl GitHub {
 
 #[async_trait]
 impl GetReleases for GitHub {
+    #[tracing::instrument(skip(self, repo))]
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo> {
         self.get_repo_info_at(repo, &self.api_url).await
     }
 
+    #[tracing::instrument(skip(self, repo))]
     async fn get_releases(&self, repo: &GitHubRepo) -> Result<Vec<Release>> {
         self.get_releases_at(repo, &self.api_url).await
     }
 
+    #[tracing::instrument(skip(self, repo, api_url))]
     async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo> {
         GitHub::get_repo_info(repo, &self.client, api_url).await
     }
 
+    #[tracing::instrument(skip(self, repo, api_url))]
     async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>> {
         GitHub::get_releases(repo, &self.client, api_url).await
     }
 
+    #[tracing::instrument(skip(self))]
     fn api_url(&self) -> &str {
         &self.api_url
     }
 }
 
 impl GitHub {
+    #[tracing::instrument(skip(client, api_url))]
     pub async fn get_repo_info(
         repo: &GitHubRepo,
         client: &Client,
@@ -74,6 +81,7 @@ impl GitHub {
         Ok(info)
     }
 
+    #[tracing::instrument(skip(client, api_url))]
     pub async fn get_releases(
         repo: &GitHubRepo,
         client: &Client,

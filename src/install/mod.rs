@@ -14,6 +14,7 @@ use crate::{
 pub mod config;
 use config::Config;
 
+#[tracing::instrument(skip(runtime, install_root, api_url))]
 pub async fn install<R: Runtime>(
     runtime: R,
     repo_str: &str,
@@ -24,6 +25,7 @@ pub async fn install<R: Runtime>(
     run(repo_str, config).await
 }
 
+#[tracing::instrument(skip(config))]
 pub async fn run<R: Runtime, G: GetReleases, E: Extractor>(
     repo_str: &str,
     config: Config<R, G, E>,
@@ -38,6 +40,7 @@ pub async fn run<R: Runtime, G: GetReleases, E: Extractor>(
     installer.install(&repo, config.install_root).await
 }
 
+#[tracing::instrument(skip(runtime, install_root, api_url))]
 pub async fn update<R: Runtime>(
     runtime: R,
     install_root: Option<PathBuf>,
@@ -61,6 +64,7 @@ pub struct Installer<R: Runtime, G: GetReleases, E: Extractor> {
 }
 
 impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
+    #[tracing::instrument(skip(runtime, github, client, extractor))]
     pub fn new(runtime: R, github: G, client: Client, extractor: E) -> Self {
         Self {
             runtime,
@@ -70,6 +74,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         }
     }
 
+    #[tracing::instrument(skip(self, repo, install_root))]
     pub async fn install(&self, repo: &GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path) = self
@@ -107,6 +112,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, install_root))]
     pub async fn update_all(&self, install_root: Option<PathBuf>) -> Result<()> {
         let root = match install_root {
             Some(path) => path,
@@ -143,10 +149,12 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, repo, tag, target_dir))]
     fn print_install_success(&self, repo: &GitHubRepo, tag: &str, target_dir: &Path) {
         println!("   installed {} {} {}", repo, tag, target_dir.display());
     }
 
+    #[tracing::instrument(skip(self, repo, current, latest))]
     fn print_update_available(&self, repo: &GitHubRepo, current: &str, latest: &str) {
         let current_display = if current.is_empty() {
             "(none)"
@@ -156,6 +164,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         println!("  updatable {} {} -> {}", repo, current_display, latest);
     }
 
+    #[tracing::instrument(skip(self, repo, install_root))]
     async fn get_or_fetch_meta(
         &self,
         repo: &GitHubRepo,
@@ -189,6 +198,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok((meta, meta_path))
     }
 
+    #[tracing::instrument(skip(self, repo, current_version, api_url))]
     async fn fetch_meta(
         &self,
         repo: &GitHubRepo,
@@ -207,6 +217,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         ))
     }
 
+    #[tracing::instrument(skip(self, meta_path, meta))]
     fn save_meta(&self, meta_path: &Path, meta: &Meta) -> Result<()> {
         let json = serde_json::to_string_pretty(meta)?;
         let tmp_path = meta_path.with_extension("json.tmp");
@@ -216,6 +227,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, repo, current_version, target_dir))]
     async fn save_metadata(
         &self,
         repo: &GitHubRepo,
@@ -262,6 +274,7 @@ impl<R: Runtime, G: GetReleases, E: Extractor> Installer<R, G, E> {
     }
 }
 
+#[tracing::instrument(skip(runtime, root))]
 fn find_all_packages<R: Runtime>(runtime: &R, root: &Path) -> Result<Vec<PathBuf>> {
     let mut meta_files = Vec::new();
 
@@ -356,6 +369,7 @@ impl Meta {
             })
     }
 
+    #[tracing::instrument(skip(runtime, path))]
     fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
         let content = runtime.read_to_string(path)?;
         let meta: Meta = serde_json::from_str(&content)?;
@@ -465,6 +479,7 @@ impl From<MetaAsset> for ReleaseAsset {
     }
 }
 
+#[tracing::instrument(skip(runtime, repo, release, install_root))]
 fn get_target_dir<R: Runtime>(
     runtime: &R,
     repo: &GitHubRepo,
@@ -484,6 +499,7 @@ fn get_target_dir<R: Runtime>(
         .join(&release.tag_name))
 }
 
+#[tracing::instrument(skip(runtime))]
 fn default_install_root<R: Runtime>(runtime: &R) -> Result<PathBuf> {
     if is_privileged(runtime) {
         Ok(system_install_root(runtime))
@@ -496,11 +512,13 @@ fn default_install_root<R: Runtime>(runtime: &R) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
+#[tracing::instrument(skip(_runtime))]
 fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
     PathBuf::from("/opt/ghri")
 }
 
 #[cfg(target_os = "windows")]
+#[tracing::instrument(skip(runtime))]
 fn system_install_root<R: Runtime>(runtime: &R) -> PathBuf {
     runtime
         .config_dir()
@@ -509,11 +527,13 @@ fn system_install_root<R: Runtime>(runtime: &R) -> PathBuf {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[tracing::instrument(skip(_runtime))]
 fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
     PathBuf::from("/usr/local/ghri")
 }
 
 #[cfg(all(unix, not(feature = "test_in_root")))]
+#[tracing::instrument(skip(runtime))]
 fn is_privileged<R: Runtime>(runtime: &R) -> bool {
     // Check if running as root via UID or USER env var
     match runtime.env_var("USER") {
@@ -523,15 +543,19 @@ fn is_privileged<R: Runtime>(runtime: &R) -> bool {
 }
 
 #[cfg(all(windows, not(feature = "test_in_root")))]
+#[tracing::instrument(skip(_runtime))]
 fn is_privileged<R: Runtime>(_runtime: &R) -> bool {
     // simplified for now as Runtime doesn't have is_elevated yet
     false
 }
 
 #[cfg(feature = "test_in_root")]
+#[tracing::instrument(skip(_runtime))]
 fn is_privileged<R: Runtime>(_runtime: &R) -> bool {
     true
 }
+
+#[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor))]
 async fn ensure_installed<R: Runtime, E: Extractor>(
     runtime: &R,
     target_dir: &Path,
@@ -569,6 +593,7 @@ async fn ensure_installed<R: Runtime, E: Extractor>(
     Ok(())
 }
 
+#[tracing::instrument(skip(runtime, target_dir, _tag_name))]
 fn update_current_symlink<R: Runtime>(
     runtime: &R,
     target_dir: &Path,
@@ -1553,11 +1578,12 @@ mod tests {
         let meta_path = root.join("owner/repo/meta.json");
         fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
 
+        let server_url = server.url();
         let meta = Meta {
             name: "owner/repo".to_string(),
-            api_url: "https://api.github.com".to_string(),
-            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
-            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
+            api_url: server_url.clone(),
+            repo_info_url: format!("{}/repos/owner/repo", &server_url),
+            releases_url: format!("{}/repos/owner/repo/releases", &server_url),
             description: None,
             homepage: None,
             license: None,
@@ -1721,16 +1747,21 @@ mod tests {
         let meta_path = root.join("owner/repo/meta.json");
         fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
 
-        let initial_content = r#"{
-            "name": "owner/repo",
-            "api_url": "https://api.github.com",
-            "repo_info_url": "https://api.github.com/repos/owner/repo",
-            "releases_url": "https://api.github.com/repos/owner/repo/releases",
-            "current_version": "v1.0.0",
-            "releases": [],
-            "updated_at": "old"
-        }"#;
-        fs::write(&meta_path, initial_content).unwrap();
+        let server_url = server.url();
+        let initial_meta = Meta {
+            name: "owner/repo".to_string(),
+            api_url: server_url.clone(),
+            repo_info_url: format!("{}/repos/owner/repo", &server_url),
+            releases_url: format!("{}/repos/owner/repo/releases", &server_url),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "old".to_string(),
+            current_version: "v1.0.0".to_string(),
+            releases: vec![],
+        };
+        let initial_content = serde_json::to_string(&initial_meta).unwrap();
+        fs::write(&meta_path, initial_content.clone()).unwrap();
 
         // Mock returns 500 error to simulate failure midway
         let _m = server
@@ -1897,6 +1928,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[test_log::test]
     async fn test_update_all_feedback() {
         let mut server = mockito::Server::new_async().await;
         let dir = tempdir().unwrap();
@@ -1904,11 +1936,12 @@ mod tests {
         let meta_path = root.join("owner/repo/meta.json");
         fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
 
+        let server_url = server.url();
         let initial_meta = Meta {
             name: "owner/repo".to_string(),
-            api_url: "https://api.github.com".to_string(),
-            repo_info_url: "https://api.github.com/repos/owner/repo".to_string(),
-            releases_url: "https://api.github.com/repos/owner/repo/releases".to_string(),
+            api_url: server_url.clone(),
+            repo_info_url: format!("{}/repos/owner/repo", &server_url),
+            releases_url: format!("{}/repos/owner/repo/releases", &server_url),
             description: None,
             homepage: None,
             license: None,

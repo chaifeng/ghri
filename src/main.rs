@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use ghri::install::install;
 use std::path::PathBuf;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
 
 /// ghri - GitHub Release Installer
 ///
@@ -53,8 +55,12 @@ pub struct InstallArgs {
 pub struct UpdateArgs {}
 
 #[tokio::main]
+#[tracing::instrument]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::from_default_env().add_directive("warn".parse()?))
+        .init();
     let cli = Cli::parse();
     let runtime = ghri::runtime::RealRuntime;
 
