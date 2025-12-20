@@ -31,6 +31,9 @@ pub trait Runtime: Send + Sync {
     // Directories
     fn home_dir(&self) -> Option<PathBuf>;
     fn config_dir(&self) -> Option<PathBuf>;
+
+    // Privilege
+    fn is_privileged(&self) -> bool;
 }
 
 pub struct RealRuntime;
@@ -179,6 +182,18 @@ impl Runtime for RealRuntime {
     #[tracing::instrument(skip(self))]
     fn config_dir(&self) -> Option<PathBuf> {
         dirs::config_dir()
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn is_privileged(&self) -> bool {
+        #[cfg(feature = "test_in_root")]
+        return true;
+
+        #[cfg(all(unix, not(feature = "test_in_root")))]
+        return nix::unistd::geteuid().as_raw() == 0;
+
+        #[cfg(all(windows, not(feature = "test_in_root")))]
+        return is_elevated::is_elevated();
     }
 }
 

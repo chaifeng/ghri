@@ -501,7 +501,7 @@ fn get_target_dir<R: Runtime>(
 
 #[tracing::instrument(skip(runtime))]
 fn default_install_root<R: Runtime>(runtime: &R) -> Result<PathBuf> {
-    if is_privileged(runtime) {
+    if runtime.is_privileged() {
         Ok(system_install_root(runtime))
     } else {
         let home_dir = runtime
@@ -530,29 +530,6 @@ fn system_install_root<R: Runtime>(runtime: &R) -> PathBuf {
 #[tracing::instrument(skip(_runtime))]
 fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
     PathBuf::from("/usr/local/ghri")
-}
-
-#[cfg(all(unix, not(feature = "test_in_root")))]
-#[tracing::instrument(skip(runtime))]
-fn is_privileged<R: Runtime>(runtime: &R) -> bool {
-    // Check if running as root via UID or USER env var
-    match runtime.env_var("USER") {
-        Ok(user) => user == "root",
-        Err(_) => false,
-    }
-}
-
-#[cfg(all(windows, not(feature = "test_in_root")))]
-#[tracing::instrument(skip(_runtime))]
-fn is_privileged<R: Runtime>(_runtime: &R) -> bool {
-    // simplified for now as Runtime doesn't have is_elevated yet
-    false
-}
-
-#[cfg(feature = "test_in_root")]
-#[tracing::instrument(skip(_runtime))]
-fn is_privileged<R: Runtime>(_runtime: &R) -> bool {
-    true
 }
 
 #[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor))]
@@ -651,31 +628,41 @@ fn update_current_symlink<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::MockRuntime;
-    use crate::github::MockGetReleases;
     use crate::archive::MockExtractor;
+    use crate::github::MockGetReleases;
+    use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
-        runtime.expect_home_dir()
+        runtime
+            .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
 
         #[cfg(all(unix, not(feature = "test_in_root")))]
-        runtime.expect_env_var()
+        runtime
+            .expect_env_var()
             .with(eq("USER"))
             .returning(|_| Ok("user".to_string()));
 
-        runtime.expect_env_var()
+        runtime
+            .expect_env_var()
             .with(eq("GITHUB_TOKEN"))
             .returning(|_| Err(std::env::VarError::NotPresent));
-    }
 
+        runtime.expect_is_privileged().returning(|| false);
+    }
     #[test]
     fn test_get_target_dir() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
-        let release = Release { tag_name: "v1".into(), ..Default::default() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let release = Release {
+            tag_name: "v1".into(),
+            ..Default::default()
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
@@ -685,16 +672,18 @@ mod tests {
 
     #[test]
     fn test_get_target_dir_with_custom_root() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
-        let release = Release { tag_name: "v1".into(), ..Default::default() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let release = Release {
+            tag_name: "v1".into(),
+            ..Default::default()
+        };
         let runtime = MockRuntime::new(); // Not used
 
-        let target_dir = get_target_dir(
-            &runtime,
-            &repo,
-            &release,
-            Some(PathBuf::from("/custom")),
-        ).unwrap();
+        let target_dir =
+            get_target_dir(&runtime, &repo, &release, Some(PathBuf::from("/custom"))).unwrap();
 
         assert_eq!(target_dir, PathBuf::from("/custom/o/r/v1"));
     }
@@ -705,11 +694,13 @@ mod tests {
         let target_dir = PathBuf::from("/root/o/r/v1");
         let current_link = PathBuf::from("/root/o/r/current");
 
-        runtime.expect_exists()
+        runtime
+            .expect_exists()
             .with(eq(current_link.clone()))
             .returning(|_| false);
 
-        runtime.expect_symlink()
+        runtime
+            .expect_symlink()
             .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
             .returning(|_, _| Ok(()));
 
@@ -722,23 +713,28 @@ mod tests {
         let target_dir = PathBuf::from("/root/o/r/v2");
         let current_link = PathBuf::from("/root/o/r/current");
 
-        runtime.expect_exists()
+        runtime
+            .expect_exists()
             .with(eq(current_link.clone()))
             .returning(|_| true);
 
-        runtime.expect_is_symlink()
+        runtime
+            .expect_is_symlink()
             .with(eq(current_link.clone()))
             .returning(|_| true);
 
-        runtime.expect_read_link()
+        runtime
+            .expect_read_link()
             .with(eq(current_link.clone()))
             .returning(|_| Ok(PathBuf::from("v1")));
 
-        runtime.expect_remove_symlink()
+        runtime
+            .expect_remove_symlink()
             .with(eq(current_link.clone()))
             .returning(|_| Ok(()));
 
-        runtime.expect_symlink()
+        runtime
+            .expect_symlink()
             .with(eq(PathBuf::from("v2")), eq(current_link.clone()))
             .returning(|_, _| Ok(()));
 
@@ -747,7 +743,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_happy_path() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
@@ -755,41 +754,84 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // Meta check
-        runtime.expect_exists().with(eq(PathBuf::from("/home/user/.ghri/o/r/meta.json"))).returning(|_| false);
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r/meta.json")))
+            .returning(|_| false);
 
         // Save meta interactions
-        runtime.expect_create_dir_all().with(eq(PathBuf::from("/home/user/.ghri/o/r"))).returning(|_| Ok(()));
-        runtime.expect_write().with(eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")), always()).returning(|_, _| Ok(()));
-        runtime.expect_rename().with(eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")), eq(PathBuf::from("/home/user/.ghri/o/r/meta.json"))).returning(|_, _| Ok(()));
+        runtime
+            .expect_create_dir_all()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r")))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_write()
+            .with(
+                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")),
+                always(),
+            )
+            .returning(|_, _| Ok(()));
+        runtime
+            .expect_rename()
+            .with(
+                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")),
+                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json")),
+            )
+            .returning(|_, _| Ok(()));
 
         // Ensure installed interactions
-        runtime.expect_exists().with(eq(PathBuf::from("/home/user/.ghri/o/r/v1"))).returning(|_| false);
-        runtime.expect_create_dir_all().with(eq(PathBuf::from("/home/user/.ghri/o/r/v1"))).returning(|_| Ok(()));
-        runtime.expect_create_file().returning(|_| Ok(Box::new(std::io::sink())));
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r/v1")))
+            .returning(|_| false);
+        runtime
+            .expect_create_dir_all()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r/v1")))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
         runtime.expect_remove_file().returning(|_| Ok(()));
 
         // Symlink interactions
-        runtime.expect_exists().with(eq(PathBuf::from("/home/user/.ghri/o/r/current"))).returning(|_| false);
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r/current")))
+            .returning(|_| false);
         runtime.expect_symlink().returning(|_, _| Ok(()));
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("https://api.github.com".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Ok(RepoInfo {
-            description: None, homepage: None, license: None, updated_at: "now".into()
-        }));
+        github
+            .expect_api_url()
+            .return_const("https://api.github.com".to_string());
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "now".into(),
+            })
+        });
 
         let download_url = format!("{}/tarball", url);
-        github.expect_get_releases_at().return_once(move |_, _| Ok(vec![
-            Release { tag_name: "v1".into(), tarball_url: download_url, ..Default::default() }
-        ]));
+        github.expect_get_releases_at().return_once(move |_, _| {
+            Ok(vec![Release {
+                tag_name: "v1".into(),
+                tarball_url: download_url,
+                ..Default::default()
+            }])
+        });
 
-        let _m = server.mock("GET", "/tarball")
+        let _m = server
+            .mock("GET", "/tarball")
             .with_status(200)
             .with_body("data")
             .create();
 
         let mut extractor = MockExtractor::new();
-        extractor.expect_extract().returning(|_: &MockRuntime, _, _| Ok(()));
+        extractor
+            .expect_extract()
+            .returning(|_: &MockRuntime, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
         installer.install(&repo, None).await.unwrap();
@@ -797,13 +839,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_or_fetch_meta_invalid_on_disk() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
         let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
-        runtime.expect_exists().with(eq(meta_path.clone())).returning(|_| true);
-        runtime.expect_read_to_string().with(eq(meta_path.clone())).returning(|_| Ok("invalid json".into()));
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(|_| Ok("invalid json".into()));
 
         // Should fallback to fetch and then save
         runtime.expect_create_dir_all().returning(|_| Ok(()));
@@ -811,10 +862,17 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("https://api".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Ok(RepoInfo {
-            description: None, homepage: None, license: None, updated_at: "now".into()
-        }));
+        github
+            .expect_api_url()
+            .return_const("https://api".to_string());
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "now".into(),
+            })
+        });
         github.expect_get_releases_at().returning(|_, _| Ok(vec![]));
 
         let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
@@ -828,13 +886,22 @@ mod tests {
         let root = PathBuf::from("/root");
 
         // Structure: /root/owner/repo/meta.json
-        runtime.expect_exists().with(eq(root.clone())).returning(|_| true);
-        runtime.expect_read_dir().with(eq(root.clone()))
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root.clone()))
             .returning(|p| Ok(vec![p.join("owner")]));
         runtime.expect_is_dir().returning(|_| true); // owner and repo are dirs
-        runtime.expect_read_dir().with(eq(root.join("owner")))
+        runtime
+            .expect_read_dir()
+            .with(eq(root.join("owner")))
             .returning(|p| Ok(vec![p.join("repo")]));
-        runtime.expect_exists().with(eq(root.join("owner/repo/meta.json")))
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner/repo/meta.json")))
             .returning(|_| true);
 
         let packages = find_all_packages(&runtime, &root).unwrap();
@@ -846,22 +913,51 @@ mod tests {
     async fn test_ensure_installed_creates_dir_and_extracts() {
         let mut runtime = MockRuntime::new();
         let target = PathBuf::from("/target");
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
-        let release = Release { tag_name: "v1".into(), tarball_url: "http://mock/tar".into(), ..Default::default() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let release = Release {
+            tag_name: "v1".into(),
+            tarball_url: "http://mock/tar".into(),
+            ..Default::default()
+        };
 
-        runtime.expect_exists().with(eq(target.clone())).returning(|_| false);
-        runtime.expect_create_dir_all().with(eq(target.clone())).returning(|_| Ok(()));
-        runtime.expect_create_file().returning(|_| Ok(Box::new(std::io::sink())));
+        runtime
+            .expect_exists()
+            .with(eq(target.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_create_dir_all()
+            .with(eq(target.clone()))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
         runtime.expect_remove_file().returning(|_| Ok(()));
 
         let mut extractor = MockExtractor::new();
-        extractor.expect_extract().returning(|_: &MockRuntime, _, _| Ok(()));
+        extractor
+            .expect_extract()
+            .returning(|_: &MockRuntime, _, _| Ok(()));
 
         let mut server = mockito::Server::new_async().await;
         let _m = server.mock("GET", "/tar").with_status(200).create();
-        let release_with_url = Release { tarball_url: format!("{}/tar", server.url()), ..release };
+        let release_with_url = Release {
+            tarball_url: format!("{}/tar", server.url()),
+            ..release
+        };
 
-        ensure_installed(&runtime, &target, &repo, &release_with_url, &Client::new(), &extractor).await.unwrap();
+        ensure_installed(
+            &runtime,
+            &target,
+            &repo,
+            &release_with_url,
+            &Client::new(),
+            &extractor,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -871,30 +967,76 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // Find one package
-        runtime.expect_exists().with(eq(root.clone())).returning(|_| true);
-        runtime.expect_read_dir().with(eq(root.clone())).returning(|p| Ok(vec![p.join("o")]));
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root.clone()))
+            .returning(|p| Ok(vec![p.join("o")]));
         runtime.expect_is_dir().returning(|_| true); // owner/repo are dirs
-        runtime.expect_read_dir().with(eq(root.join("o"))).returning(|p| Ok(vec![p.join("r")]));
-        runtime.expect_exists().with(eq(root.join("o/r/meta.json"))).returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root.join("o")))
+            .returning(|p| Ok(vec![p.join("r")]));
+        runtime
+            .expect_exists()
+            .with(eq(root.join("o/r/meta.json")))
+            .returning(|_| true);
 
         // Load meta
         let meta = Meta {
-            name: "o/r".into(), current_version: "v1".into(), updated_at: "old".into(),
-            api_url: "api".into(), repo_info_url: "url".into(), releases_url: "url".into(),
-            description: None, homepage: None, license: None,
-            releases: vec![Release { tag_name: "v1".into(), ..Default::default() }.into()],
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            updated_at: "old".into(),
+            api_url: "api".into(),
+            repo_info_url: "url".into(),
+            releases_url: "url".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
         };
-        runtime.expect_read_to_string().returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
         // Update check calls fetch_meta -> github
         let mut github = MockGetReleases::new();
         github.expect_api_url().return_const("api".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Ok(RepoInfo { updated_at: "new".into(), ..RepoInfo { description: None, homepage: None, license: None, updated_at: "".into() } }));
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                updated_at: "new".into(),
+                ..RepoInfo {
+                    description: None,
+                    homepage: None,
+                    license: None,
+                    updated_at: "".into(),
+                }
+            })
+        });
         // Return a new version v2
-        github.expect_get_releases_at().returning(|_, _| Ok(vec![
-            Release { tag_name: "v2".into(), published_at: Some("2024".into()), ..Default::default() },
-            Release { tag_name: "v1".into(), published_at: Some("2023".into()), ..Default::default() },
-        ]));
+        github.expect_get_releases_at().returning(|_, _| {
+            Ok(vec![
+                Release {
+                    tag_name: "v2".into(),
+                    published_at: Some("2024".into()),
+                    ..Default::default()
+                },
+                Release {
+                    tag_name: "v1".into(),
+                    published_at: Some("2023".into()),
+                    ..Default::default()
+                },
+            ])
+        });
 
         // save_meta called twice (one for update metadata)
         runtime.expect_write().returning(|_, _| Ok(()));
@@ -911,7 +1053,10 @@ mod tests {
             repo: "r".into(),
         };
         let info = RepoInfo {
-            description: None, homepage: None, license: None, updated_at: "now".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "now".into(),
         };
         let api_url = "https://custom.api";
         let meta = Meta::from(repo, info, vec![], "v1", api_url);
@@ -926,7 +1071,10 @@ mod tests {
     fn test_find_all_packages_no_root() {
         let mut runtime = MockRuntime::new();
         let root = std::path::Path::new("/non-existent");
-        runtime.expect_exists().with(eq(root.to_path_buf())).returning(|_| false);
+        runtime
+            .expect_exists()
+            .with(eq(root.to_path_buf()))
+            .returning(|_| false);
         let packages = find_all_packages(&runtime, root).unwrap();
         assert!(packages.is_empty());
     }
@@ -939,8 +1087,14 @@ mod tests {
 
         // update_all calls default_install_root (mocked by basics) -> /home/user/.ghri
         // then find_all_packages checks exists and read_dir
-        runtime.expect_exists().with(eq(root.clone())).returning(|_| true);
-        runtime.expect_read_dir().with(eq(root.clone())).returning(|_| Ok(vec![]));
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root.clone()))
+            .returning(|_| Ok(vec![]));
 
         let github = MockGetReleases::new();
         let extractor = MockExtractor::new();
@@ -952,7 +1106,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_no_stable_release() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
@@ -963,39 +1120,60 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("https://api.github.com".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Ok(RepoInfo {
-            description: None, homepage: None, license: None, updated_at: "now".into()
-        }));
-        github.expect_get_releases_at().returning(|_, _| Ok(vec![
-            Release { tag_name: "v1-rc".into(), prerelease: true, ..Default::default() }
-        ]));
+        github
+            .expect_api_url()
+            .return_const("https://api.github.com".to_string());
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "now".into(),
+            })
+        });
+        github.expect_get_releases_at().returning(|_, _| {
+            Ok(vec![Release {
+                tag_name: "v1-rc".into(),
+                prerelease: true,
+                ..Default::default()
+            }])
+        });
 
         let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
         let result = installer.install(&repo, None).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No stable release found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No stable release found")
+        );
     }
 
     #[test]
     fn test_default_install_root_no_home() {
         let mut runtime = MockRuntime::new();
+        runtime.expect_is_privileged().returning(|| false);
         runtime.expect_home_dir().returning(|| None);
         // is_privileged checks user
         #[cfg(all(unix, not(feature = "test_in_root")))]
-        runtime.expect_env_var().returning(|_| Err(std::env::VarError::NotPresent));
+        runtime
+            .expect_env_var()
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         let result = default_install_root(&runtime);
         assert!(result.is_err());
     }
-
     #[tokio::test]
     async fn test_ensure_installed_cleanup_fail() {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
 
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let release = Release {
             tag_name: "v1".into(),
             tarball_url: format!("{}/download", url),
@@ -1006,30 +1184,75 @@ mod tests {
 
         let target_dir = PathBuf::from("/tmp/target");
 
-        runtime.expect_exists().with(eq(target_dir.clone())).returning(|_| false);
-        runtime.expect_create_dir_all().with(eq(target_dir.clone())).returning(|_| Ok(()));
-        runtime.expect_create_file().returning(|_| Ok(Box::new(std::io::sink())));
+        runtime
+            .expect_exists()
+            .with(eq(target_dir.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_create_dir_all()
+            .with(eq(target_dir.clone()))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
 
         // Fail cleanup
-        runtime.expect_remove_file().returning(|_| Err(anyhow::anyhow!("fail")));
+        runtime
+            .expect_remove_file()
+            .returning(|_| Err(anyhow::anyhow!("fail")));
 
         let mut extractor = MockExtractor::new();
-        extractor.expect_extract().returning(|_: &MockRuntime, _, _| Ok(()));
+        extractor
+            .expect_extract()
+            .returning(|_: &MockRuntime, _, _| Ok(()));
 
-        let result = ensure_installed(&runtime, &target_dir, &repo, &release, &Client::new(), &extractor).await;
+        let result = ensure_installed(
+            &runtime,
+            &target_dir,
+            &repo,
+            &release,
+            &Client::new(),
+            &extractor,
+        )
+        .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to clean up temporary file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to clean up temporary file")
+        );
     }
 
     #[test]
     fn test_meta_releases_sorting() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
-        let info = RepoInfo { description: None, homepage: None, license: None, updated_at: "now".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let info = RepoInfo {
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "now".into(),
+        };
         let releases = vec![
-            Release { tag_name: "v1.0.0".into(), published_at: Some("2023-01-01T00:00:00Z".into()), ..Default::default() },
-            Release { tag_name: "v2.0.0".into(), published_at: Some("2023-02-01T00:00:00Z".into()), ..Default::default() },
-            Release { tag_name: "v0.9.0".into(), published_at: Some("2022-12-01T00:00:00Z".into()), ..Default::default() },
+            Release {
+                tag_name: "v1.0.0".into(),
+                published_at: Some("2023-01-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+            Release {
+                tag_name: "v2.0.0".into(),
+                published_at: Some("2023-02-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+            Release {
+                tag_name: "v0.9.0".into(),
+                published_at: Some("2022-12-01T00:00:00Z".into()),
+                ..Default::default()
+            },
         ];
         let meta = Meta::from(repo, info, releases, "v2.0.0", "https://api");
         assert_eq!(meta.releases[0].version, "v2.0.0");
@@ -1040,14 +1263,42 @@ mod tests {
     #[test]
     fn test_meta_merge_sorting() {
         let mut meta = Meta {
-            name: "o/r".into(), api_url: "api".into(), repo_info_url: "url".into(), releases_url: "url".into(),
-            description: None, homepage: None, license: None, updated_at: "t1".into(), current_version: "v1".into(),
-            releases: vec![Release { tag_name: "v1".into(), published_at: Some("2023-01-01".into()), ..Default::default() }.into()],
+            name: "o/r".into(),
+            api_url: "api".into(),
+            repo_info_url: "url".into(),
+            releases_url: "url".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "t1".into(),
+            current_version: "v1".into(),
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    published_at: Some("2023-01-01".into()),
+                    ..Default::default()
+                }
+                .into(),
+            ],
         };
         let other = Meta {
-            name: "o/r".into(), api_url: "api".into(), repo_info_url: "url".into(), releases_url: "url".into(),
-            description: None, homepage: None, license: None, updated_at: "t2".into(), current_version: "v1".into(),
-            releases: vec![Release { tag_name: "v2".into(), published_at: Some("2023-02-01".into()), ..Default::default() }.into()],
+            name: "o/r".into(),
+            api_url: "api".into(),
+            repo_info_url: "url".into(),
+            releases_url: "url".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "t2".into(),
+            current_version: "v1".into(),
+            releases: vec![
+                Release {
+                    tag_name: "v2".into(),
+                    published_at: Some("2023-02-01".into()),
+                    ..Default::default()
+                }
+                .into(),
+            ],
         };
         meta.merge(other);
         assert_eq!(meta.releases[0].version, "v2");
@@ -1057,9 +1308,30 @@ mod tests {
     #[test]
     fn test_meta_sorting_fallback() {
         let mut releases = vec![
-            MetaRelease { version: "v1".into(), published_at: None, title: None, is_prerelease: false, tarball_url: "".into(), assets: vec![] },
-            MetaRelease { version: "v2".into(), published_at: None, title: None, is_prerelease: false, tarball_url: "".into(), assets: vec![] },
-            MetaRelease { version: "v1.5".into(), published_at: Some("2023".into()), title: None, is_prerelease: false, tarball_url: "".into(), assets: vec![] },
+            MetaRelease {
+                version: "v1".into(),
+                published_at: None,
+                title: None,
+                is_prerelease: false,
+                tarball_url: "".into(),
+                assets: vec![],
+            },
+            MetaRelease {
+                version: "v2".into(),
+                published_at: None,
+                title: None,
+                is_prerelease: false,
+                tarball_url: "".into(),
+                assets: vec![],
+            },
+            MetaRelease {
+                version: "v1.5".into(),
+                published_at: Some("2023".into()),
+                title: None,
+                is_prerelease: false,
+                tarball_url: "".into(),
+                assets: vec![],
+            },
         ];
         Meta::sort_releases_internal(&mut releases);
         assert_eq!(releases[0].version, "v1.5");
@@ -1069,14 +1341,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_or_fetch_meta_fetch_fail() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
         runtime.expect_exists().returning(|_| false);
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("https://api".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Err(anyhow::anyhow!("fail")));
+        github
+            .expect_api_url()
+            .return_const("https://api".to_string());
+        github
+            .expect_get_repo_info_at()
+            .returning(|_, _| Err(anyhow::anyhow!("fail")));
 
         let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
         let result = installer.get_or_fetch_meta(&repo, None).await;
@@ -1090,7 +1369,7 @@ mod tests {
             github: MockGetReleases::new(),
             client: Client::new(),
             extractor: MockExtractor::new(),
-            install_root: None
+            install_root: None,
         };
         let result = run("invalid", config).await;
         assert!(result.is_err());
@@ -1100,24 +1379,43 @@ mod tests {
     async fn test_ensure_installed_already_exists() {
         let mut runtime = MockRuntime::new();
         let target = PathBuf::from("/target");
-        runtime.expect_exists().with(eq(target.clone())).returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(target.clone()))
+            .returning(|_| true);
 
-        let result = ensure_installed(&runtime, &target,
-            &GitHubRepo { owner: "o".into(), repo: "r".into() },
-            &Release::default(), &Client::new(), &MockExtractor::new()
-        ).await;
+        let result = ensure_installed(
+            &runtime,
+            &target,
+            &GitHubRepo {
+                owner: "o".into(),
+                repo: "r".into(),
+            },
+            &Release::default(),
+            &Client::new(),
+            &MockExtractor::new(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_meta_conversions() {
-        let meta_asset = MetaAsset { name: "n".into(), size: 1, download_url: "u".into() };
+        let meta_asset = MetaAsset {
+            name: "n".into(),
+            size: 1,
+            download_url: "u".into(),
+        };
         let asset: ReleaseAsset = meta_asset.clone().into();
         assert_eq!(asset.name, meta_asset.name);
 
         let meta_release = MetaRelease {
-            version: "v1".into(), title: Some("t".into()), published_at: Some("d".into()),
-            is_prerelease: false, tarball_url: "u".into(), assets: vec![meta_asset]
+            version: "v1".into(),
+            title: Some("t".into()),
+            published_at: Some("d".into()),
+            is_prerelease: false,
+            tarball_url: "u".into(),
+            assets: vec![meta_asset],
         };
         let release: Release = meta_release.clone().into();
         assert_eq!(release.tag_name, meta_release.version);
@@ -1125,9 +1423,34 @@ mod tests {
 
     #[test]
     fn test_meta_get_latest_stable_release() {
-        let mut meta = Meta { name: "n".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: None, homepage: None, license: None, updated_at: "".into(), current_version: "".into(), releases: vec![] };
-        meta.releases.push(MetaRelease { version: "v1".into(), is_prerelease: false, published_at: Some("2023".into()), title: None, tarball_url: "".into(), assets: vec![] });
-        meta.releases.push(MetaRelease { version: "v2-rc".into(), is_prerelease: true, published_at: Some("2024".into()), title: None, tarball_url: "".into(), assets: vec![] });
+        let mut meta = Meta {
+            name: "n".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+        meta.releases.push(MetaRelease {
+            version: "v1".into(),
+            is_prerelease: false,
+            published_at: Some("2023".into()),
+            title: None,
+            tarball_url: "".into(),
+            assets: vec![],
+        });
+        meta.releases.push(MetaRelease {
+            version: "v2-rc".into(),
+            is_prerelease: true,
+            published_at: Some("2024".into()),
+            title: None,
+            tarball_url: "".into(),
+            assets: vec![],
+        });
 
         let latest = meta.get_latest_stable_release().unwrap();
         assert_eq!(latest.version, "v1");
@@ -1135,14 +1458,43 @@ mod tests {
 
     #[test]
     fn test_meta_get_latest_stable_release_empty() {
-        let meta = Meta { name: "n".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: None, homepage: None, license: None, updated_at: "".into(), current_version: "".into(), releases: vec![] };
+        let meta = Meta {
+            name: "n".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
         assert!(meta.get_latest_stable_release().is_none());
     }
 
     #[test]
     fn test_meta_get_latest_stable_release_only_prerelease() {
-        let mut meta = Meta { name: "n".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: None, homepage: None, license: None, updated_at: "".into(), current_version: "".into(), releases: vec![] };
-        meta.releases.push(MetaRelease { version: "v1-rc".into(), is_prerelease: true, published_at: None, title: None, tarball_url: "".into(), assets: vec![] });
+        let mut meta = Meta {
+            name: "n".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+        meta.releases.push(MetaRelease {
+            version: "v1-rc".into(),
+            is_prerelease: true,
+            published_at: None,
+            title: None,
+            tarball_url: "".into(),
+            assets: vec![],
+        });
         assert!(meta.get_latest_stable_release().is_none());
     }
 
@@ -1152,8 +1504,14 @@ mod tests {
         let target_dir = PathBuf::from("/root/o/r/v1");
         let current_link = PathBuf::from("/root/o/r/current");
 
-        runtime.expect_exists().with(eq(current_link.clone())).returning(|_| true);
-        runtime.expect_is_symlink().with(eq(current_link.clone())).returning(|_| false);
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| false);
 
         let result = update_current_symlink(&runtime, &target_dir, "v1");
         assert!(result.is_err());
@@ -1166,9 +1524,18 @@ mod tests {
         let current_link = PathBuf::from("/root/o/r/current");
 
         // Exists, matches
-        runtime.expect_exists().with(eq(current_link.clone())).returning(|_| true);
-        runtime.expect_is_symlink().with(eq(current_link.clone())).returning(|_| true);
-        runtime.expect_read_link().with(eq(current_link.clone())).returning(|_| Ok(PathBuf::from("v1")));
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v1")));
 
         // Should NOT call remove_symlink or symlink
         let result = update_current_symlink(&runtime, &target_dir, "v1");
@@ -1181,20 +1548,38 @@ mod tests {
         let target_dir = PathBuf::from("/root/o/r/v1");
         let current_link = PathBuf::from("/root/o/r/current");
 
-        runtime.expect_exists().with(eq(current_link.clone())).returning(|_| true);
-        runtime.expect_is_symlink().with(eq(current_link.clone())).returning(|_| true);
-        runtime.expect_read_link().with(eq(current_link.clone())).returning(|_| Err(anyhow::anyhow!("fail")));
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Err(anyhow::anyhow!("fail")));
 
         // Should remove and recreate
-        runtime.expect_remove_symlink().with(eq(current_link.clone())).returning(|_| Ok(()));
-        runtime.expect_symlink().with(eq(PathBuf::from("v1")), eq(current_link.clone())).returning(|_, _| Ok(()));
+        runtime
+            .expect_remove_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
+            .returning(|_, _| Ok(()));
 
         update_current_symlink(&runtime, &target_dir, "v1").unwrap();
     }
 
     #[tokio::test]
     async fn test_save_metadata_failure_warning() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
@@ -1204,29 +1589,56 @@ mod tests {
         runtime.expect_exists().returning(|_| false);
         runtime.expect_create_dir_all().returning(|_| Ok(()));
 
-        runtime.expect_write().times(1).in_sequence(&mut seq).returning(|_, _| Ok(())); // Fetch save
-        runtime.expect_write().times(1).in_sequence(&mut seq).returning(|_, _| Err(anyhow::anyhow!("fail"))); // Update save
+        runtime
+            .expect_write()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(())); // Fetch save
+        runtime
+            .expect_write()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Err(anyhow::anyhow!("fail"))); // Update save
 
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // Install steps
-        runtime.expect_create_file().returning(|_| Ok(Box::new(std::io::sink())));
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
         runtime.expect_remove_file().returning(|_| Ok(()));
         runtime.expect_symlink().returning(|_, _| Ok(()));
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("https://api".to_string());
-        github.expect_get_repo_info_at().returning(|_, _| Ok(RepoInfo { description: None, homepage: None, license: None, updated_at: "".into() }));
+        github
+            .expect_api_url()
+            .return_const("https://api".to_string());
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "".into(),
+            })
+        });
 
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let tar_url = format!("{}/tar", url);
         let _m = server.mock("GET", "/tar").with_status(200).create();
 
-        github.expect_get_releases_at().return_once(move |_, _| Ok(vec![Release { tag_name: "v1".into(), tarball_url: tar_url, ..Default::default() }]));
+        github.expect_get_releases_at().return_once(move |_, _| {
+            Ok(vec![Release {
+                tag_name: "v1".into(),
+                tarball_url: tar_url,
+                ..Default::default()
+            }])
+        });
 
         let mut extractor = MockExtractor::new();
-        extractor.expect_extract().returning(|_: &MockRuntime, _, _| Ok(()));
+        extractor
+            .expect_extract()
+            .returning(|_: &MockRuntime, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
         let result = installer.install(&repo, None).await;
@@ -1236,8 +1648,7 @@ mod tests {
     #[test]
     fn test_default_install_root_privileged_mock() {
         let mut runtime = MockRuntime::new();
-        #[cfg(all(unix, not(feature = "test_in_root")))]
-        runtime.expect_env_var().with(eq("USER")).returning(|_| Ok("root".to_string()));
+        runtime.expect_is_privileged().returning(|| true);
 
         let root = default_install_root(&runtime).unwrap();
         #[cfg(target_os = "macos")]
@@ -1245,16 +1656,23 @@ mod tests {
         #[cfg(all(unix, not(target_os = "macos")))]
         assert_eq!(root, PathBuf::from("/usr/local/ghri"));
     }
-
     #[tokio::test]
     async fn test_get_or_fetch_meta_exists_interaction() {
-        let repo = GitHubRepo { owner: "o".into(), repo: "r".into() };
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
         runtime.expect_exists().returning(|_| true);
         runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"","releases":[]}"#.into()));
 
-        let installer = Installer::new(runtime, MockGetReleases::new(), Client::new(), MockExtractor::new());
+        let installer = Installer::new(
+            runtime,
+            MockGetReleases::new(),
+            Client::new(),
+            MockExtractor::new(),
+        );
         let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
         assert_eq!(meta.name, "o/r");
     }
@@ -1269,25 +1687,50 @@ mod tests {
         // Exists
         runtime.expect_exists().returning(|_| true);
         let meta = Meta {
-            name: "o/r".into(), current_version: "v1".into(),
-            api_url: "api".into(), repo_info_url: "".into(), releases_url: "".into(),
-            description: None, homepage: None, license: None, updated_at: "".into(),
-            releases: vec![Release { tag_name: "v1".into(), ..Default::default() }.into()],
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            api_url: "api".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
         };
-        runtime.expect_read_to_string().returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
         runtime.expect_is_dir().returning(|_| false); // meta.json is not dir
 
         // Logic should skip fetch
         // and proceed to ensure_installed (mocked by basics)
         runtime.expect_exists().returning(|_| true); // target dir exists
         runtime.expect_is_symlink().returning(|_| true);
-        runtime.expect_read_link().returning(|_| Ok(PathBuf::from("v1")));
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
         runtime.expect_symlink().returning(|_, _| Ok(()));
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
-        installer.install(&GitHubRepo { owner: "o".into(), repo: "r".into() }, None).await.unwrap();
+        installer
+            .install(
+                &GitHubRepo {
+                    owner: "o".into(),
+                    repo: "r".into(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1298,15 +1741,19 @@ mod tests {
         runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[{"version":"v1","is_prerelease":false,"tarball_url":"","assets":[]}]}"#.into()));
         runtime.expect_is_dir().returning(|_| false);
         runtime.expect_is_symlink().returning(|_| true);
-        runtime.expect_read_link().returning(|_| Ok(PathBuf::from("v1")));
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
         runtime.expect_symlink().returning(|_, _| Ok(()));
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         let config = Config {
-            runtime, github: MockGetReleases::new(),
-            client: Client::new(), extractor: MockExtractor::new(),
-            install_root: None
+            runtime,
+            github: MockGetReleases::new(),
+            client: Client::new(),
+            extractor: MockExtractor::new(),
+            install_root: None,
         };
         run("o/r", config).await.unwrap();
     }
@@ -1325,7 +1772,9 @@ mod tests {
         let mut runtime = MockRuntime::new();
         runtime.expect_exists().returning(|_| true);
         runtime.expect_is_symlink().returning(|_| true);
-        runtime.expect_read_link().returning(|_| Ok(PathBuf::from("v1")));
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
 
         // No symlink calls
         update_current_symlink(&runtime, &PathBuf::from("/root/o/r/v1"), "v1").unwrap();
@@ -1338,22 +1787,69 @@ mod tests {
 
         // Verify write -> rename sequence for metadata
         let mut seq = mockall::Sequence::new();
-        runtime.expect_write()
+        runtime
+            .expect_write()
             .withf(|p, _| p.to_string_lossy().ends_with(".tmp"))
-            .times(1).in_sequence(&mut seq).returning(|_, _| Ok(()));
-        runtime.expect_rename()
-            .withf(|f, t| f.to_string_lossy().ends_with(".tmp") && t.to_string_lossy().ends_with(".json"))
-            .times(1).in_sequence(&mut seq).returning(|_, _| Ok(()));
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+        runtime
+            .expect_rename()
+            .withf(|f, t| {
+                f.to_string_lossy().ends_with(".tmp") && t.to_string_lossy().ends_with(".json")
+            })
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
 
-        let meta = Meta { name: "o/r".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: None, homepage: None, license: None, updated_at: "".into(), current_version: "".into(), releases: vec![] };
-        Installer::new(runtime, MockGetReleases::new(), Client::new(), MockExtractor::new())
-            .save_meta(&PathBuf::from("meta.json"), &meta).unwrap();
+        let meta = Meta {
+            name: "o/r".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+        Installer::new(
+            runtime,
+            MockGetReleases::new(),
+            Client::new(),
+            MockExtractor::new(),
+        )
+        .save_meta(&PathBuf::from("meta.json"), &meta)
+        .unwrap();
     }
 
     #[test]
     fn test_update_timestamp_behavior() {
-        let mut meta = Meta { name: "o/r".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: Some("old".into()), homepage: None, license: None, updated_at: "old".into(), current_version: "".into(), releases: vec![] };
-        let other = Meta { name: "o/r".into(), api_url: "".into(), repo_info_url: "".into(), releases_url: "".into(), description: Some("new".into()), homepage: None, license: None, updated_at: "new".into(), current_version: "".into(), releases: vec![] };
+        let mut meta = Meta {
+            name: "o/r".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: Some("old".into()),
+            homepage: None,
+            license: None,
+            updated_at: "old".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+        let other = Meta {
+            name: "o/r".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: Some("new".into()),
+            homepage: None,
+            license: None,
+            updated_at: "new".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
 
         assert!(meta.merge(other));
         assert_eq!(meta.description, Some("new".into()));
