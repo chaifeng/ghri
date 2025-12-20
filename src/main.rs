@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 /// Examples:
 ///   ghri owner/repo     # Install the latest release from owner/repo
 #[derive(Parser, Debug)]
-#[command(author, version, about)]
+#[command(author, version = env!("GHRI_VERSION"), about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
