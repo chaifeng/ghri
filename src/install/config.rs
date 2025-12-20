@@ -65,9 +65,9 @@ mod tests {
     async fn test_config_new_with_github_token() {
         let token = "test_token";
         let mut runtime = MockRuntime::new();
-        runtime
-            .env_vars
-            .insert("GITHUB_TOKEN".to_string(), token.to_string());
+        runtime.expect_env_var()
+            .with(mockall::predicate::eq("GITHUB_TOKEN"))
+            .returning(move |_| Ok(token.to_string()));
 
         let mut server = Server::new_async().await;
         let mock = server

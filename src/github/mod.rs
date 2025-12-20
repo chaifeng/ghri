@@ -5,6 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait GetReleases: Send + Sync {
     async fn get_repo_info(&self, repo: &GitHubRepo) -> Result<RepoInfo>;

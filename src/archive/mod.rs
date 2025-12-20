@@ -5,8 +5,9 @@ use log::{debug, info};
 use std::path::Path;
 use tar::Archive;
 
+#[cfg_attr(test, mockall::automock)]
 pub trait Extractor {
-    fn extract<R: Runtime>(
+    fn extract<R: Runtime + 'static>(
         &self,
         runtime: &R,
         archive_path: &Path,
@@ -18,7 +19,7 @@ pub struct ArchiveExtractor;
 
 impl Extractor for ArchiveExtractor {
     #[tracing::instrument(skip(self, runtime, archive_path, extract_to))]
-    fn extract<R: Runtime>(
+    fn extract<R: Runtime + 'static>(
         &self,
         runtime: &R,
         archive_path: &Path,

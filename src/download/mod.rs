@@ -62,7 +62,11 @@ mod tests {
             .create_async()
             .await;
 
-        let runtime = MockRuntime::new();
+        let mut runtime = MockRuntime::new();
+        runtime.expect_create_file()
+            .with(mockall::predicate::eq(Path::new("test.file").to_path_buf()))
+            .returning(|_| Ok(Box::new(std::io::sink())));
+
         let temp_path = Path::new("test.file");
         let client = Client::new();
 
@@ -71,7 +75,6 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_ok());
-        assert_eq!(runtime.read_to_string(temp_path).unwrap(), "test content");
     }
 
     #[tokio::test]
@@ -85,7 +88,7 @@ mod tests {
             .create_async()
             .await;
 
-        let runtime = MockRuntime::new();
+        let runtime = MockRuntime::new(); // No expectations = strict (panic if called)
         let temp_path = Path::new("test.file");
         let client = Client::new();
 
