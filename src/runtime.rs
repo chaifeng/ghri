@@ -185,6 +185,9 @@ impl Runtime for RealRuntime {
 pub struct MockRuntime {
     pub env_vars: std::collections::HashMap<String, String>,
     pub files: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, Vec<u8>>>>,
+    pub symlinks: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, PathBuf>>>,
+    pub fail_write: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub fail_read_link: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
@@ -193,7 +196,20 @@ impl MockRuntime {
         Self {
             env_vars: std::collections::HashMap::new(),
             files: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            symlinks: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            fail_write: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fail_read_link: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_fail_write(&self, fail: bool) {
+        self.fail_write
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn set_fail_read_link(&self, fail: bool) {
+        self.fail_read_link
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -201,11 +217,18 @@ impl MockRuntime {
 struct MockFile {
     path: PathBuf,
     files: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, Vec<u8>>>>,
+    fail_write: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(test)]
 impl std::io::Write for MockFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.fail_write.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Simulated write failure",
+            ));
+        }
         let mut files = self.files.lock().unwrap();
         files
             .entry(self.path.clone())
@@ -230,17 +253,38 @@ impl Runtime for MockRuntime {
     }
 
     fn write(&self, path: &Path, contents: impl AsRef<[u8]> + Send) -> Result<()> {
+        if self.fail_write.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(anyhow::anyhow!("Simulated write failure"));
+        }
         let mut files = self.files.lock().unwrap();
         files.insert(path.to_path_buf(), contents.as_ref().to_vec());
         Ok(())
     }
 
     fn read_to_string(&self, path: &Path) -> Result<String> {
+        // Also check symlinks if path is a symlink (simplified: assume path is resolved or check symlinks first)
+        // In real FS, read_to_string follows symlinks.
+        // Here we just check files map. If it's a symlink, we should probably follow it,
+        // but for now let's assume we read files directly or the caller resolves it.
+        // If the path exists in symlinks, we could error or follow.
+        // For simplicity in Mock:
         let files = self.files.lock().unwrap();
-        files
-            .get(path)
-            .map(|content| String::from_utf8_lossy(content).into_owned())
-            .ok_or_else(|| anyhow::anyhow!("File not found in MockRuntime: {:?}", path))
+        if let Some(content) = files.get(path) {
+            return Ok(String::from_utf8_lossy(content).into_owned());
+        }
+
+        // Try following symlink once
+        let symlinks = self.symlinks.lock().unwrap();
+        if let Some(target) = symlinks.get(path) {
+            // Recurse once? Or just check if target exists in files
+            // Handle relative paths in symlinks?
+            // MockRuntime usually uses absolute paths.
+            if let Some(content) = files.get(target) {
+                return Ok(String::from_utf8_lossy(content).into_owned());
+            }
+        }
+
+        Err(anyhow::anyhow!("File not found in MockRuntime: {:?}", path))
     }
 
     fn rename(&self, from: &Path, to: &Path) -> Result<()> {
@@ -249,7 +293,14 @@ impl Runtime for MockRuntime {
             files.insert(to.to_path_buf(), content);
             Ok(())
         } else {
-            Err(anyhow::anyhow!("File not found in MockRuntime: {:?}", from))
+            // Check symlinks
+            let mut symlinks = self.symlinks.lock().unwrap();
+            if let Some(target) = symlinks.remove(from) {
+                symlinks.insert(to.to_path_buf(), target);
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("File not found in MockRuntime: {:?}", from))
+            }
         }
     }
 
@@ -259,7 +310,17 @@ impl Runtime for MockRuntime {
 
     fn remove_file(&self, path: &Path) -> Result<()> {
         let mut files = self.files.lock().unwrap();
-        files.remove(path);
+        if files.remove(path).is_some() {
+            return Ok(());
+        }
+        // Also check symlinks
+        let mut symlinks = self.symlinks.lock().unwrap();
+        if symlinks.remove(path).is_some() {
+            return Ok(());
+        }
+        // If neither, maybe strict error? Real remove_file errors if not found.
+        // But for mock, maybe loose? Let's error to be closer to real.
+        // But remove_symlink calls this in old impl.
         Ok(())
     }
 
@@ -268,6 +329,8 @@ impl Runtime for MockRuntime {
         // but we can simulate removal by removing all files with this prefix.
         let mut files = self.files.lock().unwrap();
         files.retain(|p, _| !p.starts_with(path));
+        let mut symlinks = self.symlinks.lock().unwrap();
+        symlinks.retain(|p, _| !p.starts_with(path));
         Ok(())
     }
 
@@ -278,37 +341,63 @@ impl Runtime for MockRuntime {
 
     fn exists(&self, path: &Path) -> bool {
         let files = self.files.lock().unwrap();
-        files.contains_key(path)
+        if files.contains_key(path) {
+            return true;
+        }
+        let symlinks = self.symlinks.lock().unwrap();
+        symlinks.contains_key(path)
     }
 
     fn read_dir(&self, _path: &Path) -> Result<Vec<PathBuf>> {
         Ok(vec![])
     }
 
-    fn symlink(&self, _original: &Path, _link: &Path) -> Result<()> {
+    fn symlink(&self, original: &Path, link: &Path) -> Result<()> {
+        let mut symlinks = self.symlinks.lock().unwrap();
+        symlinks.insert(link.to_path_buf(), original.to_path_buf());
         Ok(())
     }
 
-    fn read_link(&self, _path: &Path) -> Result<PathBuf> {
-        Ok(PathBuf::new())
+    fn read_link(&self, path: &Path) -> Result<PathBuf> {
+        if self
+            .fail_read_link
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(anyhow::anyhow!("Simulated read_link failure"));
+        }
+        let symlinks = self.symlinks.lock().unwrap();
+        symlinks
+            .get(path)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Not a symlink: {:?}", path))
     }
 
-    fn is_symlink(&self, _path: &Path) -> bool {
-        false
+    fn is_symlink(&self, path: &Path) -> bool {
+        let symlinks = self.symlinks.lock().unwrap();
+        symlinks.contains_key(path)
     }
 
     fn create_file(&self, path: &Path) -> Result<Box<dyn std::io::Write + Send>> {
         Ok(Box::new(MockFile {
             path: path.to_path_buf(),
             files: self.files.clone(),
+            fail_write: self.fail_write.clone(),
         }))
     }
 
     fn open(&self, path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
+        // Similar to read_to_string, simplistic handling
         let files = self.files.lock().unwrap();
         if let Some(content) = files.get(path) {
             Ok(Box::new(std::io::Cursor::new(content.clone())))
         } else {
+            // Check symlinks
+            let symlinks = self.symlinks.lock().unwrap();
+            if let Some(target) = symlinks.get(path) {
+                 if let Some(content) = files.get(target) {
+                    return Ok(Box::new(std::io::Cursor::new(content.clone())));
+                 }
+            }
             Err(anyhow::anyhow!("File not found in MockRuntime: {:?}", path))
         }
     }
@@ -316,13 +405,19 @@ impl Runtime for MockRuntime {
     fn remove_dir_all(&self, path: &Path) -> Result<()> {
         let mut files = self.files.lock().unwrap();
         files.retain(|p, _| !p.starts_with(path));
+        let mut symlinks = self.symlinks.lock().unwrap();
+        symlinks.retain(|p, _| !p.starts_with(path));
         Ok(())
     }
 
     fn is_dir(&self, path: &Path) -> bool {
         let files = self.files.lock().unwrap();
         // A path is a directory if there are any files starting with that path/
-        files.keys().any(|p| p.starts_with(path) && p != path)
+        if files.keys().any(|p| p.starts_with(path) && p != path) {
+            return true;
+        }
+        let symlinks = self.symlinks.lock().unwrap();
+        symlinks.keys().any(|p| p.starts_with(path) && p != path)
     }
 
     fn home_dir(&self) -> Option<PathBuf> {

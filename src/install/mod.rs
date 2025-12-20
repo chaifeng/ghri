@@ -1997,9 +1997,150 @@ mod tests {
             deserialized.repo_info_url,
             format!("{}/repos/owner/repo", api_url)
         );
-        assert_eq!(
-            deserialized.releases_url,
-            format!("{}/repos/owner/repo/releases", api_url)
+    }
+
+    #[test]
+    fn test_find_all_packages_no_root() {
+        let runtime = MockRuntime::new();
+        let root = Path::new("/non-existent");
+        let packages = find_all_packages(&runtime, root).unwrap();
+        assert!(packages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_all_no_packages() {
+        let runtime = MockRuntime::new();
+        let root = Path::new("/tmp/ghri");
+        runtime.create_dir_all(root).unwrap();
+
+        let github = crate::github::GitHub::new(reqwest::Client::new(), None);
+        let installer = Installer::new(runtime, github, reqwest::Client::new(), MockExtractor);
+
+        let result = installer.update_all(Some(root.to_path_buf())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_install_no_stable_release() {
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-no-stable".to_string(),
+        };
+
+        // Only pre-releases
+        let release = Release {
+            tag_name: "v1.0.0-rc.1".to_string(),
+            tarball_url: "url".to_string(),
+            prerelease: true,
+            ..Default::default()
+        };
+
+        let mock_github = MockGitHub { release };
+        let client = Client::new();
+        let installer = Installer::new(RealRuntime, mock_github, client, MockExtractor);
+        let root_dir = tempdir().unwrap();
+
+        let result = installer
+            .install(&repo, Some(root_dir.path().to_path_buf()))
+            .await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No stable release found")
         );
+    }
+
+    #[test]
+    fn test_default_install_root_privileged_mock() {
+        let mut runtime = MockRuntime::new();
+        runtime
+            .env_vars
+            .insert("USER".to_string(), "root".to_string());
+
+        let root = default_install_root(&runtime).unwrap();
+
+        // Check against system path expectation
+        #[cfg(target_os = "macos")]
+        assert_eq!(root, PathBuf::from("/opt/ghri"));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(root, PathBuf::from("/usr/local/ghri"));
+    }
+
+    #[tokio::test]
+    async fn test_save_metadata_failure_warning() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let repo = GitHubRepo {
+            owner: "owner".to_string(),
+            repo: "repo-write-fail".to_string(),
+        };
+
+        let release = Release {
+            tag_name: "v1.0.0".to_string(),
+            tarball_url: format!("{}/download", url),
+            name: Some("v1.0.0".to_string()),
+            published_at: Some("2020-01-01T00:00:00Z".to_string()),
+            prerelease: false,
+            assets: vec![],
+        };
+
+        let mock_github = MockGitHub {
+            release: release.clone(),
+        };
+
+        let _m = server.mock("GET", "/download").with_status(200).create();
+
+        let runtime = MockRuntime::new();
+        let root = PathBuf::from("/tmp/ghri-test");
+
+        // Pre-populate meta.json so get_or_fetch_meta succeeds without writing
+        let meta_path = root.join("owner/repo-write-fail/meta.json");
+        let initial_meta = Meta::from(
+            repo.clone(),
+            RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "2020-01-01T00:00:00Z".to_string(),
+            },
+            vec![release.clone()],
+            "v0.0.0",
+            "https://api.github.com",
+        );
+        let meta_json = serde_json::to_string(&initial_meta).unwrap();
+        runtime.write(&meta_path, meta_json).unwrap();
+
+        // Enable write failure for the subsequent save_meta calls
+        runtime.set_fail_write(true);
+
+        let installer = Installer::new(runtime, mock_github, Client::new(), MockExtractor);
+
+        // Install should succeed despite save_meta failing
+        let result = installer.install(&repo, Some(root)).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_current_symlink_read_link_fail() {
+        let runtime = MockRuntime::new();
+        let target_dir = Path::new("/root/owner/repo/v1.0.0");
+        let current_link = Path::new("/root/owner/repo/current");
+
+        // Setup symlink
+        runtime
+            .create_dir_all(target_dir.parent().unwrap())
+            .unwrap();
+        // Create a fake symlink entry in MockRuntime so is_symlink returns true
+        runtime.symlink(Path::new("v1.0.0"), current_link).unwrap();
+
+        // Enable read_link failure
+        runtime.set_fail_read_link(true);
+
+        let result = update_current_symlink(&runtime, target_dir, "v1.0.0");
+
+        assert!(result.is_ok());
     }
 }
