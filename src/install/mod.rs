@@ -157,7 +157,8 @@ pub fn unlink<R: Runtime>(
     install_root: Option<PathBuf>,
 ) -> Result<()> {
     debug!("Unlinking {} dest={:?} all={}", repo_str, dest, all);
-    let spec = repo_str.parse::<RepoSpec>()?;
+    // Use LinkSpec to handle "owner/repo:path" format
+    let spec = repo_str.parse::<LinkSpec>()?;
     let root = match install_root {
         Some(path) => path,
         None => default_install_root(&runtime)?,
@@ -208,6 +209,13 @@ pub fn unlink<R: Runtime>(
         } else {
             matching
         }
+    } else if let Some(ref path) = spec.path {
+        // Filter by path in the link rule (e.g., "bach-sh/bach:bach.sh")
+        debug!("Looking for rule with path {:?}", path);
+        meta.links.iter()
+            .filter(|r| r.path.as_ref() == Some(path))
+            .cloned()
+            .collect()
     } else {
         debug!("No destination specified and --all not set");
         anyhow::bail!(
@@ -222,12 +230,22 @@ pub fn unlink<R: Runtime>(
 
     if rules_to_remove.is_empty() {
         debug!("No matching rules found");
+        let search_target = dest.as_ref()
+            .map(|d| format!("{:?}", d))
+            .or_else(|| spec.path.as_ref().map(|p| format!("path '{}'", p)))
+            .unwrap_or_else(|| "unknown".to_string());
         anyhow::bail!(
-            "No link rule found matching {:?}.\n\
+            "No link rule found matching {}.\n\
              Current link rules:\n{}",
-            dest,
+            search_target,
             meta.links.iter()
-                .map(|r| format!("  {:?}", r.dest))
+                .map(|r| {
+                    if let Some(ref p) = r.path {
+                        format!("  {} -> {:?}", p, r.dest)
+                    } else {
+                        format!("  (default) -> {:?}", r.dest)
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         );

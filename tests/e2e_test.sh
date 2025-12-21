@@ -1269,6 +1269,142 @@ test_links_command() {
     fi
 }
 
+test_unlink_by_path() {
+    log_section "Test: Unlink by path (owner/repo:path)"
+
+    local install_root="$TEST_ROOT/unlink_by_path"
+    local link1="$TEST_ROOT/unlink_by_path_bin/link1"
+    local link2="$TEST_ROOT/unlink_by_path_bin/link2"
+    mkdir -p "$install_root" "$(dirname "$link1")"
+
+    # Install zidr (has multiple files)
+    log_info "Installing chaifeng/zidr..."
+    if ! "$GHRI_BIN" install chaifeng/zidr --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Find a file in the version directory to link
+    local version_dir
+    version_dir=$(find "$install_root/chaifeng/zidr" -mindepth 1 -maxdepth 1 -type d ! -name current | head -1)
+    if [[ -z "$version_dir" ]]; then
+        log_fail "Could not find version directory"
+        return 1
+    fi
+
+    # Find files in version dir
+    local files
+    files=$(find "$version_dir" -type f | head -2)
+    local file1 file2
+    file1=$(echo "$files" | head -1)
+    file2=$(echo "$files" | tail -1)
+
+    if [[ -z "$file1" ]]; then
+        log_info "No files found in version directory, skipping test"
+        return 0
+    fi
+
+    local path1 path2
+    path1=$(basename "$file1")
+    path2=$(basename "$file2")
+
+    # Create two links with different paths
+    log_info "Creating link with path $path1..."
+    if ! "$GHRI_BIN" link "chaifeng/zidr:$path1" "$link1" --root "$install_root"; then
+        log_fail "First link command failed"
+        return 1
+    fi
+
+    if [[ -n "$file2" && "$file1" != "$file2" ]]; then
+        log_info "Creating link with path $path2..."
+        "$GHRI_BIN" link "chaifeng/zidr:$path2" "$link2" --root "$install_root" 2>/dev/null || true
+    fi
+
+    # Show current links
+    log_info "Current link rules:"
+    "$GHRI_BIN" links chaifeng/zidr --root "$install_root" || true
+
+    # Unlink by path (should only remove the link with matching path)
+    log_info "Unlinking by path chaifeng/zidr:$path1..."
+    if "$GHRI_BIN" unlink "chaifeng/zidr:$path1" --root "$install_root"; then
+        log_success "Unlink by path succeeded"
+    else
+        log_fail "Unlink by path failed"
+        return 1
+    fi
+
+    # Verify first link removed
+    if [[ ! -e "$link1" ]]; then
+        log_success "Link $link1 removed"
+    else
+        log_fail "Link $link1 should be removed"
+    fi
+
+    # Verify meta.json no longer has the path1 rule
+    if ! grep -q "\"path\": \"$path1\"" "$install_root/chaifeng/zidr/meta.json" 2>/dev/null; then
+        log_success "Link rule for $path1 removed from meta.json"
+    else
+        log_fail "Link rule for $path1 still in meta.json"
+    fi
+}
+
+test_unlink_colon_in_repo_name() {
+    log_section "Test: Unlink correctly parses repo:path format"
+
+    local install_root="$TEST_ROOT/unlink_colon"
+    local link_path="$TEST_ROOT/unlink_colon_bin/bach.sh"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Find bach.sh in version directory
+    local version_dir
+    version_dir=$(find "$install_root/bach-sh/bach" -mindepth 1 -maxdepth 1 -type d ! -name current | head -1)
+
+    # Create link with path
+    log_info "Creating link bach-sh/bach:bach.sh..."
+    if "$GHRI_BIN" link "bach-sh/bach:bach.sh" "$link_path" --root "$install_root" 2>/dev/null; then
+        log_success "Link with path created"
+    else
+        # bach.sh might not exist, try default link
+        log_info "bach.sh not found, creating default link..."
+        if ! "$GHRI_BIN" link bach-sh/bach "$link_path" --root "$install_root"; then
+            log_fail "Link command failed"
+            return 1
+        fi
+    fi
+
+    # Verify link exists
+    if [[ -L "$link_path" ]]; then
+        log_success "Link created"
+    else
+        log_fail "Link was not created"
+        return 1
+    fi
+
+    # Test that unlink with colon finds the package correctly
+    # This should NOT fail with "bach-sh/bach:bach.sh is not installed"
+    log_info "Testing unlink bach-sh/bach:bach.sh..."
+    local output
+    if output=$("$GHRI_BIN" unlink "bach-sh/bach:bach.sh" --root "$install_root" 2>&1); then
+        log_success "Unlink with path succeeded"
+    else
+        # Check if error is about package not installed (wrong) vs no matching rule (ok)
+        if echo "$output" | grep -qi "not installed"; then
+            log_fail "Unlink incorrectly parsed repo name with colon"
+            log_info "Error: $output"
+        else
+            log_info "Output: $output"
+            log_success "Unlink correctly parsed repo:path format"
+        fi
+    fi
+}
+
 #######################################
 # Main
 #######################################
@@ -1319,6 +1455,8 @@ main() {
     test_unlink_fails_for_uninstalled
     test_unlink_requires_dest_or_all
     test_links_command
+    test_unlink_by_path
+    test_unlink_colon_in_repo_name
 
     # Summary
     log_section "Test Summary"

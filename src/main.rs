@@ -83,11 +83,11 @@ pub struct LinkArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct UnlinkArgs {
-    /// The GitHub repository in the format "owner/repo"
-    #[arg(value_name = "OWNER/REPO")]
+    /// Repository specification: "owner/repo" or "owner/repo:path" to filter by path
+    #[arg(value_name = "OWNER/REPO[:PATH]")]
     pub repo: String,
 
-    /// Destination path of the symlink to remove (optional, removes all if not specified)
+    /// Destination path of the symlink to remove (optional)
     #[arg(value_name = "DEST")]
     pub dest: Option<PathBuf>,
 
