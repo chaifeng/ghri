@@ -1,3 +1,4 @@
+use crate::cleanup::SharedCleanupContext;
 use crate::runtime::Runtime;
 use anyhow::{Context, Result, anyhow};
 use flate2::read::GzDecoder;
@@ -13,6 +14,14 @@ pub trait Extractor {
         archive_path: &Path,
         extract_to: &Path,
     ) -> Result<()>;
+
+    fn extract_with_cleanup<R: Runtime + 'static>(
+        &self,
+        runtime: &R,
+        archive_path: &Path,
+        extract_to: &Path,
+        cleanup_ctx: SharedCleanupContext,
+    ) -> Result<()>;
 }
 
 pub struct ArchiveExtractor;
@@ -24,6 +33,29 @@ impl Extractor for ArchiveExtractor {
         runtime: &R,
         archive_path: &Path,
         extract_to: &Path,
+    ) -> Result<()> {
+        self.extract_impl(runtime, archive_path, extract_to, None)
+    }
+
+    #[tracing::instrument(skip(self, runtime, archive_path, extract_to, cleanup_ctx))]
+    fn extract_with_cleanup<R: Runtime + 'static>(
+        &self,
+        runtime: &R,
+        archive_path: &Path,
+        extract_to: &Path,
+        cleanup_ctx: SharedCleanupContext,
+    ) -> Result<()> {
+        self.extract_impl(runtime, archive_path, extract_to, Some(cleanup_ctx))
+    }
+}
+
+impl ArchiveExtractor {
+    fn extract_impl<R: Runtime + 'static>(
+        &self,
+        runtime: &R,
+        archive_path: &Path,
+        extract_to: &Path,
+        cleanup_ctx: Option<SharedCleanupContext>,
     ) -> Result<()> {
         debug!("Extracting archive to {:?}...", extract_to);
         let file = runtime
@@ -42,6 +74,12 @@ impl Extractor for ArchiveExtractor {
             runtime.remove_dir_all(&temp_extract_dir)?;
         }
         runtime.create_dir_all(&temp_extract_dir)?;
+
+        // Register temp_extract_dir for cleanup on interruption
+        if let Some(ref ctx) = cleanup_ctx {
+            let mut guard = ctx.lock().unwrap();
+            guard.add(temp_extract_dir.clone());
+        }
 
         debug!("Unpacking to temp dir: {:?}", temp_extract_dir);
 
@@ -119,6 +157,12 @@ impl Extractor for ArchiveExtractor {
 
         // Clean up the temporary extraction directory
         runtime.remove_dir_all(&temp_extract_dir)?;
+
+        // Remove temp_extract_dir from cleanup list
+        if let Some(ref ctx) = cleanup_ctx {
+            let mut guard = ctx.lock().unwrap();
+            guard.remove(&temp_extract_dir);
+        }
 
         info!("Extraction complete.");
         Ok(())

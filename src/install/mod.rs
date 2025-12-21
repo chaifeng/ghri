@@ -2,9 +2,11 @@ use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use reqwest::Client;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     archive::Extractor,
+    cleanup::CleanupContext,
     download::download_file,
     github::{GetReleases, GitHubRepo, Release, RepoSpec},
     package::{Meta, find_all_packages},
@@ -142,15 +144,35 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
         let target_dir = get_target_dir(&self.runtime, repo, &release, install_root)?;
 
-        ensure_installed(
+        // Set up cleanup context for Ctrl-C handling
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let cleanup_ctx_clone = Arc::clone(&cleanup_ctx);
+
+        // Register Ctrl-C handler
+        let ctrl_c_handler = tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                eprintln!("\nInterrupted, cleaning up...");
+                cleanup_ctx_clone.lock().unwrap().cleanup();
+                std::process::exit(130); // Standard exit code for Ctrl-C
+            }
+        });
+
+        let result = ensure_installed(
             &self.runtime,
             &target_dir,
             repo,
             &release,
             &self.client,
             &self.extractor,
+            Arc::clone(&cleanup_ctx),
         )
-        .await?;
+        .await;
+
+        // Abort the Ctrl-C handler since installation completed (successfully or with error)
+        ctrl_c_handler.abort();
+
+        result?;
+
         update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
 
         // Metadata handling
@@ -326,7 +348,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
     }
 }
 
-#[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor))]
+#[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor, cleanup_ctx))]
 async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     runtime: &R,
     target_dir: &Path,
@@ -334,6 +356,7 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     release: &Release,
     client: &Client,
     extractor: &E,
+    cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
     if runtime.exists(target_dir) {
         info!(
@@ -348,6 +371,12 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         .create_dir_all(target_dir)
         .with_context(|| format!("Failed to create target directory at {:?}", target_dir))?;
 
+    // Register target_dir for cleanup on Ctrl-C
+    {
+        let mut ctx = cleanup_ctx.lock().unwrap();
+        ctx.add(target_dir.to_path_buf());
+    }
+
     let temp_dir = std::env::temp_dir();
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
@@ -359,8 +388,14 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         return Err(e);
     }
 
+    // Register temp file for cleanup (after download succeeds)
+    {
+        let mut ctx = cleanup_ctx.lock().unwrap();
+        ctx.add(temp_file_path.clone());
+    }
+
     println!("  installing {} {}", &repo, release.tag_name);
-    if let Err(e) = extractor.extract(runtime, &temp_file_path, target_dir) {
+    if let Err(e) = extractor.extract_with_cleanup(runtime, &temp_file_path, target_dir, Arc::clone(&cleanup_ctx)) {
         // Clean up target directory and temp file on extraction failure
         debug!("Extraction failed, cleaning up target directory: {:?}", target_dir);
         let _ = runtime.remove_dir_all(target_dir);
@@ -368,9 +403,20 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         return Err(e);
     }
 
+    // Remove temp file from cleanup list and delete it
+    {
+        let mut ctx = cleanup_ctx.lock().unwrap();
+        ctx.remove(&temp_file_path);
+    }
     runtime
         .remove_file(&temp_file_path)
         .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
+
+    // Installation succeeded, remove target_dir from cleanup list
+    {
+        let mut ctx = cleanup_ctx.lock().unwrap();
+        ctx.remove(target_dir);
+    }
 
     Ok(())
 }
@@ -500,8 +546,8 @@ mod tests {
 
         let mut extractor = MockExtractor::new();
         extractor
-            .expect_extract()
-            .returning(|_: &MockRuntime, _, _| Ok(()));
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
         installer.install(&repo, None, None).await.unwrap();
@@ -584,8 +630,8 @@ mod tests {
 
         let mut extractor = MockExtractor::new();
         extractor
-            .expect_extract()
-            .returning(|_: &MockRuntime, _, _| Ok(()));
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
         let mut server = mockito::Server::new_async().await;
         let _m = server.mock("GET", "/tar").with_status(200).create();
@@ -594,6 +640,7 @@ mod tests {
             ..release
         };
 
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         ensure_installed(
             &runtime,
             &target,
@@ -601,6 +648,7 @@ mod tests {
             &release_with_url,
             &Client::new(),
             &extractor,
+            cleanup_ctx,
         )
         .await
         .unwrap();
@@ -813,9 +861,10 @@ mod tests {
 
         let mut extractor = MockExtractor::new();
         extractor
-            .expect_extract()
-            .returning(|_: &MockRuntime, _, _| Ok(()));
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
@@ -823,6 +872,7 @@ mod tests {
             &release,
             &Client::new(),
             &extractor,
+            cleanup_ctx,
         )
         .await;
 
@@ -874,6 +924,7 @@ mod tests {
 
         let extractor = MockExtractor::new();
 
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
@@ -881,6 +932,7 @@ mod tests {
             &release,
             &Client::new(),
             &extractor,
+            cleanup_ctx,
         )
         .await;
 
@@ -922,8 +974,8 @@ mod tests {
         // Extraction fails
         let mut extractor = MockExtractor::new();
         extractor
-            .expect_extract()
-            .returning(|_: &MockRuntime, _, _| Err(anyhow::anyhow!("extraction failed")));
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Err(anyhow::anyhow!("extraction failed")));
 
         // Should clean up target_dir and temp file on failure
         runtime
@@ -936,6 +988,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
@@ -943,6 +996,7 @@ mod tests {
             &release,
             &Client::new(),
             &extractor,
+            cleanup_ctx,
         )
         .await;
 
@@ -999,6 +1053,7 @@ mod tests {
             .with(eq(target.clone()))
             .returning(|_| true);
 
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let result = ensure_installed(
             &runtime,
             &target,
@@ -1009,6 +1064,7 @@ mod tests {
             &Release::default(),
             &Client::new(),
             &MockExtractor::new(),
+            cleanup_ctx,
         )
         .await;
         assert!(result.is_ok());
@@ -1081,8 +1137,8 @@ mod tests {
 
         let mut extractor = MockExtractor::new();
         extractor
-            .expect_extract()
-            .returning(|_: &MockRuntime, _, _| Ok(()));
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
         let result = installer.install(&repo, None, None).await;
