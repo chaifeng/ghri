@@ -352,10 +352,21 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
     println!(" downloading {} {}", &repo, release.tag_name);
-    download_file(runtime, &release.tarball_url, &temp_file_path, client).await?;
+    if let Err(e) = download_file(runtime, &release.tarball_url, &temp_file_path, client).await {
+        // Clean up target directory on download failure
+        debug!("Download failed, cleaning up target directory: {:?}", target_dir);
+        let _ = runtime.remove_dir_all(target_dir);
+        return Err(e);
+    }
 
     println!("  installing {} {}", &repo, release.tag_name);
-    extractor.extract(runtime, &temp_file_path, target_dir)?;
+    if let Err(e) = extractor.extract(runtime, &temp_file_path, target_dir) {
+        // Clean up target directory and temp file on extraction failure
+        debug!("Extraction failed, cleaning up target directory: {:?}", target_dir);
+        let _ = runtime.remove_dir_all(target_dir);
+        let _ = runtime.remove_file(&temp_file_path);
+        return Err(e);
+    }
 
     runtime
         .remove_file(&temp_file_path)
@@ -822,6 +833,121 @@ mod tests {
                 .to_string()
                 .contains("Failed to clean up temporary file")
         );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_installed_download_fail_cleans_up_target_dir() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+        let mut runtime = MockRuntime::new();
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let release = Release {
+            tag_name: "v1".into(),
+            tarball_url: format!("{}/download", url),
+            ..Default::default()
+        };
+
+        // Download will fail with 404
+        let _m = server.mock("GET", "/download").with_status(404).create();
+
+        let target_dir = PathBuf::from("/tmp/target");
+
+        runtime
+            .expect_exists()
+            .with(eq(target_dir.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_create_dir_all()
+            .with(eq(target_dir.clone()))
+            .returning(|_| Ok(()));
+
+        // Should clean up target_dir on failure
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(target_dir.clone()))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let extractor = MockExtractor::new();
+
+        let result = ensure_installed(
+            &runtime,
+            &target_dir,
+            &repo,
+            &release,
+            &Client::new(),
+            &extractor,
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_installed_extract_fail_cleans_up_target_dir() {
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+        let mut runtime = MockRuntime::new();
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let release = Release {
+            tag_name: "v1".into(),
+            tarball_url: format!("{}/download", url),
+            ..Default::default()
+        };
+
+        let _m = server.mock("GET", "/download").with_status(200).with_body("data").create();
+
+        let target_dir = PathBuf::from("/tmp/target");
+
+        runtime
+            .expect_exists()
+            .with(eq(target_dir.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_create_dir_all()
+            .with(eq(target_dir.clone()))
+            .returning(|_| Ok(()));
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
+
+        // Extraction fails
+        let mut extractor = MockExtractor::new();
+        extractor
+            .expect_extract()
+            .returning(|_: &MockRuntime, _, _| Err(anyhow::anyhow!("extraction failed")));
+
+        // Should clean up target_dir and temp file on failure
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(target_dir.clone()))
+            .times(1)
+            .returning(|_| Ok(()));
+        runtime
+            .expect_remove_file()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let result = ensure_installed(
+            &runtime,
+            &target_dir,
+            &repo,
+            &release,
+            &Client::new(),
+            &extractor,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("extraction failed"));
     }
 
     // Meta tests (test_meta_releases_sorting, test_meta_merge_sorting, test_meta_sorting_fallback,
