@@ -1564,10 +1564,10 @@ test_versioned_link_removed_with_version() {
     fi
 
     # Verify versioned_links entry is removed from meta.json
-    if ! grep -q '"0.7.1"' "$install_root/bach-sh/bach/meta.json" 2>/dev/null; then
-        log_success "Versioned link entry removed from meta.json"
-    else
+    if sed -n '/^[[:blank:]]*"versioned_links": \[/,/^[[:blank:]]*\]/p' "$install_root/bach-sh/bach/meta.json" | tee /dev/stderr | grep -q '"0.7.1"' 2>/dev/null; then
         log_fail "Versioned link entry still in meta.json"
+    else
+        log_success "Versioned link entry removed from meta.json"
     fi
 }
 
