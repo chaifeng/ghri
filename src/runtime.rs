@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{debug, warn};
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -30,6 +31,16 @@ pub trait Runtime: Send + Sync {
 
     /// Set file permissions (mode) on Unix systems. No-op on Windows.
     fn set_permissions(&self, path: &Path, mode: u32) -> Result<()>;
+
+    /// Remove a symlink if its target is under the given prefix directory.
+    /// The prefix is checked by directory components, not string prefix.
+    /// Returns Ok(true) if removed, Ok(false) if skipped, Err if operation failed.
+    fn remove_symlink_if_target_under(
+        &self,
+        link_path: &Path,
+        target_prefix: &Path,
+        description: &str,
+    ) -> Result<bool>;
 
     // Directories
     fn home_dir(&self) -> Option<PathBuf>;
@@ -190,6 +201,97 @@ impl Runtime for RealRuntime {
             let _ = (path, mode); // Suppress unused warnings on non-Unix
         }
         Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn remove_symlink_if_target_under(
+        &self,
+        link_path: &Path,
+        target_prefix: &Path,
+        description: &str,
+    ) -> Result<bool> {
+        debug!(
+            "Validating link {:?} (expected prefix: {:?})",
+            link_path, target_prefix
+        );
+
+        if !self.is_symlink(link_path) {
+            if self.exists(link_path) {
+                eprintln!(
+                    "Warning: {} {:?} exists but is not a symlink, skipping",
+                    description, link_path
+                );
+            } else {
+                debug!("{} {:?} does not exist, skipping", description, link_path);
+            }
+            return Ok(false);
+        }
+
+        match self.read_link(link_path) {
+            Ok(target) => {
+                // Resolve relative paths to absolute and canonicalize
+                let resolved_target = if target.is_relative() {
+                    link_path.parent().unwrap_or(Path::new(".")).join(&target)
+                } else {
+                    target.clone()
+                };
+
+                // Canonicalize if target exists to resolve .. and symlinks
+                let canonicalized_target = fs::canonicalize(&resolved_target)
+                    .unwrap_or_else(|_| resolved_target.clone());
+
+                debug!(
+                    "Link {:?} points to {:?} (resolved: {:?}, canonicalized: {:?})",
+                    link_path, target, resolved_target, canonicalized_target
+                );
+
+                // Canonicalize prefix as well for accurate comparison
+                let canonicalized_prefix = fs::canonicalize(target_prefix)
+                    .unwrap_or_else(|_| target_prefix.to_path_buf());
+
+                // Check if the target is under the prefix by comparing path components
+                let target_components: Vec<_> = canonicalized_target.components().collect();
+                let prefix_components: Vec<_> = canonicalized_prefix.components().collect();
+
+                let is_under_prefix = prefix_components.len() <= target_components.len()
+                    && prefix_components
+                        .iter()
+                        .zip(target_components.iter())
+                        .all(|(p, t)| p == t);
+
+                if !is_under_prefix {
+                    eprintln!(
+                        "Warning: {} {:?} points to {:?} which is not within {:?}, skipping removal",
+                        description, link_path, canonicalized_target, canonicalized_prefix
+                    );
+                    return Ok(false);
+                }
+
+                // Link is valid, remove it
+                debug!("Removing {} {:?}", description, link_path);
+                match self.remove_symlink(link_path) {
+                    Ok(()) => {
+                        println!("Removed {} {:?}", description, link_path);
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        warn!("Failed to remove {} {:?}: {}", description, link_path, e);
+                        eprintln!(
+                            "Warning: Failed to remove {} {:?}: {}",
+                            description, link_path, e
+                        );
+                        Ok(false)
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: {} {:?} is a symlink but cannot read its target: {}, skipping",
+                    description, link_path, e
+                );
+                Ok(false)
+            }
+        }
     }
 
     #[tracing::instrument(skip(self))]
@@ -364,5 +466,215 @@ mod tests {
         assert!(rt.rename(&non_existent, &dir.path().join("new")).is_err());
         assert!(rt.remove_file(&non_existent).is_err());
         assert!(rt.remove_dir(&non_existent).is_err());
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_success() {
+        // Symlink target is under the prefix - should be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("foo/bar");
+        let target = prefix.join("file.txt");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(&prefix).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = removed
+        assert!(!rt.exists(&link));
+        assert!(rt.exists(&target)); // target should still exist
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_exact_match() {
+        // Symlink target is exactly the prefix - should be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("foo/bar/file.txt");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(prefix.parent().unwrap()).unwrap();
+        rt.write(&prefix, b"content").unwrap();
+        rt.symlink(&prefix, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = removed
+        assert!(!rt.exists(&link));
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_parent_prefix() {
+        // Target /foo/bar/file.txt, prefix /foo - should be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("foo");
+        let target = prefix.join("bar/file.txt");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = removed
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_wrong_prefix() {
+        // Target /foo/bar/file.txt, prefix /bar - should NOT be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("foo/bar/file.txt");
+        let wrong_prefix = dir.path().join("bar");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &wrong_prefix, "test link");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped
+        assert!(rt.is_symlink(&link)); // link should still exist
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_partial_component() {
+        // Target /foo/bar/file.txt, prefix /foo/b (incomplete component) - should NOT be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("foo/bar/file.txt");
+        let partial_prefix = dir.path().join("foo/b");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &partial_prefix, "test link");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped (partial component doesn't match)
+        assert!(rt.is_symlink(&link)); // link should still exist
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_different_file() {
+        // Target /foo/bar/file.txt, prefix /foo/bar/aaa.txt - should NOT be removed
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("foo/bar/file.txt");
+        let wrong_prefix = dir.path().join("foo/bar/aaa.txt");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &wrong_prefix, "test link");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped
+        assert!(rt.is_symlink(&link));
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_not_symlink() {
+        // Path exists but is not a symlink - should skip
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let regular_file = dir.path().join("regular.txt");
+        let prefix = dir.path();
+
+        rt.write(&regular_file, b"content").unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&regular_file, prefix, "test file");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped
+        assert!(rt.exists(&regular_file)); // file should still exist
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_nonexistent() {
+        // Path does not exist - should skip
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let nonexistent = dir.path().join("nonexistent");
+        let prefix = dir.path();
+
+        let result = rt.remove_symlink_if_target_under(&nonexistent, prefix, "test link");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_relative_link() {
+        // Symlink uses relative path - should resolve and check correctly
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("package");
+        let target = prefix.join("bin/tool");
+        let links_dir = dir.path().join("links");
+        let link = links_dir.join("tool");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.create_dir_all(&links_dir).unwrap();
+
+        // Create symlink with relative path
+        let relative_target = PathBuf::from("../package/bin/tool");
+        rt.symlink(&relative_target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = removed
+        assert!(!rt.exists(&link));
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_relative_link_wrong_prefix() {
+        // Symlink uses relative path pointing outside prefix
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let other_package = dir.path().join("other_package");
+        let target = other_package.join("bin/tool");
+        let prefix = dir.path().join("my_package");
+        let links_dir = dir.path().join("links");
+        let link = links_dir.join("tool");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.create_dir_all(&links_dir).unwrap();
+        rt.create_dir_all(&prefix).unwrap();
+
+        // Create symlink with relative path to other_package
+        let relative_target = PathBuf::from("../other_package/bin/tool");
+        rt.symlink(&relative_target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // false = skipped (target not under prefix)
+        assert!(rt.is_symlink(&link));
+    }
+
+    #[test]
+    fn test_remove_symlink_if_target_under_nested_prefix() {
+        // Target is deeply nested under prefix
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+        let prefix = dir.path().join("a");
+        let target = prefix.join("b/c/d/e/file.txt");
+        let link = dir.path().join("link");
+
+        rt.create_dir_all(target.parent().unwrap()).unwrap();
+        rt.write(&target, b"content").unwrap();
+        rt.symlink(&target, &link).unwrap();
+
+        let result = rt.remove_symlink_if_target_under(&link, &prefix, "test link");
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // true = removed
     }
 }

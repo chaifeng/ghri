@@ -40,9 +40,13 @@ pub struct Meta {
     pub current_version: String,
     #[serde(default)]
     pub releases: Vec<MetaRelease>,
-    /// List of link rules for creating external symlinks
+    /// List of link rules for creating external symlinks (updated on install/update)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkRule>,
+    /// List of versioned links for historical version links (not updated on install/update)
+    /// These are links created with explicit version specifiers (e.g., owner/repo@v1.0.0)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versioned_links: Vec<super::link_rule::VersionedLink>,
     /// Legacy: Path where the current version is linked to (external symlink)
     /// Deprecated: Use `links` instead. Kept for backward compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +81,7 @@ impl Meta {
                 r
             },
             links: vec![],
+            versioned_links: vec![],
             linked_to: None,
             linked_path: None,
         }

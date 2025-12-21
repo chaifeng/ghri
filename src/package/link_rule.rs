@@ -14,6 +14,20 @@ pub struct LinkRule {
     pub path: Option<String>,
 }
 
+/// A versioned link record for tracking historical version links
+/// These are links created with explicit version specifiers (e.g., owner/repo@v1.0.0)
+/// They are not updated on install/update, only displayed and cleaned up on version removal
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct VersionedLink {
+    /// The version this link was created for
+    pub version: String,
+    /// The destination path for the symlink
+    pub dest: PathBuf,
+    /// Relative path within version directory to link (e.g., "bin/tool")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +75,35 @@ mod tests {
         let rule: LinkRule = serde_json::from_str(json).unwrap();
         assert_eq!(rule.dest, PathBuf::from("/usr/local/bin/tool"));
         assert_eq!(rule.path, None);
+    }
+
+    #[test]
+    fn test_versioned_link_default() {
+        let link = VersionedLink::default();
+        assert_eq!(link.version, "");
+        assert_eq!(link.dest, PathBuf::new());
+        assert_eq!(link.path, None);
+    }
+
+    #[test]
+    fn test_versioned_link_serialize() {
+        let link = VersionedLink {
+            version: "v1.0.0".to_string(),
+            dest: PathBuf::from("/usr/local/bin/tool"),
+            path: Some("bin/tool".to_string()),
+        };
+        let json = serde_json::to_string(&link).unwrap();
+        assert!(json.contains("v1.0.0"));
+        assert!(json.contains("/usr/local/bin/tool"));
+        assert!(json.contains("bin/tool"));
+    }
+
+    #[test]
+    fn test_versioned_link_deserialize() {
+        let json = r#"{"version": "v1.0.0", "dest": "/usr/local/bin/tool", "path": "bin/tool"}"#;
+        let link: VersionedLink = serde_json::from_str(json).unwrap();
+        assert_eq!(link.version, "v1.0.0");
+        assert_eq!(link.dest, PathBuf::from("/usr/local/bin/tool"));
+        assert_eq!(link.path, Some("bin/tool".to_string()));
     }
 }

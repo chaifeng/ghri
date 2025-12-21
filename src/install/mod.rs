@@ -9,7 +9,7 @@ use crate::{
     cleanup::CleanupContext,
     download::download_file,
     github::{GetReleases, GitHubRepo, LinkSpec, Release, RepoSpec},
-    package::{LinkRule, Meta, find_all_packages},
+    package::{LinkRule, Meta, VersionedLink, find_all_packages},
     runtime::Runtime,
 };
 
@@ -100,6 +100,123 @@ pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()>
     Ok(())
 }
 
+/// Link status for display
+#[derive(Debug, PartialEq)]
+enum LinkStatus {
+    /// Link exists and points to the expected target
+    Ok,
+    /// Link path does not exist
+    Missing,
+    /// Path exists but is not a symlink
+    NotSymlink,
+    /// Link exists but points to a different target
+    WrongTarget(PathBuf),
+}
+
+impl std::fmt::Display for LinkStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LinkStatus::Ok => write!(f, ""),
+            LinkStatus::Missing => write!(f, " [missing]"),
+            LinkStatus::NotSymlink => write!(f, " [not a symlink]"),
+            LinkStatus::WrongTarget(target) => write!(f, " [wrong target: {}]", target.display()),
+        }
+    }
+}
+
+/// Check the status of a symlink
+fn check_link_status<R: Runtime>(
+    runtime: &R,
+    link_dest: &Path,
+    expected_prefix: &Path,
+) -> LinkStatus {
+    if !runtime.exists(link_dest) && !runtime.is_symlink(link_dest) {
+        return LinkStatus::Missing;
+    }
+
+    if !runtime.is_symlink(link_dest) {
+        return LinkStatus::NotSymlink;
+    }
+
+    match runtime.read_link(link_dest) {
+        Ok(target) => {
+            // Resolve relative paths
+            let resolved = if target.is_relative() {
+                link_dest.parent().unwrap_or(Path::new(".")).join(&target)
+            } else {
+                target.clone()
+            };
+
+            // Canonicalize for accurate comparison
+            let canonicalized = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+            let canonicalized_prefix = std::fs::canonicalize(expected_prefix)
+                .unwrap_or_else(|_| expected_prefix.to_path_buf());
+
+            // Check if target is under expected prefix
+            let target_components: Vec<_> = canonicalized.components().collect();
+            let prefix_components: Vec<_> = canonicalized_prefix.components().collect();
+
+            let is_under_prefix = prefix_components.len() <= target_components.len()
+                && prefix_components
+                    .iter()
+                    .zip(target_components.iter())
+                    .all(|(p, t)| p == t);
+
+            if is_under_prefix {
+                LinkStatus::Ok
+            } else {
+                LinkStatus::WrongTarget(canonicalized)
+            }
+        }
+        Err(_) => LinkStatus::Missing,
+    }
+}
+
+/// Format and print link rules with status
+fn print_links<R: Runtime>(
+    runtime: &R,
+    links: &[LinkRule],
+    expected_prefix: &Path,
+    header: Option<&str>,
+) {
+    if links.is_empty() {
+        return;
+    }
+
+    if let Some(h) = header {
+        println!("{}", h);
+    }
+
+    for rule in links {
+        let status = check_link_status(runtime, &rule.dest, expected_prefix);
+        let source = rule.path.as_deref().unwrap_or("(default)");
+        println!("  {} -> {:?}{}", source, rule.dest, status);
+    }
+}
+
+/// Format and print versioned links with status
+fn print_versioned_links<R: Runtime>(
+    runtime: &R,
+    links: &[VersionedLink],
+    package_dir: &Path,
+    header: Option<&str>,
+) {
+    if links.is_empty() {
+        return;
+    }
+
+    if let Some(h) = header {
+        println!("{}", h);
+    }
+
+    for link in links {
+        let version_dir = package_dir.join(&link.version);
+        let status = check_link_status(runtime, &link.dest, &version_dir);
+        let source = link.path.as_deref().unwrap_or("(default)");
+        println!("  @{} {} -> {:?}{}", link.version, source, link.dest, status);
+    }
+}
+
 /// Show link rules for a package
 #[tracing::instrument(skip(runtime, install_root))]
 pub fn links<R: Runtime>(
@@ -128,20 +245,20 @@ pub fn links<R: Runtime>(
     }
 
     let meta = Meta::load(&runtime, &meta_path)?;
-    debug!("Found {} link rules", meta.links.len());
+    debug!("Found {} link rules, {} versioned links", meta.links.len(), meta.versioned_links.len());
 
-    if meta.links.is_empty() {
+    if meta.links.is_empty() && meta.versioned_links.is_empty() {
         println!("No link rules for {}.", spec.repo);
         return Ok(());
     }
 
-    println!("Link rules for {} ({}):", spec.repo, meta.current_version);
-    for rule in &meta.links {
-        if let Some(ref path) = rule.path {
-            println!("  {} -> {:?}", path, rule.dest);
-        } else {
-            println!("  (default) -> {:?}", rule.dest);
-        }
+    let current_dir = package_dir.join("current");
+    let header = format!("Link rules for {} (current: {}):", spec.repo, meta.current_version);
+    print_links(&runtime, &meta.links, &current_dir, Some(&header));
+
+    if !meta.versioned_links.is_empty() {
+        println!();
+        print_versioned_links(&runtime, &meta.versioned_links, &package_dir, Some("Versioned links (historical):"));
     }
 
     Ok(())
@@ -278,16 +395,14 @@ pub fn show<R: Runtime>(
 
         // Links
         if !meta.links.is_empty() {
-            println!("\nLinks:");
-            for rule in &meta.links {
-                let exists = runtime.is_symlink(&rule.dest);
-                let status = if exists { "" } else { " (broken)" };
-                if let Some(ref path) = rule.path {
-                    println!("  {} -> {:?}{}", path, rule.dest, status);
-                } else {
-                    println!("  (default) -> {:?}{}", rule.dest, status);
-                }
-            }
+            println!();
+            print_links(&runtime, &meta.links, &current_link, Some("Links:"));
+        }
+
+        // Versioned links (historical)
+        if !meta.versioned_links.is_empty() {
+            println!();
+            print_versioned_links(&runtime, &meta.versioned_links, &package_dir, Some("Versioned links (historical):"));
         }
     }
 
@@ -388,21 +503,53 @@ fn remove_version<R: Runtime>(
         );
     }
 
-    // Remove links pointing to this version (but don't modify meta.json)
+    // Remove links pointing to this version (but don't modify meta.json for regular links)
     if let Some(meta) = meta {
         for rule in &meta.links {
+            // For regular links, only remove if pointing to this specific version
             if runtime.is_symlink(&rule.dest) {
                 if let Ok(target) = runtime.read_link(&rule.dest) {
+                    let resolved_target = if target.is_relative() {
+                        rule.dest.parent().unwrap_or(Path::new(".")).join(&target)
+                    } else {
+                        target
+                    };
+                    
                     // Check if link points to this version
-                    if target.starts_with(&version_dir) {
-                        debug!("Removing link {:?} pointing to version {}", rule.dest, version);
-                        if let Err(e) = runtime.remove_symlink(&rule.dest) {
-                            warn!("Failed to remove link {:?}: {}", rule.dest, e);
-                        } else {
-                            println!("Removed link {:?}", rule.dest);
-                        }
+                    if resolved_target.starts_with(&version_dir) {
+                        let _ = runtime.remove_symlink_if_target_under(
+                            &rule.dest,
+                            &version_dir,
+                            "link",
+                        );
                     }
                 }
+            }
+        }
+        // Also remove versioned links for this version
+        for link in &meta.versioned_links {
+            if link.version == version {
+                let _ = runtime.remove_symlink_if_target_under(
+                    &link.dest,
+                    &version_dir,
+                    "versioned link",
+                );
+            }
+        }
+    }
+
+    // Update meta.json to remove versioned_links for this version
+    let meta_path = package_dir.join("meta.json");
+    if runtime.exists(&meta_path) {
+        if let Ok(mut meta) = Meta::load(runtime, &meta_path) {
+            let original_len = meta.versioned_links.len();
+            meta.versioned_links.retain(|l| l.version != version);
+            if meta.versioned_links.len() != original_len {
+                debug!("Removed {} versioned link(s) from meta.json", original_len - meta.versioned_links.len());
+                let json = serde_json::to_string_pretty(&meta)?;
+                let tmp_path = meta_path.with_extension("json.tmp");
+                runtime.write(&tmp_path, json.as_bytes())?;
+                runtime.rename(&tmp_path, &meta_path)?;
             }
         }
     }
@@ -433,21 +580,20 @@ fn remove_package<R: Runtime>(
     if let Some(meta) = meta {
         debug!("Removing {} link(s)", meta.links.len());
         for rule in &meta.links {
-            if runtime.exists(&rule.dest) || runtime.is_symlink(&rule.dest) {
-                if runtime.is_symlink(&rule.dest) {
-                    debug!("Removing link {:?}", rule.dest);
-                    if let Err(e) = runtime.remove_symlink(&rule.dest) {
-                        warn!("Failed to remove link {:?}: {}", rule.dest, e);
-                        eprintln!("Warning: Failed to remove link {:?}: {}", rule.dest, e);
-                    } else {
-                        println!("Removed link {:?}", rule.dest);
-                    }
-                } else {
-                    warn!("Path {:?} is not a symlink, skipping", rule.dest);
-                }
-            } else {
-                debug!("Link {:?} does not exist, skipping", rule.dest);
-            }
+            let _ = runtime.remove_symlink_if_target_under(
+                &rule.dest,
+                package_dir,
+                "link",
+            );
+        }
+        // Also remove versioned links
+        debug!("Removing {} versioned link(s)", meta.versioned_links.len());
+        for link in &meta.versioned_links {
+            let _ = runtime.remove_symlink_if_target_under(
+                &link.dest,
+                package_dir,
+                "versioned link",
+            );
         }
     }
 
@@ -778,18 +924,38 @@ pub fn link<R: Runtime>(
     runtime.symlink(&link_target, &final_dest)?;
 
     // Add or update link rule in meta.json
-    let new_rule = LinkRule {
-        dest: final_dest.clone(),
-        path: spec.path.clone(),
-    };
+    // If a version was explicitly specified, save to versioned_links (not updated on install/update)
+    // Otherwise save to links (updated on install/update)
+    if spec.version.is_some() {
+        let new_link = VersionedLink {
+            version: version.clone(),
+            dest: final_dest.clone(),
+            path: spec.path.clone(),
+        };
 
-    // Check if a rule with the same dest already exists
-    if let Some(existing) = meta.links.iter_mut().find(|l| l.dest == final_dest) {
-        // Update existing rule
-        existing.path = new_rule.path;
+        // Check if a versioned link with the same dest already exists
+        if let Some(existing) = meta.versioned_links.iter_mut().find(|l| l.dest == final_dest) {
+            // Update existing versioned link
+            existing.version = new_link.version;
+            existing.path = new_link.path;
+        } else {
+            // Add new versioned link
+            meta.versioned_links.push(new_link);
+        }
     } else {
-        // Add new rule
-        meta.links.push(new_rule);
+        let new_rule = LinkRule {
+            dest: final_dest.clone(),
+            path: spec.path.clone(),
+        };
+
+        // Check if a rule with the same dest already exists
+        if let Some(existing) = meta.links.iter_mut().find(|l| l.dest == final_dest) {
+            // Update existing rule
+            existing.path = new_rule.path;
+        } else {
+            // Add new rule
+            meta.links.push(new_rule);
+        }
     }
 
     // Clear legacy fields (migration is done by apply_defaults on load)
@@ -2635,19 +2801,11 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Link exists and is symlink
+        // Remove symlink if target is under package directory
         runtime
-            .expect_exists()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_remove_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| Ok(()));
+            .expect_remove_symlink_if_target_under()
+            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
+            .returning(|_, _, _| Ok(true));
 
         // Remove package directory
         runtime
@@ -2909,11 +3067,19 @@ mod tests {
             .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/current")))
             .returning(|_| false);
 
-        // Check if link exists (for broken link check)
+        // Check link status - exists and is_symlink checks for link dest
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/current/bin/tool")));
 
         let result = show(runtime, "owner/repo", Some(root));
         assert!(result.is_ok());
@@ -2987,6 +3153,142 @@ mod tests {
             .returning(|_| true);
 
         let result = show(runtime, "owner/repo", Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remove_package_link_points_to_wrong_location() {
+        // Test that links pointing outside the package directory are not removed
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let owner_dir = root.join("owner");
+        let package_dir = owner_dir.join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta with one link
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            links: vec![LinkRule {
+                dest: link_dest.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Link points to different package, should return Ok(false) - skipped
+        runtime
+            .expect_remove_symlink_if_target_under()
+            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
+            .returning(|_, _, _| Ok(false));
+
+        // Remove package directory
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(package_dir.clone()))
+            .returning(|_| Ok(()));
+
+        // Check if owner directory is empty
+        runtime
+            .expect_exists()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| Ok(vec![]));
+        runtime
+            .expect_remove_dir()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| Ok(()));
+
+        let result = remove(runtime, "owner/repo", false, Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remove_package_link_not_symlink() {
+        // Test that regular files are not removed
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let owner_dir = root.join("owner");
+        let package_dir = owner_dir.join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta with one link
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            links: vec![LinkRule {
+                dest: link_dest.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Link path is not a symlink, should return Ok(false) - skipped
+        runtime
+            .expect_remove_symlink_if_target_under()
+            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
+            .returning(|_, _, _| Ok(false));
+
+        // Remove package directory
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(package_dir.clone()))
+            .returning(|_| Ok(()));
+
+        // Check if owner directory is empty
+        runtime
+            .expect_exists()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| Ok(vec![]));
+        runtime
+            .expect_remove_dir()
+            .with(eq(owner_dir.clone()))
+            .returning(|_| Ok(()));
+
+        let result = remove(runtime, "owner/repo", false, Some(root));
         assert!(result.is_ok());
     }
 }

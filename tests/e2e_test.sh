@@ -1405,6 +1405,284 @@ test_unlink_colon_in_repo_name() {
     fi
 }
 
+test_versioned_link_creation() {
+    log_section "Test: Versioned link with @version goes to versioned_links"
+
+    local install_root="$TEST_ROOT/versioned_link"
+    local link_path="$TEST_ROOT/versioned_link_bin/bach"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Get the installed version
+    local version
+    version=$(cat "$install_root/bach-sh/bach/meta.json" | grep '"current_version"' | sed 's/.*: *"\([^"]*\)".*/\1/')
+    log_info "Installed version: $version"
+
+    # Create versioned link
+    log_info "Creating versioned link bach-sh/bach@$version..."
+    if ! "$GHRI_BIN" link "bach-sh/bach@$version" "$link_path" --root "$install_root"; then
+        log_fail "Versioned link command failed"
+        return 1
+    fi
+
+    # Verify link exists
+    if [[ -L "$link_path" ]]; then
+        log_success "Versioned link created"
+    else
+        log_fail "Versioned link was not created"
+        return 1
+    fi
+
+    # Verify meta.json has versioned_links entry (not links)
+    if grep -q '"versioned_links"' "$install_root/bach-sh/bach/meta.json"; then
+        log_success "versioned_links field exists in meta.json"
+    else
+        log_fail "versioned_links field not found in meta.json"
+        return 1
+    fi
+
+    # Verify the version is recorded
+    if grep -q "\"version\": *\"$version\"" "$install_root/bach-sh/bach/meta.json"; then
+        log_success "Version recorded in versioned_links"
+    else
+        log_fail "Version not recorded in versioned_links"
+    fi
+
+    # Verify it's NOT in regular links array
+    local links_count
+    links_count=$(grep -c '"links"' "$install_root/bach-sh/bach/meta.json" || true)
+    if [[ $links_count -le 1 ]]; then
+        log_success "Not duplicated in regular links"
+    fi
+}
+
+test_versioned_link_not_updated_on_install() {
+    log_section "Test: Versioned links are not updated on new install"
+
+    local install_root="$TEST_ROOT/versioned_no_update"
+    local link_path="$TEST_ROOT/versioned_no_update_bin/bach"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach at specific version
+    log_info "Installing bach-sh/bach@0.7.1..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create versioned link to 0.7.1
+    log_info "Creating versioned link to 0.7.1..."
+    if ! "$GHRI_BIN" link "bach-sh/bach@0.7.1" "$link_path" --root "$install_root"; then
+        log_fail "Versioned link command failed"
+        return 1
+    fi
+
+    # Save the original target
+    local original_target
+    original_target=$(readlink "$link_path")
+    log_info "Original link target: $original_target"
+
+    # Now install a newer version
+    log_info "Installing bach-sh/bach@0.7.2..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+        log_fail "Second install command failed"
+        return 1
+    fi
+
+    # Verify the versioned link still points to original version
+    local new_target
+    new_target=$(readlink "$link_path")
+    log_info "Link target after update: $new_target"
+
+    if [[ "$original_target" == "$new_target" ]]; then
+        log_success "Versioned link not updated on new install"
+    else
+        log_fail "Versioned link was incorrectly updated"
+    fi
+
+    # Verify it still points to 0.7.1
+    if echo "$new_target" | grep -q "0.7.1"; then
+        log_success "Link still points to version 0.7.1"
+    else
+        log_fail "Link no longer points to 0.7.1"
+    fi
+}
+
+test_versioned_link_removed_with_version() {
+    log_section "Test: Versioned links removed when version is removed"
+
+    local install_root="$TEST_ROOT/versioned_remove"
+    local link_path="$TEST_ROOT/versioned_remove_bin/bach"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install two versions
+    log_info "Installing bach-sh/bach@0.7.1..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+        log_fail "First install command failed"
+        return 1
+    fi
+
+    log_info "Installing bach-sh/bach@0.7.2..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+        log_fail "Second install command failed"
+        return 1
+    fi
+
+    # Create versioned link to 0.7.1
+    log_info "Creating versioned link to 0.7.1..."
+    if ! "$GHRI_BIN" link "bach-sh/bach@0.7.1" "$link_path" --root "$install_root"; then
+        log_fail "Versioned link command failed"
+        return 1
+    fi
+
+    # Verify link exists
+    if [[ -L "$link_path" ]]; then
+        log_success "Versioned link created"
+    else
+        log_fail "Versioned link was not created"
+        return 1
+    fi
+
+    # Remove version 0.7.1
+    log_info "Removing version 0.7.1..."
+    if ! "$GHRI_BIN" remove "bach-sh/bach@0.7.1" --root "$install_root"; then
+        log_fail "Remove version command failed"
+        return 1
+    fi
+
+    # Verify link is removed
+    if [[ ! -e "$link_path" ]]; then
+        log_success "Versioned link removed with version"
+    else
+        log_fail "Versioned link still exists after version removal"
+    fi
+
+    # Verify versioned_links entry is removed from meta.json
+    if ! grep -q '"0.7.1"' "$install_root/bach-sh/bach/meta.json" 2>/dev/null; then
+        log_success "Versioned link entry removed from meta.json"
+    else
+        log_fail "Versioned link entry still in meta.json"
+    fi
+}
+
+test_versioned_link_shown_in_show() {
+    log_section "Test: Versioned links shown in show command"
+
+    local install_root="$TEST_ROOT/versioned_show"
+    local link_path="$TEST_ROOT/versioned_show_bin/bach"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Get version
+    local version
+    version=$(cat "$install_root/bach-sh/bach/meta.json" | grep '"current_version"' | sed 's/.*: *"\([^"]*\)".*/\1/')
+
+    # Create versioned link
+    log_info "Creating versioned link..."
+    if ! "$GHRI_BIN" link "bach-sh/bach@$version" "$link_path" --root "$install_root"; then
+        log_fail "Versioned link command failed"
+        return 1
+    fi
+
+    # Check show output contains versioned link info
+    local show_output
+    show_output=$("$GHRI_BIN" show bach-sh/bach --root "$install_root" 2>&1)
+
+    if echo "$show_output" | grep -qi "versioned\|$version.*$link_path\|$link_path.*$version"; then
+        log_success "Show command displays versioned link"
+    else
+        log_info "Show output: $show_output"
+        # Check if link_path appears at all
+        if echo "$show_output" | grep -q "$link_path"; then
+            log_success "Show command displays link path"
+        else
+            log_fail "Show command does not display versioned link"
+        fi
+    fi
+}
+
+test_regular_vs_versioned_links() {
+    log_section "Test: Regular and versioned links coexist"
+
+    local install_root="$TEST_ROOT/mixed_links"
+    local regular_link="$TEST_ROOT/mixed_links_bin/bach_current"
+    local versioned_link="$TEST_ROOT/mixed_links_bin/bach_pinned"
+    mkdir -p "$install_root" "$(dirname "$regular_link")"
+
+    # Install two versions
+    log_info "Installing bach-sh/bach@0.7.1..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+        log_fail "First install failed"
+        return 1
+    fi
+
+    log_info "Installing bach-sh/bach@0.7.2..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+        log_fail "Second install failed"
+        return 1
+    fi
+
+    # Create regular link (follows current version)
+    log_info "Creating regular link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$regular_link" --root "$install_root"; then
+        log_fail "Regular link failed"
+        return 1
+    fi
+
+    # Create versioned link (pinned to 0.7.1)
+    log_info "Creating versioned link to 0.7.1..."
+    if ! "$GHRI_BIN" link "bach-sh/bach@0.7.1" "$versioned_link" --root "$install_root"; then
+        log_fail "Versioned link failed"
+        return 1
+    fi
+
+    # Verify both links exist
+    if [[ -L "$regular_link" ]] && [[ -L "$versioned_link" ]]; then
+        log_success "Both links created"
+    else
+        log_fail "Not all links were created"
+        return 1
+    fi
+
+    # Verify meta.json has both links and versioned_links
+    if grep -q '"links"' "$install_root/bach-sh/bach/meta.json" && \
+       grep -q '"versioned_links"' "$install_root/bach-sh/bach/meta.json"; then
+        log_success "Both links and versioned_links in meta.json"
+    else
+        log_fail "Missing links or versioned_links in meta.json"
+    fi
+
+    # Regular link should point to current (0.7.2)
+    local regular_target
+    regular_target=$(readlink "$regular_link")
+    if echo "$regular_target" | grep -q "0.7.2\|current"; then
+        log_success "Regular link points to current version"
+    else
+        log_info "Regular link target: $regular_target"
+    fi
+
+    # Versioned link should point to 0.7.1
+    local versioned_target
+    versioned_target=$(readlink "$versioned_link")
+    if echo "$versioned_target" | grep -q "0.7.1"; then
+        log_success "Versioned link points to pinned version"
+    else
+        log_fail "Versioned link does not point to 0.7.1: $versioned_target"
+    fi
+}
+
 #######################################
 # Remove Tests
 #######################################
@@ -1647,6 +1925,112 @@ test_remove_with_multiple_links() {
     fi
 }
 
+test_remove_validates_link_target() {
+    log_section "Test: Remove validates link target before deletion"
+
+    local install_root="$TEST_ROOT/remove_validate_link"
+    local link_dest="$TEST_ROOT/remove_validate_link_bin/link"
+    mkdir -p "$install_root" "$(dirname "$link_dest")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create a link
+    log_info "Creating link..."
+    "$GHRI_BIN" link bach-sh/bach "$link_dest" --root "$install_root" >/dev/null 2>&1
+
+    # Verify link exists
+    if [[ -L "$link_dest" ]]; then
+        log_success "Link created"
+    else
+        log_fail "Link not created"
+        return 1
+    fi
+
+    # Manually modify the link to point elsewhere (simulating corruption)
+    log_info "Modifying link to point elsewhere..."
+    rm "$link_dest"
+    ln -s /tmp/some/other/location "$link_dest"
+
+    # Remove package - should warn about wrong target but not fail
+    log_info "Removing package..."
+    local output
+    if output=$("$GHRI_BIN" remove bach-sh/bach --root "$install_root" 2>&1); then
+        log_success "Remove command succeeded"
+    else
+        log_fail "Remove command failed"
+        return 1
+    fi
+
+    # Verify the wrongly-targeted link was NOT removed
+    if [[ -L "$link_dest" ]]; then
+        log_success "Link with wrong target was preserved (not removed)"
+    else
+        log_fail "Link with wrong target was incorrectly removed"
+        return 1
+    fi
+
+    # Verify package directory was removed
+    if [[ ! -d "$install_root/bach-sh/bach" ]]; then
+        log_success "Package directory removed"
+    else
+        log_fail "Package directory still exists"
+        return 1
+    fi
+
+    # Cleanup the test link
+    rm -f "$link_dest"
+}
+
+test_remove_preserves_regular_file() {
+    log_section "Test: Remove preserves regular file at link destination"
+
+    local install_root="$TEST_ROOT/remove_preserve_file"
+    local link_dest="$TEST_ROOT/remove_preserve_file_bin/tool"
+    mkdir -p "$install_root" "$(dirname "$link_dest")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create a link first
+    log_info "Creating link..."
+    "$GHRI_BIN" link bach-sh/bach "$link_dest" --root "$install_root" >/dev/null 2>&1
+
+    # Replace the link with a regular file
+    log_info "Replacing link with regular file..."
+    rm "$link_dest"
+    echo "This is a regular file" > "$link_dest"
+
+    # Remove package - should warn but not delete the file
+    log_info "Removing package..."
+    local output
+    if output=$("$GHRI_BIN" remove bach-sh/bach --root "$install_root" 2>&1); then
+        log_success "Remove command succeeded"
+    else
+        log_fail "Remove command failed"
+        return 1
+    fi
+
+    # Verify the regular file was NOT removed
+    if [[ -f "$link_dest" ]] && [[ ! -L "$link_dest" ]]; then
+        log_success "Regular file was preserved (not removed)"
+    else
+        log_fail "Regular file was incorrectly removed or is a symlink"
+        return 1
+    fi
+
+    # Cleanup
+    rm -f "$link_dest"
+}
+
 #######################################
 # Main
 #######################################
@@ -1700,12 +2084,21 @@ main() {
     test_unlink_by_path
     test_unlink_colon_in_repo_name
 
+    # Versioned link tests
+    test_versioned_link_creation
+    test_versioned_link_not_updated_on_install
+    test_versioned_link_removed_with_version
+    test_versioned_link_shown_in_show
+    test_regular_vs_versioned_links
+
     # Remove command tests
     test_remove_package
     test_remove_specific_version
     test_remove_current_version_requires_force
     test_remove_fails_for_uninstalled
     test_remove_with_multiple_links
+    test_remove_validates_link_target
+    test_remove_preserves_regular_file
 
     # Summary
     log_section "Test Summary"
