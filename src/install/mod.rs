@@ -927,7 +927,7 @@ mod tests {
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
         runtime.expect_exists().returning(|_| true);
-        runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"","releases":[]}"#.into()));
+        runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"https://api.github.com","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[]}"#.into()));
 
         let installer = Installer::new(
             runtime,

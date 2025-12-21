@@ -1,22 +1,42 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
 
 use crate::github::{GitHubRepo, Release, ReleaseAsset, RepoInfo};
 use crate::runtime::Runtime;
 
+const DEFAULT_API_URL: &str = "https://api.github.com";
+
+/// Deserialize a string that may be null as empty string
+fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// Package metadata stored locally for installed packages
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Meta {
     pub name: String,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub api_url: String,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub repo_info_url: String,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub releases_url: String,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub homepage: Option<String>,
+    #[serde(default)]
     pub license: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub updated_at: String,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub current_version: String,
+    #[serde(default)]
     pub releases: Vec<MetaRelease>,
 }
 
@@ -76,11 +96,86 @@ impl Meta {
             })
     }
 
+    /// Load meta.json and apply default values for missing fields
     #[tracing::instrument(skip(runtime, path))]
     pub fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
         let content = runtime.read_to_string(path)?;
-        let meta: Meta = serde_json::from_str(&content)?;
+        let mut meta: Meta = serde_json::from_str(&content)?;
+        
+        // Apply semantic defaults for missing fields
+        meta.apply_defaults(runtime, path);
+        
         Ok(meta)
+    }
+
+    /// Check if a string is effectively empty (None, empty, or whitespace-only)
+    fn is_empty_or_blank(s: &str) -> bool {
+        s.trim().is_empty()
+    }
+
+    /// Check if an Option<String> is effectively empty
+    fn is_option_empty_or_blank(s: &Option<String>) -> bool {
+        match s {
+            None => true,
+            Some(s) => Self::is_empty_or_blank(s),
+        }
+    }
+
+    /// Apply semantic default values for fields that are empty after deserialization
+    fn apply_defaults<R: Runtime>(&mut self, runtime: &R, meta_path: &Path) {
+        // Parse owner/repo from name
+        let (owner, repo) = self.parse_owner_repo();
+
+        // Default api_url to GitHub API
+        if Self::is_empty_or_blank(&self.api_url) {
+            self.api_url = DEFAULT_API_URL.to_string();
+        }
+
+        // Default repo_info_url based on api_url and name
+        if Self::is_empty_or_blank(&self.repo_info_url) && !owner.is_empty() && !repo.is_empty() {
+            self.repo_info_url = format!("{}/repos/{}/{}", self.api_url, owner, repo);
+        }
+
+        // Default releases_url based on api_url and name
+        if Self::is_empty_or_blank(&self.releases_url) && !owner.is_empty() && !repo.is_empty() {
+            self.releases_url = format!("{}/repos/{}/{}/releases", self.api_url, owner, repo);
+        }
+
+        // Default homepage to GitHub repo page (also handle empty string in Some)
+        if Self::is_option_empty_or_blank(&self.homepage) && !owner.is_empty() && !repo.is_empty() {
+            // Convert API URL to web URL
+            let web_url = if self.api_url.contains("api.github.com") {
+                "https://github.com".to_string()
+            } else {
+                // For GitHub Enterprise, try to derive web URL from API URL
+                self.api_url
+                    .replace("/api/v3", "")
+                    .replace("api.", "")
+            };
+            self.homepage = Some(format!("{}/{}/{}", web_url, owner, repo));
+        }
+
+        // Default current_version by reading the 'current' symlink
+        if Self::is_empty_or_blank(&self.current_version) {
+            if let Some(parent) = meta_path.parent() {
+                let current_link = parent.join("current");
+                if let Ok(target) = runtime.read_link(&current_link) {
+                    if let Some(version) = target.file_name().and_then(|s| s.to_str()) {
+                        self.current_version = version.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Parse owner and repo from the name field (format: "owner/repo")
+    fn parse_owner_repo(&self) -> (String, String) {
+        let parts: Vec<&str> = self.name.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            (String::new(), String::new())
+        }
     }
 
     pub fn merge(&mut self, other: Meta) -> bool {
@@ -127,10 +222,15 @@ impl Meta {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MetaRelease {
     pub version: String,
+    #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
     pub published_at: Option<String>,
+    #[serde(default)]
     pub is_prerelease: bool,
+    #[serde(default)]
     pub tarball_url: String,
+    #[serde(default)]
     pub assets: Vec<MetaAsset>,
 }
 
@@ -164,7 +264,9 @@ impl From<MetaRelease> for Release {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MetaAsset {
     pub name: String,
+    #[serde(default)]
     pub size: u64,
+    #[serde(default)]
     pub download_url: String,
 }
 
@@ -460,7 +562,7 @@ mod tests {
     #[test]
     fn test_meta_load() {
         let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/test/meta.json");
+        let path = PathBuf::from("/test/owner/repo/meta.json");
 
         runtime
             .expect_read_to_string()
@@ -468,11 +570,11 @@ mod tests {
             .returning(|_| {
                 Ok(r#"{
                     "name": "o/r",
-                    "api_url": "api",
+                    "api_url": "https://api.example.com",
                     "repo_info_url": "url",
                     "releases_url": "url",
                     "description": null,
-                    "homepage": null,
+                    "homepage": "https://example.com",
                     "license": null,
                     "updated_at": "now",
                     "current_version": "v1",
@@ -481,8 +583,357 @@ mod tests {
                 .into())
             });
 
+        // No symlink read needed since current_version is provided
         let meta = Meta::load(&runtime, &path).unwrap();
         assert_eq!(meta.name, "o/r");
         assert_eq!(meta.current_version, "v1");
+        assert_eq!(meta.api_url, "https://api.example.com");
+        assert_eq!(meta.homepage, Some("https://example.com".into()));
+    }
+
+    #[test]
+    fn test_meta_load_minimal_json_backward_compat() {
+        // Test loading a minimal meta.json that might have been created by an older version
+        // Only the required field "name" is present
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .with(eq(path.clone()))
+            .returning(|_| {
+                Ok(r#"{"name": "owner/repo"}"#.into())
+            });
+
+        // Mock read_link for current symlink (will fail, so current_version stays empty)
+        runtime
+            .expect_read_link()
+            .returning(|_| Err(anyhow::anyhow!("not found")));
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        assert_eq!(meta.name, "owner/repo");
+        // api_url should default to GitHub API
+        assert_eq!(meta.api_url, "https://api.github.com");
+        // URLs should be derived from name and api_url
+        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
+        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        // homepage should default to GitHub page
+        assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
+        assert_eq!(meta.description, None);
+        assert_eq!(meta.license, None);
+        assert_eq!(meta.updated_at, "");
+        // current_version stays empty since symlink read failed
+        assert_eq!(meta.current_version, "");
+        assert!(meta.releases.is_empty());
+    }
+
+    #[test]
+    fn test_meta_load_partial_fields_backward_compat() {
+        // Test loading meta.json with some fields missing (simulating older format)
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .with(eq(path.clone()))
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "current_version": "v1.0.0",
+                    "releases": [
+                        {"version": "v1.0.0"}
+                    ]
+                }"#.into())
+            });
+
+        // No symlink read needed since current_version is provided
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        assert_eq!(meta.name, "owner/repo");
+        assert_eq!(meta.current_version, "v1.0.0");
+        // api_url should default to GitHub API
+        assert_eq!(meta.api_url, "https://api.github.com");
+        assert!(meta.releases.len() == 1);
+        // Release with minimal fields
+        let release = &meta.releases[0];
+        assert_eq!(release.version, "v1.0.0");
+        assert_eq!(release.tarball_url, "");
+        assert!(!release.is_prerelease);
+        assert!(release.assets.is_empty());
+    }
+
+    #[test]
+    fn test_meta_release_minimal_backward_compat() {
+        // Test deserializing a release with only version field
+        let json = r#"{"version": "v2.0.0"}"#;
+        let release: MetaRelease = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(release.version, "v2.0.0");
+        assert_eq!(release.title, None);
+        assert_eq!(release.published_at, None);
+        assert!(!release.is_prerelease);
+        assert_eq!(release.tarball_url, "");
+        assert!(release.assets.is_empty());
+    }
+
+    #[test]
+    fn test_meta_asset_minimal_backward_compat() {
+        // Test deserializing an asset with only name field
+        let json = r#"{"name": "app-linux-x64.tar.gz"}"#;
+        let asset: MetaAsset = serde_json::from_str(json).unwrap();
+        
+        assert_eq!(asset.name, "app-linux-x64.tar.gz");
+        assert_eq!(asset.size, 0);
+        assert_eq!(asset.download_url, "");
+    }
+
+    #[test]
+    fn test_meta_load_with_unknown_fields_forward_compat() {
+        // Test that unknown fields are ignored (forward compatibility)
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .with(eq(path.clone()))
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "current_version": "v1.0.0",
+                    "some_future_field": "some_value",
+                    "another_new_field": 12345,
+                    "releases": []
+                }"#.into())
+            });
+
+        // Should not fail even with unknown fields
+        let meta = Meta::load(&runtime, &path).unwrap();
+        assert_eq!(meta.name, "owner/repo");
+        assert_eq!(meta.current_version, "v1.0.0");
+    }
+
+    #[test]
+    fn test_meta_load_current_version_from_symlink() {
+        // Test that current_version is read from symlink when missing in JSON
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .with(eq(path.clone()))
+            .returning(|_| {
+                Ok(r#"{"name": "owner/repo"}"#.into())
+            });
+
+        // Mock read_link to return the version from symlink
+        runtime
+            .expect_read_link()
+            .with(eq(PathBuf::from("/root/owner/repo/current")))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        assert_eq!(meta.name, "owner/repo");
+        // current_version should be read from symlink
+        assert_eq!(meta.current_version, "v2.0.0");
+    }
+
+    #[test]
+    fn test_meta_load_homepage_default_for_github() {
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{"name": "test-owner/test-repo", "current_version": "v1"}"#.into())
+            });
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        // Homepage should default to GitHub URL
+        assert_eq!(meta.homepage, Some("https://github.com/test-owner/test-repo".into()));
+    }
+
+    #[test]
+    fn test_meta_load_preserves_explicit_homepage() {
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "homepage": "https://custom-homepage.com",
+                    "current_version": "v1"
+                }"#.into())
+            });
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        // Explicit homepage should be preserved
+        assert_eq!(meta.homepage, Some("https://custom-homepage.com".into()));
+    }
+
+    #[test]
+    fn test_meta_parse_owner_repo() {
+        let meta = Meta {
+            name: "owner/repo".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+
+        let (owner, repo) = meta.parse_owner_repo();
+        assert_eq!(owner, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_meta_parse_owner_repo_invalid() {
+        let meta = Meta {
+            name: "invalid-name".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "".into(),
+            releases: vec![],
+        };
+
+        let (owner, repo) = meta.parse_owner_repo();
+        assert_eq!(owner, "");
+        assert_eq!(repo, "");
+    }
+
+    #[test]
+    fn test_meta_load_with_null_values() {
+        // Test that null values in JSON are handled properly
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "api_url": null,
+                    "repo_info_url": null,
+                    "releases_url": null,
+                    "homepage": null,
+                    "current_version": "v1"
+                }"#.into())
+            });
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        assert_eq!(meta.name, "owner/repo");
+        // Null should be treated as missing, defaults applied
+        assert_eq!(meta.api_url, "https://api.github.com");
+        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
+        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
+    }
+
+    #[test]
+    fn test_meta_load_with_empty_strings() {
+        // Test that empty strings are treated as missing
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "api_url": "",
+                    "repo_info_url": "",
+                    "releases_url": "",
+                    "homepage": "",
+                    "current_version": "v1"
+                }"#.into())
+            });
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        // Empty strings should be treated as missing, defaults applied
+        assert_eq!(meta.api_url, "https://api.github.com");
+        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
+        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
+    }
+
+    #[test]
+    fn test_meta_load_with_whitespace_strings() {
+        // Test that whitespace-only strings are treated as missing
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "api_url": "   ",
+                    "repo_info_url": "  \t  ",
+                    "releases_url": "\n",
+                    "homepage": "   ",
+                    "current_version": "v1"
+                }"#.into())
+            });
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        // Whitespace-only strings should be treated as missing, defaults applied
+        assert_eq!(meta.api_url, "https://api.github.com");
+        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
+        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
+    }
+
+    #[test]
+    fn test_meta_load_current_version_whitespace_reads_symlink() {
+        // Test that whitespace-only current_version triggers symlink read
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/root/owner/repo/meta.json");
+
+        runtime
+            .expect_read_to_string()
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "current_version": "   "
+                }"#.into())
+            });
+
+        runtime
+            .expect_read_link()
+            .with(eq(PathBuf::from("/root/owner/repo/current")))
+            .returning(|_| Ok(PathBuf::from("v3.0.0")));
+
+        let meta = Meta::load(&runtime, &path).unwrap();
+        // Whitespace current_version should trigger symlink read
+        assert_eq!(meta.current_version, "v3.0.0");
+    }
+
+    #[test]
+    fn test_is_empty_or_blank() {
+        assert!(Meta::is_empty_or_blank(""));
+        assert!(Meta::is_empty_or_blank("   "));
+        assert!(Meta::is_empty_or_blank("\t\n"));
+        assert!(!Meta::is_empty_or_blank("value"));
+        assert!(!Meta::is_empty_or_blank("  value  "));
+    }
+
+    #[test]
+    fn test_is_option_empty_or_blank() {
+        assert!(Meta::is_option_empty_or_blank(&None));
+        assert!(Meta::is_option_empty_or_blank(&Some("".into())));
+        assert!(Meta::is_option_empty_or_blank(&Some("   ".into())));
+        assert!(!Meta::is_option_empty_or_blank(&Some("value".into())));
     }
 }
