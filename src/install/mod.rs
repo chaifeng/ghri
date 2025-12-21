@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     archive::Extractor,
     download::download_file,
-    github::{GetReleases, GitHubRepo, Release},
+    github::{GetReleases, GitHubRepo, Release, RepoSpec},
     package::{Meta, find_all_packages},
     runtime::Runtime,
 };
@@ -35,14 +35,14 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     repo_str: &str,
     config: Config<R, G, E>,
 ) -> Result<()> {
-    let repo = repo_str.parse::<GitHubRepo>()?;
+    let spec = repo_str.parse::<RepoSpec>()?;
     let installer = Installer::new(
         config.runtime,
         config.github,
         config.client,
         config.extractor,
     );
-    installer.install(&repo, config.install_root).await
+    installer.install(&spec.repo, spec.version.as_deref(), config.install_root).await
 }
 
 #[tracing::instrument(skip(runtime, install_root, api_url))]
@@ -79,18 +79,28 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         }
     }
 
-    #[tracing::instrument(skip(self, repo, install_root))]
-    pub async fn install(&self, repo: &GitHubRepo, install_root: Option<PathBuf>) -> Result<()> {
+    #[tracing::instrument(skip(self, repo, version, install_root))]
+    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path) = self
             .get_or_fetch_meta(repo, install_root.as_deref())
             .await?;
 
-        let meta_release = meta
-            .get_latest_stable_release()
-            .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, please use the update command or specify the version (not yet supported).", repo))?;
+        let meta_release = if let Some(ver) = version {
+            // Find the specific version
+            meta.releases
+                .iter()
+                .find(|r| r.version == ver || r.version == format!("v{}", ver) || r.version.trim_start_matches('v') == ver.trim_start_matches('v'))
+                .ok_or_else(|| anyhow::anyhow!("Version '{}' not found for {}. Available versions: {}", 
+                    ver, repo, 
+                    meta.releases.iter().take(5).map(|r| r.version.as_str()).collect::<Vec<_>>().join(", ")))?
+        } else {
+            // Get latest stable release
+            meta.get_latest_stable_release()
+                .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version.", repo))?
+        };
 
-        info!("Found latest version: {}", meta_release.version);
+        info!("Found version: {}", meta_release.version);
         let release: Release = meta_release.clone().into();
 
         let target_dir = get_target_dir(&self.runtime, repo, &release, install_root)?;
@@ -446,7 +456,7 @@ mod tests {
             .returning(|_: &MockRuntime, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
-        installer.install(&repo, None).await.unwrap();
+        installer.install(&repo, None, None).await.unwrap();
     }
 
     #[tokio::test]
@@ -704,7 +714,7 @@ mod tests {
         });
 
         let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
-        let result = installer.install(&repo, None).await;
+        let result = installer.install(&repo, None, None).await;
         assert!(result.is_err());
         assert!(
             result
@@ -912,7 +922,7 @@ mod tests {
             .returning(|_: &MockRuntime, _, _| Ok(()));
 
         let installer = Installer::new(runtime, github, Client::new(), extractor);
-        let result = installer.install(&repo, None).await;
+        let result = installer.install(&repo, None, None).await;
         assert!(result.is_ok());
     }
 
@@ -989,6 +999,7 @@ mod tests {
                     owner: "o".into(),
                     repo: "r".into(),
                 },
+                None,
                 None,
             )
             .await

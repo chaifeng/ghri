@@ -305,6 +305,76 @@ test_install_multiple_packages() {
     assert_file_exists "$install_root/chaifeng/zidr/meta.json" "zidr meta.json exists"
 }
 
+test_install_specific_version() {
+    log_section "Test: Install specific version with @version syntax"
+    
+    local install_root="$TEST_ROOT/install_version"
+    mkdir -p "$install_root"
+    
+    # Install a specific older version
+    log_info "Installing bach-sh/bach@0.6.0..."
+    if "$GHRI_BIN" install "bach-sh/bach@0.6.0" --root "$install_root"; then
+        log_success "Install specific version command succeeded"
+    else
+        log_fail "Install specific version command failed"
+        return 1
+    fi
+    
+    # Verify the specific version was installed
+    assert_dir_exists "$install_root/bach-sh/bach/0.6.0" "Version 0.6.0 directory exists"
+    
+    # Verify current points to the specific version
+    assert_symlink_target "$install_root/bach-sh/bach/current" "0.6.0" "current symlink points to 0.6.0"
+    
+    # Verify meta.json has the correct current_version
+    if grep -q '"current_version": "0.6.0"' "$install_root/bach-sh/bach/meta.json"; then
+        log_success "meta.json current_version is 0.6.0"
+    else
+        log_fail "meta.json current_version should be 0.6.0"
+        return 1
+    fi
+}
+
+test_install_version_with_v_prefix() {
+    log_section "Test: Install version with v prefix"
+    
+    local install_root="$TEST_ROOT/install_v_prefix"
+    mkdir -p "$install_root"
+    
+    # Install using v-prefixed version (zidr uses v prefix)
+    log_info "Installing chaifeng/zidr@v0.2.0..."
+    if "$GHRI_BIN" install "chaifeng/zidr@v0.2.0" --root "$install_root"; then
+        log_success "Install with v-prefixed version succeeded"
+    else
+        log_fail "Install with v-prefixed version failed"
+        return 1
+    fi
+    
+    # Verify installation
+    assert_dir_exists "$install_root/chaifeng/zidr/v0.2.0" "Version v0.2.0 directory exists"
+    assert_symlink_target "$install_root/chaifeng/zidr/current" "v0.2.0" "current symlink points to v0.2.0"
+}
+
+test_install_nonexistent_version() {
+    log_section "Test: Install non-existent version fails gracefully"
+    
+    local install_root="$TEST_ROOT/install_bad_version"
+    mkdir -p "$install_root"
+    
+    log_info "Attempting to install non-existent version..."
+    if ! "$GHRI_BIN" install "bach-sh/bach@v99.99.99" --root "$install_root" 2>&1 | grep -qi "not found\|available"; then
+        # Command should fail
+        if ! "$GHRI_BIN" install "bach-sh/bach@v99.99.99" --root "$install_root" 2>/dev/null; then
+            log_success "Non-existent version correctly failed"
+        else
+            log_fail "Non-existent version should have failed"
+            return 1
+        fi
+    else
+        log_success "Non-existent version correctly reported error"
+    fi
+}
+
 test_update_command() {
     log_section "Test: Update command"
     
@@ -650,6 +720,9 @@ main() {
     test_install_zidr
     test_install_idempotent
     test_install_multiple_packages
+    test_install_specific_version
+    test_install_version_with_v_prefix
+    test_install_nonexistent_version
     
     test_update_command
     test_update_empty_root

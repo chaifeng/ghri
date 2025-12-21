@@ -13,7 +13,8 @@ use tracing_subscriber::EnvFilter;
 /// This is useful for accessing private repositories or avoiding rate limits.
 ///
 /// Examples:
-///   ghri owner/repo     # Install the latest release from owner/repo
+///   ghri install owner/repo          # Install the latest release
+///   ghri install owner/repo@v1.0.0   # Install a specific version
 #[derive(Parser, Debug)]
 #[command(author, version = env!("GHRI_VERSION"), about)]
 struct Cli {
@@ -42,8 +43,8 @@ enum Commands {
 
 #[derive(clap::Args, Debug)]
 pub struct InstallArgs {
-    /// The GitHub repository in the format "owner/repo"
-    #[arg(value_name = "OWNER/REPO")]
+    /// The GitHub repository in the format "owner/repo" or "owner/repo@version"
+    #[arg(value_name = "OWNER/REPO[@VERSION]")]
     pub repo: String,
 
     /// GitHub API URL (overrides defaults; also via GHRI_API_URL)
@@ -147,5 +148,27 @@ mod tests {
     fn test_cli_no_subcommand_fails() {
         let result = Cli::try_parse_from(&["ghri", "owner/repo"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_install_with_version() {
+        let cli = Cli::try_parse_from(&["ghri", "install", "owner/repo@v1.0.0"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "owner/repo@v1.0.0");
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_install_with_version_no_v() {
+        let cli = Cli::try_parse_from(&["ghri", "install", "bach-sh/bach@0.7.2"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "bach-sh/bach@0.7.2");
+            }
+            _ => panic!("Expected Install command"),
+        }
     }
 }
