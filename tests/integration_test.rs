@@ -834,3 +834,247 @@ fn test_unlink_requires_dest_or_all() {
         .failure()
         .stderr(predicates::str::contains("--all"));
 }
+
+#[test]
+fn test_remove_package() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    let _mock_releases = server
+        .mock("GET", "/repos/test/removeme/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
+            url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/removeme")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz = create_tar_gz_with_executable(&[("removeme-v1/tool", "#!/bin/bash\necho test", 0o755)]);
+    let _mock_download = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+    let link_dir = tempdir().unwrap();
+    let link_path = link_dir.path().join("my-tool");
+
+    // Install
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/removeme")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Create link
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("link")
+        .arg("test/removeme")
+        .arg(&link_path)
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify package and link exist
+    assert!(install_root.join("test/removeme").exists());
+    assert!(link_path.is_symlink());
+
+    // Remove package
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("remove")
+        .arg("test/removeme")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify package removed
+    assert!(!install_root.join("test/removeme").exists());
+
+    // Verify link removed
+    assert!(!link_path.exists());
+
+    // Verify owner directory removed (was empty)
+    assert!(!install_root.join("test").exists());
+}
+
+#[test]
+fn test_remove_specific_version() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    // Two versions
+    let _mock_releases = server
+        .mock("GET", "/repos/test/multiversion/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[
+                {{"tag_name": "v2.0.0", "tarball_url": "{}/download/v2.0.0.tar.gz", "prerelease": false, "assets": []}},
+                {{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}
+            ]"#,
+            url, url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/multiversion")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz_v1 = create_tar_gz_with_executable(&[("multiversion-v1/tool", "#!/bin/bash\necho v1", 0o755)]);
+    let _mock_download_v1 = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz_v1)
+        .create();
+
+    let tar_gz_v2 = create_tar_gz_with_executable(&[("multiversion-v2/tool", "#!/bin/bash\necho v2", 0o755)]);
+    let _mock_download_v2 = server
+        .mock("GET", "/download/v2.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz_v2)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+
+    // Install v1
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/multiversion@v1.0.0")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Install v2 (becomes current)
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/multiversion@v2.0.0")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Verify both versions exist
+    assert!(install_root.join("test/multiversion/v1.0.0").exists());
+    assert!(install_root.join("test/multiversion/v2.0.0").exists());
+
+    // Remove v1 (not current, should work without --force)
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("remove")
+        .arg("test/multiversion@v1.0.0")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify v1 removed, v2 still exists
+    assert!(!install_root.join("test/multiversion/v1.0.0").exists());
+    assert!(install_root.join("test/multiversion/v2.0.0").exists());
+    assert!(install_root.join("test/multiversion/meta.json").exists());
+}
+
+#[test]
+fn test_remove_current_version_requires_force() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    let _mock_releases = server
+        .mock("GET", "/repos/test/forceme/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
+            url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/forceme")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz = create_tar_gz(&[("forceme-v1/tool", "content")]);
+    let _mock_download = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+
+    // Install
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/forceme")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Try to remove current version without --force
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("remove")
+        .arg("test/forceme@v1.0.0")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--force"));
+
+    // Remove with --force
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("remove")
+        .arg("test/forceme@v1.0.0")
+        .arg("--force")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify version removed
+    assert!(!install_root.join("test/forceme/v1.0.0").exists());
+}
+
+#[test]
+fn test_remove_nonexistent_package_fails() {
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("remove")
+        .arg("nonexistent/package")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not installed"));
+}

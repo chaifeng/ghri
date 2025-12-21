@@ -51,6 +51,9 @@ enum Commands {
 
     /// Show link rules for a package
     Links(LinksArgs),
+
+    /// Remove a package or specific version
+    Remove(RemoveArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -103,6 +106,17 @@ pub struct LinksArgs {
     pub repo: String,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct RemoveArgs {
+    /// The GitHub repository in the format "owner/repo" or "owner/repo@version"
+    #[arg(value_name = "OWNER/REPO[@VERSION]")]
+    pub repo: String,
+
+    /// Force removal without confirmation
+    #[arg(long, short)]
+    pub force: bool,
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -122,6 +136,7 @@ async fn main() -> Result<()> {
         Commands::Link(args) => ghri::install::link(runtime, &args.repo, args.dest, cli.install_root)?,
         Commands::Unlink(args) => ghri::install::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
         Commands::Links(args) => ghri::install::links(runtime, &args.repo, cli.install_root)?,
+        Commands::Remove(args) => ghri::install::remove(runtime, &args.repo, args.force, cli.install_root)?,
     }
     Ok(())
 }
@@ -295,6 +310,54 @@ mod tests {
                 assert!(args.all);
             }
             _ => panic!("Expected Unlink command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_remove_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "remove", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Remove(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert!(!args.force);
+            }
+            _ => panic!("Expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_remove_with_version() {
+        let cli = Cli::try_parse_from(&["ghri", "remove", "owner/repo@v1.0.0"]).unwrap();
+        match cli.command {
+            Commands::Remove(args) => {
+                assert_eq!(args.repo, "owner/repo@v1.0.0");
+                assert!(!args.force);
+            }
+            _ => panic!("Expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_remove_force() {
+        let cli = Cli::try_parse_from(&["ghri", "remove", "--force", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Remove(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert!(args.force);
+            }
+            _ => panic!("Expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_remove_short_force() {
+        let cli = Cli::try_parse_from(&["ghri", "remove", "-f", "owner/repo@v1"]).unwrap();
+        match cli.command {
+            Commands::Remove(args) => {
+                assert_eq!(args.repo, "owner/repo@v1");
+                assert!(args.force);
+            }
+            _ => panic!("Expected Remove command"),
         }
     }
 }

@@ -1406,6 +1406,248 @@ test_unlink_colon_in_repo_name() {
 }
 
 #######################################
+# Remove Tests
+#######################################
+
+test_remove_package() {
+    log_section "Test: Remove entire package"
+
+    local install_root="$TEST_ROOT/remove_pkg"
+    local link_path="$TEST_ROOT/remove_pkg_bin/tool"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create link
+    log_info "Creating link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link_path" --root "$install_root"; then
+        log_fail "Link command failed"
+        return 1
+    fi
+
+    # Verify package and link exist
+    if [[ -d "$install_root/bach-sh/bach" ]] && [[ -L "$link_path" ]]; then
+        log_success "Package and link exist"
+    else
+        log_fail "Package or link not found"
+        return 1
+    fi
+
+    # Remove package
+    log_info "Removing bach-sh/bach..."
+    if "$GHRI_BIN" remove bach-sh/bach --root "$install_root"; then
+        log_success "Remove command succeeded"
+    else
+        log_fail "Remove command failed"
+        return 1
+    fi
+
+    # Verify package removed
+    if [[ ! -d "$install_root/bach-sh/bach" ]]; then
+        log_success "Package directory removed"
+    else
+        log_fail "Package directory still exists"
+    fi
+
+    # Verify link removed
+    if [[ ! -e "$link_path" ]]; then
+        log_success "Link removed"
+    else
+        log_fail "Link still exists"
+    fi
+
+    # Verify owner directory removed (was empty)
+    if [[ ! -d "$install_root/bach-sh" ]]; then
+        log_success "Empty owner directory removed"
+    else
+        log_info "Owner directory still exists (may have other packages)"
+    fi
+}
+
+test_remove_specific_version() {
+    log_section "Test: Remove specific version"
+
+    local install_root="$TEST_ROOT/remove_version"
+    mkdir -p "$install_root"
+
+    # Install two versions of bach
+    log_info "Installing bach-sh/bach@0.7.0..."
+    if ! "$GHRI_BIN" install bach-sh/bach@0.7.0 --root "$install_root"; then
+        log_fail "Install v0.7.0 failed"
+        return 1
+    fi
+
+    log_info "Installing bach-sh/bach@0.7.2..."
+    if ! "$GHRI_BIN" install bach-sh/bach@0.7.2 --root "$install_root"; then
+        log_fail "Install v0.7.2 failed"
+        return 1
+    fi
+
+    # Verify both versions exist
+    if [[ -d "$install_root/bach-sh/bach/0.7.0" ]] && [[ -d "$install_root/bach-sh/bach/0.7.2" ]]; then
+        log_success "Both versions installed"
+    else
+        log_fail "Version directories not found"
+        return 1
+    fi
+
+    # Remove v0.7.0 (not current, should work without --force)
+    log_info "Removing bach-sh/bach@0.7.0..."
+    if "$GHRI_BIN" remove bach-sh/bach@0.7.0 --root "$install_root"; then
+        log_success "Remove specific version succeeded"
+    else
+        log_fail "Remove specific version failed"
+        return 1
+    fi
+
+    # Verify v0.7.0 removed, v0.7.2 still exists
+    if [[ ! -d "$install_root/bach-sh/bach/0.7.0" ]]; then
+        log_success "Version 0.7.0 removed"
+    else
+        log_fail "Version 0.7.0 still exists"
+    fi
+
+    if [[ -d "$install_root/bach-sh/bach/0.7.2" ]]; then
+        log_success "Version 0.7.2 preserved"
+    else
+        log_fail "Version 0.7.2 was incorrectly removed"
+    fi
+
+    # Verify meta.json still exists
+    if [[ -f "$install_root/bach-sh/bach/meta.json" ]]; then
+        log_success "meta.json preserved"
+    else
+        log_fail "meta.json was removed"
+    fi
+}
+
+test_remove_current_version_requires_force() {
+    log_section "Test: Remove current version requires --force"
+
+    local install_root="$TEST_ROOT/remove_force"
+    mkdir -p "$install_root"
+
+    # Install bach (single version, will be current)
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Get current version
+    local current_version
+    current_version=$(readlink "$install_root/bach-sh/bach/current" | xargs basename)
+    log_info "Current version: $current_version"
+
+    # Try to remove current version without --force (should fail)
+    log_info "Attempting to remove current version without --force..."
+    local output
+    if output=$("$GHRI_BIN" remove "bach-sh/bach@$current_version" --root "$install_root" 2>&1); then
+        log_fail "Remove should have failed without --force"
+    else
+        if echo "$output" | grep -qi "\-\-force"; then
+            log_success "Remove correctly requires --force for current version"
+        else
+            log_info "Error: $output"
+            log_success "Remove failed (expected)"
+        fi
+    fi
+
+    # Verify version still exists
+    if [[ -d "$install_root/bach-sh/bach/$current_version" ]]; then
+        log_success "Current version preserved after failed remove"
+    else
+        log_fail "Current version was incorrectly removed"
+    fi
+
+    # Now remove with --force
+    log_info "Removing current version with --force..."
+    if "$GHRI_BIN" remove "bach-sh/bach@$current_version" --force --root "$install_root"; then
+        log_success "Remove with --force succeeded"
+    else
+        log_fail "Remove with --force failed"
+        return 1
+    fi
+
+    # Verify version removed
+    if [[ ! -d "$install_root/bach-sh/bach/$current_version" ]]; then
+        log_success "Current version removed with --force"
+    else
+        log_fail "Current version still exists"
+    fi
+}
+
+test_remove_fails_for_uninstalled() {
+    log_section "Test: Remove fails for uninstalled package"
+
+    local install_root="$TEST_ROOT/remove_not_installed"
+    mkdir -p "$install_root"
+
+    log_info "Attempting to remove uninstalled package..."
+    local output
+    if output=$("$GHRI_BIN" remove nonexistent/package --root "$install_root" 2>&1); then
+        log_fail "Remove should have failed for uninstalled package"
+    else
+        if echo "$output" | grep -qi "not installed"; then
+            log_success "Remove correctly fails for uninstalled package"
+        else
+            log_info "Error: $output"
+            log_success "Remove command failed (expected)"
+        fi
+    fi
+}
+
+test_remove_with_multiple_links() {
+    log_section "Test: Remove package with multiple links"
+
+    local install_root="$TEST_ROOT/remove_multi_links"
+    local link1="$TEST_ROOT/remove_multi_links_bin/link1"
+    local link2="$TEST_ROOT/remove_multi_links_bin/link2"
+    mkdir -p "$install_root" "$(dirname "$link1")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create multiple links
+    log_info "Creating multiple links..."
+    "$GHRI_BIN" link bach-sh/bach "$link1" --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" link bach-sh/bach "$link2" --root "$install_root" >/dev/null 2>&1
+
+    # Verify links exist
+    if [[ -L "$link1" ]] && [[ -L "$link2" ]]; then
+        log_success "Both links created"
+    else
+        log_fail "Links not created"
+        return 1
+    fi
+
+    # Remove package
+    log_info "Removing package..."
+    if "$GHRI_BIN" remove bach-sh/bach --root "$install_root"; then
+        log_success "Remove command succeeded"
+    else
+        log_fail "Remove command failed"
+        return 1
+    fi
+
+    # Verify both links removed
+    if [[ ! -e "$link1" ]] && [[ ! -e "$link2" ]]; then
+        log_success "All links removed"
+    else
+        log_fail "Some links still exist"
+    fi
+}
+
+#######################################
 # Main
 #######################################
 main() {
@@ -1457,6 +1699,13 @@ main() {
     test_links_command
     test_unlink_by_path
     test_unlink_colon_in_repo_name
+
+    # Remove command tests
+    test_remove_package
+    test_remove_specific_version
+    test_remove_current_version_requires_force
+    test_remove_fails_for_uninstalled
+    test_remove_with_multiple_links
 
     # Summary
     log_section "Test Summary"
