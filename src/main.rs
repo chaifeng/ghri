@@ -42,6 +42,9 @@ enum Commands {
 
     /// List all installed packages
     List(ListArgs),
+
+    /// Link a package's current version to a destination path
+    Link(LinkArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -61,6 +64,17 @@ pub struct UpdateArgs {}
 #[derive(clap::Args, Debug)]
 pub struct ListArgs {}
 
+#[derive(clap::Args, Debug)]
+pub struct LinkArgs {
+    /// The GitHub repository in the format "owner/repo"
+    #[arg(value_name = "OWNER/REPO")]
+    pub repo: String,
+
+    /// Destination path for the symlink
+    #[arg(value_name = "DEST")]
+    pub dest: PathBuf,
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -77,6 +91,7 @@ async fn main() -> Result<()> {
         }
         Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
         Commands::List(_args) => ghri::install::list(runtime, cli.install_root)?,
+        Commands::Link(args) => ghri::install::link(runtime, &args.repo, args.dest, cli.install_root)?,
     }
     Ok(())
 }
@@ -177,5 +192,30 @@ mod tests {
             }
             _ => panic!("Expected Install command"),
         }
+    }
+
+    #[test]
+    fn test_cli_link_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "link", "owner/repo", "/usr/local/bin/tool"]).unwrap();
+        match cli.command {
+            Commands::Link(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.dest, PathBuf::from("/usr/local/bin/tool"));
+            }
+            _ => panic!("Expected Link command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_link_with_root() {
+        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp", "link", "owner/repo", "/dest"]).unwrap();
+        match cli.command {
+            Commands::Link(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.dest, PathBuf::from("/dest"));
+            }
+            _ => panic!("Expected Link command"),
+        }
+        assert_eq!(cli.install_root, Some(PathBuf::from("/tmp")));
     }
 }

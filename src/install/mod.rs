@@ -100,6 +100,186 @@ pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()>
     Ok(())
 }
 
+/// Link a package's current version to a destination directory
+#[tracing::instrument(skip(runtime, install_root))]
+pub fn link<R: Runtime>(
+    runtime: R,
+    repo_str: &str,
+    dest: PathBuf,
+    install_root: Option<PathBuf>,
+) -> Result<()> {
+    let spec = repo_str.parse::<RepoSpec>()?;
+    let root = match install_root {
+        Some(path) => path,
+        None => default_install_root(&runtime)?,
+    };
+
+    // Find the package directory
+    let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
+    let meta_path = package_dir.join("meta.json");
+
+    if !runtime.exists(&meta_path) {
+        anyhow::bail!(
+            "Package {} is not installed. Install it first with: ghri install {}",
+            spec.repo,
+            spec.repo
+        );
+    }
+
+    let mut meta = Meta::load(&runtime, &meta_path)?;
+
+    if meta.current_version.is_empty() {
+        anyhow::bail!(
+            "No current version set for {}. Install a version first.",
+            spec.repo
+        );
+    }
+
+    let version_dir = package_dir.join(&meta.current_version);
+    if !runtime.exists(&version_dir) {
+        anyhow::bail!(
+            "Version directory {:?} does not exist. The package may be corrupted.",
+            version_dir
+        );
+    }
+
+    // Determine link target: if version dir has only one file, link to that file
+    let link_target = determine_link_target(&runtime, &version_dir)?;
+
+    // If dest is an existing directory, create link inside it with repo name
+    let final_dest = if runtime.exists(&dest) && runtime.is_dir(&dest) {
+        dest.join(&spec.repo.repo)
+    } else {
+        dest
+    };
+
+    // Create parent directory of destination if needed
+    if let Some(parent) = final_dest.parent() {
+        if !runtime.exists(parent) {
+            runtime.create_dir_all(parent)?;
+        }
+    }
+
+    // Handle existing destination
+    if runtime.exists(&final_dest) || runtime.is_symlink(&final_dest) {
+        if runtime.is_symlink(&final_dest) {
+            // Check if the existing symlink points to a version in this package
+            if let Ok(existing_target) = runtime.read_link(&final_dest) {
+                let existing_target = if existing_target.is_relative() {
+                    final_dest.parent().unwrap_or(Path::new(".")).join(&existing_target)
+                } else {
+                    existing_target
+                };
+
+                // Check if existing target is within the package directory
+                if existing_target.starts_with(&package_dir) {
+                    debug!(
+                        "Updating existing link from {:?} to {:?}",
+                        existing_target, link_target
+                    );
+                    runtime.remove_symlink(&final_dest)?;
+                } else {
+                    anyhow::bail!(
+                        "Destination {:?} exists and points to {:?} which is not part of package {}",
+                        final_dest,
+                        existing_target,
+                        spec.repo
+                    );
+                }
+            } else {
+                anyhow::bail!(
+                    "Destination {:?} is a symlink but cannot read its target",
+                    final_dest
+                );
+            }
+        } else {
+            anyhow::bail!(
+                "Destination {:?} already exists and is not a symlink",
+                final_dest
+            );
+        }
+    }
+
+    // Create the symlink
+    runtime.symlink(&link_target, &final_dest)?;
+
+    // Update meta.json with the linked_to path (final complete path)
+    meta.linked_to = Some(final_dest.clone());
+    let json = serde_json::to_string_pretty(&meta)?;
+    let tmp_path = meta_path.with_extension("json.tmp");
+    runtime.write(&tmp_path, json.as_bytes())?;
+    runtime.rename(&tmp_path, &meta_path)?;
+
+    println!(
+        "Linked {} {} -> {:?}",
+        spec.repo, meta.current_version, final_dest
+    );
+
+    Ok(())
+}
+
+/// Determine what to link to: if version dir has only one file, link to that file
+fn determine_link_target<R: Runtime>(runtime: &R, version_dir: &Path) -> Result<PathBuf> {
+    let entries = runtime.read_dir(version_dir)?;
+
+    if entries.len() == 1 {
+        let single_entry = &entries[0];
+        if !runtime.is_dir(single_entry) {
+            debug!(
+                "Version directory has single file, linking to {:?}",
+                single_entry
+            );
+            return Ok(single_entry.clone());
+        }
+    }
+
+    // Multiple entries or single directory - link to version dir itself
+    Ok(version_dir.to_path_buf())
+}
+
+/// Update the external link for a package after installation
+#[tracing::instrument(skip(runtime, _package_dir, version_dir))]
+pub(crate) fn update_external_link<R: Runtime>(
+    runtime: &R,
+    _package_dir: &Path,
+    version_dir: &Path,
+    meta: &Meta,
+) -> Result<()> {
+    if let Some(ref linked_to) = meta.linked_to {
+        if runtime.exists(linked_to) || runtime.is_symlink(linked_to) {
+            if runtime.is_symlink(linked_to) {
+                // Remove the old symlink
+                runtime.remove_symlink(linked_to)?;
+
+                // Create new symlink to the new version
+                let link_target = determine_link_target(runtime, version_dir)?;
+                runtime.symlink(&link_target, linked_to)?;
+
+                info!("Updated external link {:?} -> {:?}", linked_to, link_target);
+            } else {
+                warn!(
+                    "External link target {:?} exists but is not a symlink, skipping update",
+                    linked_to
+                );
+            }
+        } else {
+            // linked_to path doesn't exist anymore, create it
+            let link_target = determine_link_target(runtime, version_dir)?;
+
+            if let Some(parent) = linked_to.parent() {
+                if !runtime.exists(parent) {
+                    runtime.create_dir_all(parent)?;
+                }
+            }
+
+            runtime.symlink(&link_target, linked_to)?;
+            info!("Recreated external link {:?} -> {:?}", linked_to, link_target);
+        }
+    }
+
+    Ok(())
+}
+
 pub struct Installer<R: Runtime, G: GetReleases, E: Extractor> {
     pub runtime: R,
     pub github: G,
@@ -174,6 +354,13 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         result?;
 
         update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
+
+        // Update external link if configured
+        if let Some(parent) = target_dir.parent() {
+            if let Err(e) = update_external_link(&self.runtime, parent, &target_dir, &meta) {
+                warn!("Failed to update external link: {}. Continuing.", e);
+            }
+        }
 
         // Metadata handling
         meta.current_version = release.tag_name.clone();
@@ -700,6 +887,7 @@ mod tests {
                 }
                 .into(),
             ],
+            linked_to: None,
         };
         runtime
             .expect_read_to_string()
@@ -1194,6 +1382,7 @@ mod tests {
                 }
                 .into(),
             ],
+            linked_to: None,
         };
         runtime
             .expect_read_to_string()
@@ -1294,6 +1483,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
         Installer::new(
             runtime,
@@ -1306,4 +1496,241 @@ mod tests {
     }
 
     // test_update_timestamp_behavior is now in package/meta.rs
+
+    #[test]
+    fn test_determine_link_target_single_file() {
+        let mut runtime = MockRuntime::new();
+        let version_dir = PathBuf::from("/root/o/r/v1");
+
+        runtime
+            .expect_read_dir()
+            .with(eq(version_dir.clone()))
+            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/tool")]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/root/o/r/v1/tool")))
+            .returning(|_| false);
+
+        let result = determine_link_target(&runtime, &version_dir).unwrap();
+        assert_eq!(result, PathBuf::from("/root/o/r/v1/tool"));
+    }
+
+    #[test]
+    fn test_determine_link_target_multiple_files() {
+        let mut runtime = MockRuntime::new();
+        let version_dir = PathBuf::from("/root/o/r/v1");
+
+        runtime
+            .expect_read_dir()
+            .with(eq(version_dir.clone()))
+            .returning(|_| Ok(vec![
+                PathBuf::from("/root/o/r/v1/tool"),
+                PathBuf::from("/root/o/r/v1/README.md"),
+            ]));
+
+        let result = determine_link_target(&runtime, &version_dir).unwrap();
+        assert_eq!(result, version_dir);
+    }
+
+    #[test]
+    fn test_determine_link_target_single_directory() {
+        let mut runtime = MockRuntime::new();
+        let version_dir = PathBuf::from("/root/o/r/v1");
+
+        runtime
+            .expect_read_dir()
+            .with(eq(version_dir.clone()))
+            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/subdir")]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/root/o/r/v1/subdir")))
+            .returning(|_| true);
+
+        let result = determine_link_target(&runtime, &version_dir).unwrap();
+        assert_eq!(result, version_dir);
+    }
+
+    #[test]
+    fn test_update_external_link_no_linked_to() {
+        let runtime = MockRuntime::new();
+        let meta = Meta {
+            name: "o/r".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "v1".into(),
+            releases: vec![],
+            linked_to: None,
+        };
+
+        // Should return Ok without doing anything
+        let result = update_external_link(
+            &runtime,
+            Path::new("/root/o/r"),
+            Path::new("/root/o/r/v1"),
+            &meta,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_external_link_updates_existing_symlink() {
+        let mut runtime = MockRuntime::new();
+        let linked_to = PathBuf::from("/usr/local/bin/tool");
+        let version_dir = PathBuf::from("/root/o/r/v2");
+
+        let meta = Meta {
+            name: "o/r".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            current_version: "v2".into(),
+            releases: vec![],
+            linked_to: Some(linked_to.clone()),
+        };
+
+        // Check if linked_to exists
+        runtime
+            .expect_exists()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
+        // Check if linked_to is symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
+        // Remove old symlink
+        runtime
+            .expect_remove_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| Ok(()));
+
+        // Read version dir to determine link target
+        runtime
+            .expect_read_dir()
+            .with(eq(version_dir.clone()))
+            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v2/tool")]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/root/o/r/v2/tool")))
+            .returning(|_| false);
+
+        // Create new symlink
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("/root/o/r/v2/tool")), eq(linked_to.clone()))
+            .returning(|_, _| Ok(()));
+
+        let result = update_external_link(
+            &runtime,
+            Path::new("/root/o/r"),
+            &version_dir,
+            &meta,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_dest_is_directory() {
+        // When dest is an existing directory, the link should be created inside it
+        // with the repo name as the symlink name
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let dest_dir = PathBuf::from("/usr/local/bin");
+        let final_link = dest_dir.join("repo"); // /usr/local/bin/repo
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner/repo/meta.json")))
+            .returning(|_| true);
+
+        // Load meta
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            api_url: "".into(),
+            repo_info_url: "".into(),
+            releases_url: "".into(),
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "".into(),
+            releases: vec![],
+            linked_to: None,
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Version dir exists
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner/repo/v1")))
+            .returning(|_| true);
+
+        // Read version dir - has single file
+        runtime
+            .expect_read_dir()
+            .with(eq(root.join("owner/repo/v1")))
+            .returning(|_| Ok(vec![PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .returning(|_| false);
+
+        // Check if dest exists and is a directory
+        runtime
+            .expect_exists()
+            .with(eq(dest_dir.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_dir()
+            .with(eq(dest_dir.clone()))
+            .returning(|_| true);
+
+        // Check if final_link exists (it doesn't)
+        runtime
+            .expect_exists()
+            .with(eq(final_link.clone()))
+            .returning(|_| false);
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(final_link.clone()))
+            .returning(|_| false);
+
+        // Create symlink
+        runtime
+            .expect_symlink()
+            .with(
+                eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")),
+                eq(final_link.clone()),
+            )
+            .returning(|_, _| Ok(()));
+
+        // Save meta
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        let result = link(runtime, "owner/repo", dest_dir, Some(root));
+        assert!(result.is_ok());
+    }
 }

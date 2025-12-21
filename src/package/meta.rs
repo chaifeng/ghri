@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::github::{GitHubRepo, Release, ReleaseAsset, RepoInfo};
 use crate::runtime::Runtime;
@@ -38,6 +38,9 @@ pub struct Meta {
     pub current_version: String,
     #[serde(default)]
     pub releases: Vec<MetaRelease>,
+    /// Path where the current version is linked to (external symlink)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to: Option<PathBuf>,
 }
 
 impl Meta {
@@ -63,6 +66,7 @@ impl Meta {
                 Meta::sort_releases_internal(&mut r);
                 r
             },
+            linked_to: None,
         }
     }
 
@@ -372,6 +376,7 @@ mod tests {
                 ..Default::default()
             }
             .into()],
+            linked_to: None,
         };
         let other = Meta {
             name: "o/r".into(),
@@ -389,6 +394,7 @@ mod tests {
                 ..Default::default()
             }
             .into()],
+            linked_to: None,
         };
         meta.merge(other);
         assert_eq!(meta.releases[0].version, "v2");
@@ -442,6 +448,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
         meta.releases.push(MetaRelease {
             version: "v1".into(),
@@ -477,6 +484,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
         assert!(meta.get_latest_stable_release().is_none());
     }
@@ -494,6 +502,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
         meta.releases.push(MetaRelease {
             version: "v1-rc".into(),
@@ -541,6 +550,7 @@ mod tests {
             updated_at: "old".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
         let other = Meta {
             name: "o/r".into(),
@@ -553,6 +563,7 @@ mod tests {
             updated_at: "new".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
 
         assert!(meta.merge(other));
@@ -786,6 +797,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
 
         let (owner, repo) = meta.parse_owner_repo();
@@ -806,6 +818,7 @@ mod tests {
             updated_at: "".into(),
             current_version: "".into(),
             releases: vec![],
+            linked_to: None,
         };
 
         let (owner, repo) = meta.parse_owner_repo();
