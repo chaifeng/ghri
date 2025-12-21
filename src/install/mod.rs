@@ -100,6 +100,48 @@ pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()>
     Ok(())
 }
 
+/// Show link rules for a package
+#[tracing::instrument(skip(runtime, install_root))]
+pub fn links<R: Runtime>(
+    runtime: R,
+    repo_str: &str,
+    install_root: Option<PathBuf>,
+) -> Result<()> {
+    let spec = repo_str.parse::<RepoSpec>()?;
+    let root = match install_root {
+        Some(path) => path,
+        None => default_install_root(&runtime)?,
+    };
+
+    let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
+    let meta_path = package_dir.join("meta.json");
+
+    if !runtime.exists(&meta_path) {
+        anyhow::bail!(
+            "Package {} is not installed.",
+            spec.repo
+        );
+    }
+
+    let meta = Meta::load(&runtime, &meta_path)?;
+
+    if meta.links.is_empty() {
+        println!("No link rules for {}.", spec.repo);
+        return Ok(());
+    }
+
+    println!("Link rules for {} ({}):", spec.repo, meta.current_version);
+    for rule in &meta.links {
+        if let Some(ref path) = rule.path {
+            println!("  {} -> {:?}", path, rule.dest);
+        } else {
+            println!("  (default) -> {:?}", rule.dest);
+        }
+    }
+
+    Ok(())
+}
+
 /// Link a package's current version to a destination directory
 #[tracing::instrument(skip(runtime, install_root))]
 pub fn link<R: Runtime>(

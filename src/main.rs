@@ -45,6 +45,9 @@ enum Commands {
 
     /// Link a package's current version to a destination path
     Link(LinkArgs),
+
+    /// Show link rules for a package
+    Links(LinksArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -75,6 +78,13 @@ pub struct LinkArgs {
     pub dest: PathBuf,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct LinksArgs {
+    /// The GitHub repository in the format "owner/repo"
+    #[arg(value_name = "OWNER/REPO")]
+    pub repo: String,
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -92,6 +102,7 @@ async fn main() -> Result<()> {
         Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
         Commands::List(_args) => ghri::install::list(runtime, cli.install_root)?,
         Commands::Link(args) => ghri::install::link(runtime, &args.repo, args.dest, cli.install_root)?,
+        Commands::Links(args) => ghri::install::links(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())
 }
@@ -217,5 +228,16 @@ mod tests {
             _ => panic!("Expected Link command"),
         }
         assert_eq!(cli.install_root, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn test_cli_links_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "links", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Links(args) => {
+                assert_eq!(args.repo, "owner/repo");
+            }
+            _ => panic!("Expected Links command"),
+        }
     }
 }
