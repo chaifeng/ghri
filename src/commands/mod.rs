@@ -22,6 +22,7 @@ mod remove;
 mod show;
 mod symlink;
 mod unlink;
+mod update;
 
 pub use link::link;
 pub(crate) use link::determine_link_target;
@@ -31,6 +32,7 @@ pub use list::list;
 pub use remove::remove;
 pub use show::show;
 pub use unlink::unlink;
+pub use update::update;
 
 use config::Config;
 use paths::{default_install_root, get_target_dir};
@@ -60,22 +62,6 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
         config.extractor,
     );
     installer.install(&spec.repo, spec.version.as_deref(), config.install_root).await
-}
-
-#[tracing::instrument(skip(runtime, install_root, api_url))]
-pub async fn update<R: Runtime + 'static>(
-    runtime: R,
-    install_root: Option<PathBuf>,
-    api_url: Option<String>,
-) -> Result<()> {
-    let config = Config::new(runtime, install_root, api_url)?;
-    let installer = Installer::new(
-        config.runtime,
-        config.github,
-        config.client,
-        config.extractor,
-    );
-    installer.update_all(config.install_root).await
 }
 
 /// Update external links for a package after installation
@@ -1323,15 +1309,6 @@ mod tests {
             install_root: None,
         };
         run("o/r", config).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_update_function() {
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-        runtime.expect_exists().returning(|_| false); // root empty
-
-        update(runtime, None, None).await.unwrap();
     }
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
