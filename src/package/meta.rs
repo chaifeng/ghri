@@ -17,7 +17,7 @@ where
 }
 
 /// Package metadata stored locally for installed packages
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Meta {
     pub name: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
@@ -223,7 +223,7 @@ impl Meta {
 }
 
 /// Release metadata
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MetaRelease {
     pub version: String,
     #[serde(default)]
@@ -363,11 +363,6 @@ mod tests {
         let mut meta = Meta {
             name: "o/r".into(),
             api_url: "api".into(),
-            repo_info_url: "url".into(),
-            releases_url: "url".into(),
-            description: None,
-            homepage: None,
-            license: None,
             updated_at: "t1".into(),
             current_version: "v1".into(),
             releases: vec![Release {
@@ -376,16 +371,11 @@ mod tests {
                 ..Default::default()
             }
             .into()],
-            linked_to: None,
+            ..Default::default()
         };
         let other = Meta {
             name: "o/r".into(),
             api_url: "api".into(),
-            repo_info_url: "url".into(),
-            releases_url: "url".into(),
-            description: None,
-            homepage: None,
-            license: None,
             updated_at: "t2".into(),
             current_version: "v1".into(),
             releases: vec![Release {
@@ -394,7 +384,7 @@ mod tests {
                 ..Default::default()
             }
             .into()],
-            linked_to: None,
+            ..Default::default()
         };
         meta.merge(other);
         assert_eq!(meta.releases[0].version, "v2");
@@ -439,32 +429,19 @@ mod tests {
     fn test_meta_get_latest_stable_release() {
         let mut meta = Meta {
             name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         meta.releases.push(MetaRelease {
             version: "v1".into(),
             is_prerelease: false,
             published_at: Some("2023".into()),
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
+            ..Default::default()
         });
         meta.releases.push(MetaRelease {
             version: "v2-rc".into(),
             is_prerelease: true,
             published_at: Some("2024".into()),
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
+            ..Default::default()
         });
 
         let latest = meta.get_latest_stable_release().unwrap();
@@ -475,16 +452,7 @@ mod tests {
     fn test_meta_get_latest_stable_release_empty() {
         let meta = Meta {
             name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         assert!(meta.get_latest_stable_release().is_none());
     }
@@ -493,24 +461,12 @@ mod tests {
     fn test_meta_get_latest_stable_release_only_prerelease() {
         let mut meta = Meta {
             name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         meta.releases.push(MetaRelease {
             version: "v1-rc".into(),
             is_prerelease: true,
-            published_at: None,
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
+            ..Default::default()
         });
         assert!(meta.get_latest_stable_release().is_none());
     }
@@ -541,29 +497,15 @@ mod tests {
     fn test_update_timestamp_behavior() {
         let mut meta = Meta {
             name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
             description: Some("old".into()),
-            homepage: None,
-            license: None,
             updated_at: "old".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         let other = Meta {
             name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
             description: Some("new".into()),
-            homepage: None,
-            license: None,
             updated_at: "new".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
 
         assert!(meta.merge(other));
@@ -788,16 +730,7 @@ mod tests {
     fn test_meta_parse_owner_repo() {
         let meta = Meta {
             name: "owner/repo".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
 
         let (owner, repo) = meta.parse_owner_repo();
@@ -809,16 +742,7 @@ mod tests {
     fn test_meta_parse_owner_repo_invalid() {
         let meta = Meta {
             name: "invalid-name".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
 
         let (owner, repo) = meta.parse_owner_repo();

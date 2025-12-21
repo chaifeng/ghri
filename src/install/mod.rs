@@ -875,11 +875,6 @@ mod tests {
             current_version: "v1".into(),
             updated_at: "old".into(),
             api_url: "api".into(),
-            repo_info_url: "url".into(),
-            releases_url: "url".into(),
-            description: None,
-            homepage: None,
-            license: None,
             releases: vec![
                 Release {
                     tag_name: "v1".into(),
@@ -887,7 +882,7 @@ mod tests {
                 }
                 .into(),
             ],
-            linked_to: None,
+            ..Default::default()
         };
         runtime
             .expect_read_to_string()
@@ -1369,12 +1364,6 @@ mod tests {
             name: "o/r".into(),
             current_version: "v1".into(),
             api_url: "api".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
             releases: vec![
                 Release {
                     tag_name: "v1".into(),
@@ -1382,7 +1371,7 @@ mod tests {
                 }
                 .into(),
             ],
-            linked_to: None,
+            ..Default::default()
         };
         runtime
             .expect_read_to_string()
@@ -1474,16 +1463,7 @@ mod tests {
 
         let meta = Meta {
             name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         Installer::new(
             runtime,
@@ -1557,16 +1537,8 @@ mod tests {
         let runtime = MockRuntime::new();
         let meta = Meta {
             name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
             current_version: "v1".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
 
         // Should return Ok without doing anything
@@ -1587,16 +1559,9 @@ mod tests {
 
         let meta = Meta {
             name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
             current_version: "v2".into(),
-            releases: vec![],
             linked_to: Some(linked_to.clone()),
+            ..Default::default()
         };
 
         // Check if linked_to exists
@@ -1664,15 +1629,7 @@ mod tests {
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            releases: vec![],
-            linked_to: None,
+            ..Default::default()
         };
         runtime
             .expect_read_to_string()
