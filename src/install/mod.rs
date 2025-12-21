@@ -1,18 +1,23 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::{
     archive::Extractor,
     download::download_file,
-    github::{GetReleases, GitHubRepo, Release, ReleaseAsset, RepoInfo},
+    github::{GetReleases, GitHubRepo, Release},
+    package::{Meta, find_all_packages},
     runtime::Runtime,
 };
 
 pub mod config;
+mod paths;
+mod symlink;
+
 use config::Config;
+use paths::{default_install_root, get_target_dir};
+use symlink::update_current_symlink;
 
 #[tracing::instrument(skip(runtime, install_root, api_url))]
 pub async fn install<R: Runtime + 'static>(
@@ -88,12 +93,12 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         info!("Found latest version: {}", meta_release.version);
         let release: Release = meta_release.clone().into();
 
-        let target_dir = get_target_dir(&self.runtime, &repo, &release, install_root)?;
+        let target_dir = get_target_dir(&self.runtime, repo, &release, install_root)?;
 
         ensure_installed(
             &self.runtime,
             &target_dir,
-            &repo,
+            repo,
             &release,
             &self.client,
             &self.extractor,
@@ -138,10 +143,10 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             } else {
                 // Check if update is available
                 let updated_meta = Meta::load(&self.runtime, &meta_path)?;
-                if let Some(latest) = updated_meta.get_latest_stable_release() {
-                    if meta.current_version != latest.version {
-                        self.print_update_available(&repo, &meta.current_version, &latest.version);
-                    }
+                if let Some(latest) = updated_meta.get_latest_stable_release()
+                    && meta.current_version != latest.version
+                {
+                    self.print_update_available(&repo, &meta.current_version, &latest.version);
                 }
             }
         }
@@ -223,7 +228,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         let tmp_path = meta_path.with_extension("json.tmp");
 
         self.runtime.write(&tmp_path, json.as_bytes())?;
-        self.runtime.rename(&tmp_path, &meta_path)?;
+        self.runtime.rename(&tmp_path, meta_path)?;
         Ok(())
     }
 
@@ -274,261 +279,6 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
     }
 }
 
-#[tracing::instrument(skip(runtime, root))]
-fn find_all_packages<R: Runtime>(runtime: &R, root: &Path) -> Result<Vec<PathBuf>> {
-    let mut meta_files = Vec::new();
-
-    if !runtime.exists(root) {
-        return Ok(meta_files);
-    }
-
-    // Root structure: <root>/<owner>/<repo>/meta.json
-    for owner_path in runtime.read_dir(root)? {
-        if runtime.is_dir(&owner_path) {
-            for repo_path in runtime.read_dir(&owner_path)? {
-                if runtime.is_dir(&repo_path) {
-                    let meta_path = repo_path.join("meta.json");
-                    if runtime.exists(&meta_path) {
-                        meta_files.push(meta_path);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(meta_files)
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-struct Meta {
-    name: String,
-    api_url: String,
-    repo_info_url: String,
-    releases_url: String,
-    description: Option<String>,
-    homepage: Option<String>,
-    license: Option<String>,
-    updated_at: String,
-    current_version: String,
-    releases: Vec<MetaRelease>,
-}
-
-impl Meta {
-    pub fn from(
-        repo: GitHubRepo,
-        info: RepoInfo,
-        releases: Vec<Release>,
-        current: &str,
-        api_url: &str,
-    ) -> Self {
-        Meta {
-            name: format!("{}/{}", repo.owner, repo.repo),
-            api_url: api_url.to_string(),
-            repo_info_url: format!("{}/repos/{}/{}", api_url, repo.owner, repo.repo),
-            releases_url: format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo),
-            description: info.description,
-            homepage: info.homepage,
-            license: info.license.map(|l| l.name),
-            updated_at: info.updated_at,
-            current_version: current.to_string(),
-            releases: {
-                let mut r: Vec<MetaRelease> = releases.into_iter().map(MetaRelease::from).collect();
-                Meta::sort_releases_internal(&mut r);
-                r
-            },
-        }
-    }
-
-    fn sort_releases_internal(releases: &mut [MetaRelease]) {
-        releases.sort_by(|a, b| {
-            match (&a.published_at, &b.published_at) {
-                (Some(at_a), Some(at_b)) => at_b.cmp(at_a),  // Descending
-                (Some(_), None) => std::cmp::Ordering::Less, // Published comes before unpublished
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.version.cmp(&a.version), // Version descending fallback
-            }
-        });
-    }
-
-    pub fn sort_releases(&mut self) {
-        Self::sort_releases_internal(&mut self.releases);
-    }
-
-    pub fn get_latest_stable_release(&self) -> Option<&MetaRelease> {
-        self.releases
-            .iter()
-            .filter(|r| !r.is_prerelease)
-            .max_by(|a, b| {
-                // Simplified version comparison: tag_name might not be semver-compliant,
-                // but published_at is a good proxy for "latest".
-                // If published_at is missing, fall back to version string comparison.
-                match (&a.published_at, &b.published_at) {
-                    (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                    _ => a.version.cmp(&b.version),
-                }
-            })
-    }
-
-    #[tracing::instrument(skip(runtime, path))]
-    fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
-        let content = runtime.read_to_string(path)?;
-        let meta: Meta = serde_json::from_str(&content)?;
-        Ok(meta)
-    }
-
-    fn merge(&mut self, other: Meta) -> bool {
-        let mut changed = false;
-
-        if self.description != other.description {
-            self.description = other.description;
-            changed = true;
-        }
-        if self.homepage != other.homepage {
-            self.homepage = other.homepage;
-            changed = true;
-        }
-        if self.license != other.license {
-            self.license = other.license;
-            changed = true;
-        }
-
-        for new_release in other.releases {
-            if let Some(existing) = self
-                .releases
-                .iter_mut()
-                .find(|r| r.version == new_release.version)
-            {
-                if existing != &new_release {
-                    *existing = new_release;
-                    changed = true;
-                }
-            } else {
-                self.releases.push(new_release);
-                changed = true;
-            }
-        }
-
-        if changed {
-            self.sort_releases();
-        }
-
-        changed
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-struct MetaRelease {
-    version: String,
-    title: Option<String>,
-    published_at: Option<String>,
-    is_prerelease: bool,
-    tarball_url: String,
-    assets: Vec<MetaAsset>,
-}
-
-impl From<Release> for MetaRelease {
-    fn from(r: Release) -> Self {
-        MetaRelease {
-            version: r.tag_name,
-            title: r.name,
-            published_at: r.published_at,
-            is_prerelease: r.prerelease,
-            tarball_url: r.tarball_url,
-            assets: r.assets.into_iter().map(MetaAsset::from).collect(),
-        }
-    }
-}
-
-impl From<MetaRelease> for Release {
-    fn from(r: MetaRelease) -> Self {
-        Release {
-            tag_name: r.version,
-            tarball_url: r.tarball_url,
-            name: r.title,
-            published_at: r.published_at,
-            prerelease: r.is_prerelease,
-            assets: r.assets.into_iter().map(ReleaseAsset::from).collect(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-struct MetaAsset {
-    name: String,
-    size: u64,
-    download_url: String,
-}
-
-impl From<ReleaseAsset> for MetaAsset {
-    fn from(a: ReleaseAsset) -> Self {
-        MetaAsset {
-            name: a.name,
-            size: a.size,
-            download_url: a.browser_download_url,
-        }
-    }
-}
-
-impl From<MetaAsset> for ReleaseAsset {
-    fn from(a: MetaAsset) -> Self {
-        ReleaseAsset {
-            name: a.name,
-            size: a.size,
-            browser_download_url: a.download_url,
-        }
-    }
-}
-
-#[tracing::instrument(skip(runtime, repo, release, install_root))]
-fn get_target_dir<R: Runtime>(
-    runtime: &R,
-    repo: &GitHubRepo,
-    release: &Release,
-    install_root: Option<PathBuf>,
-) -> Result<PathBuf> {
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(runtime)?,
-    };
-
-    info!("Using install root: {}", root.display());
-
-    Ok(root
-        .join(&repo.owner)
-        .join(&repo.repo)
-        .join(&release.tag_name))
-}
-
-#[tracing::instrument(skip(runtime))]
-fn default_install_root<R: Runtime>(runtime: &R) -> Result<PathBuf> {
-    if runtime.is_privileged() {
-        Ok(system_install_root(runtime))
-    } else {
-        let home_dir = runtime
-            .home_dir()
-            .context("Could not find home directory")?;
-        Ok(home_dir.join(".ghri"))
-    }
-}
-
-#[cfg(target_os = "macos")]
-#[tracing::instrument(skip(_runtime))]
-fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
-    PathBuf::from("/opt/ghri")
-}
-
-#[cfg(target_os = "windows")]
-#[tracing::instrument(skip(runtime))]
-fn system_install_root<R: Runtime>(runtime: &R) -> PathBuf {
-    PathBuf::from(r"C:\ProgramData\ghri")
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-#[tracing::instrument(skip(_runtime))]
-fn system_install_root<R: Runtime>(_runtime: &R) -> PathBuf {
-    PathBuf::from("/usr/local/ghri")
-}
-
 #[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor))]
 async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     runtime: &R,
@@ -567,66 +317,11 @@ async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     Ok(())
 }
 
-#[tracing::instrument(skip(runtime, target_dir, _tag_name))]
-fn update_current_symlink<R: Runtime>(
-    runtime: &R,
-    target_dir: &Path,
-    _tag_name: &str,
-) -> Result<()> {
-    let current_link = target_dir
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Failed to get parent directory"))?
-        .join("current");
-
-    let link_target = target_dir
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Failed to get target directory name"))?;
-
-    let mut create_symlink = true;
-
-    if runtime.exists(&current_link) {
-        if !runtime.is_symlink(&current_link) {
-            bail!("'current' exists but is not a symlink");
-        }
-
-        match runtime.read_link(&current_link) {
-            Ok(target) => {
-                // Normalize paths for comparison to handle minor differences like trailing slashes
-                let existing_target_path = Path::new(&target).components().as_path();
-                let new_target_path = Path::new(link_target).components().as_path();
-
-                if existing_target_path == new_target_path {
-                    debug!("'current' symlink already points to the correct version");
-                    create_symlink = false;
-                } else {
-                    debug!(
-                        "'current' symlink points to {:?}, but should point to {:?}. Updating...",
-                        existing_target_path, new_target_path
-                    );
-                    runtime.remove_symlink(&current_link)?;
-                }
-            }
-            Err(_) => {
-                debug!("'current' symlink is unreadable, recreating...");
-                runtime.remove_symlink(&current_link)?;
-            }
-        }
-    }
-
-    if create_symlink {
-        runtime
-            .symlink(Path::new(link_target), &current_link)
-            .with_context(|| format!("Failed to update 'current' symlink to {:?}", target_dir))?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::archive::MockExtractor;
-    use crate::github::MockGetReleases;
+    use crate::github::{MockGetReleases, RepoInfo};
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;
@@ -655,99 +350,7 @@ mod tests {
 
         runtime.expect_is_privileged().returning(|| false);
     }
-    #[test]
-    fn test_get_target_dir() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
-        let release = Release {
-            tag_name: "v1".into(),
-            ..Default::default()
-        };
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-
-        let target_dir = get_target_dir(&runtime, &repo, &release, None).unwrap();
-        #[cfg(not(windows))]
-        assert_eq!(target_dir, PathBuf::from("/home/user/.ghri/o/r/v1"));
-        #[cfg(windows)]
-        assert_eq!(
-            target_dir,
-            PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\v1")
-        );
-    }
-
-    #[test]
-    fn test_get_target_dir_with_custom_root() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
-        let release = Release {
-            tag_name: "v1".into(),
-            ..Default::default()
-        };
-        let runtime = MockRuntime::new(); // Not used
-
-        let target_dir =
-            get_target_dir(&runtime, &repo, &release, Some(PathBuf::from("/custom"))).unwrap();
-
-        assert_eq!(target_dir, PathBuf::from("/custom/o/r/v1"));
-    }
-
-    #[test]
-    fn test_update_current_symlink_create_new() {
-        let mut runtime = MockRuntime::new();
-        let target_dir = PathBuf::from("/root/o/r/v1");
-        let current_link = PathBuf::from("/root/o/r/current");
-
-        runtime
-            .expect_exists()
-            .with(eq(current_link.clone()))
-            .returning(|_| false);
-
-        runtime
-            .expect_symlink()
-            .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
-            .returning(|_, _| Ok(()));
-
-        update_current_symlink(&runtime, &target_dir, "v1").unwrap();
-    }
-
-    #[test]
-    fn test_update_current_symlink_update_existing() {
-        let mut runtime = MockRuntime::new();
-        let target_dir = PathBuf::from("/root/o/r/v2");
-        let current_link = PathBuf::from("/root/o/r/current");
-
-        runtime
-            .expect_exists()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-
-        runtime
-            .expect_read_link()
-            .with(eq(current_link.clone()))
-            .returning(|_| Ok(PathBuf::from("v1")));
-
-        runtime
-            .expect_remove_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| Ok(()));
-
-        runtime
-            .expect_symlink()
-            .with(eq(PathBuf::from("v2")), eq(current_link.clone()))
-            .returning(|_, _| Ok(()));
-
-        update_current_symlink(&runtime, &target_dir, "v2").unwrap();
-    }
+    // Tests for get_target_dir and update_current_symlink are now in paths.rs and symlink.rs
 
     #[cfg(not(windows))]
     #[tokio::test]
@@ -892,34 +495,7 @@ mod tests {
         assert_eq!(meta.name, "o/r");
     }
 
-    #[test]
-    fn test_find_all_packages() {
-        let mut runtime = MockRuntime::new();
-        let root = PathBuf::from("/root");
-
-        // Structure: /root/owner/repo/meta.json
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(root.clone()))
-            .returning(|p| Ok(vec![p.join("owner")]));
-        runtime.expect_is_dir().returning(|_| true); // owner and repo are dirs
-        runtime
-            .expect_read_dir()
-            .with(eq(root.join("owner")))
-            .returning(|p| Ok(vec![p.join("repo")]));
-        runtime
-            .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
-            .returning(|_| true);
-
-        let packages = find_all_packages(&runtime, &root).unwrap();
-        assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0], root.join("owner/repo/meta.json"));
-    }
+    // test_find_all_packages is now in package/discovery.rs
 
     #[tokio::test]
     async fn test_ensure_installed_creates_dir_and_extracts() {
@@ -1061,38 +637,8 @@ mod tests {
         installer.update_all(None).await.unwrap();
     }
 
-    #[test]
-    fn test_meta_serialization_with_api_urls() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
-        let info = RepoInfo {
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "now".into(),
-        };
-        let api_url = "https://custom.api";
-        let meta = Meta::from(repo, info, vec![], "v1", api_url);
-
-        let json = serde_json::to_string(&meta).unwrap();
-        let deserialized: Meta = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.api_url, api_url);
-    }
-
-    #[test]
-    fn test_find_all_packages_no_root() {
-        let mut runtime = MockRuntime::new();
-        let root = std::path::Path::new("/non-existent");
-        runtime
-            .expect_exists()
-            .with(eq(root.to_path_buf()))
-            .returning(|_| false);
-        let packages = find_all_packages(&runtime, root).unwrap();
-        assert!(packages.is_empty());
-    }
+    // Meta tests are now in package/meta.rs
+    // find_all_packages tests are now in package/discovery.rs
 
     #[tokio::test]
     async fn test_update_all_no_packages() {
@@ -1168,15 +714,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_default_install_root_no_home() {
-        let mut runtime = MockRuntime::new();
-        runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| None);
-
-        let result = default_install_root(&runtime);
-        assert!(result.is_err());
-    }
+    // default_install_root test is now in paths.rs
+    
     #[tokio::test]
     async fn test_ensure_installed_cleanup_fail() {
         let mut server = mockito::Server::new_async().await;
@@ -1238,119 +777,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_meta_releases_sorting() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
-        let info = RepoInfo {
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "now".into(),
-        };
-        let releases = vec![
-            Release {
-                tag_name: "v1.0.0".into(),
-                published_at: Some("2023-01-01T00:00:00Z".into()),
-                ..Default::default()
-            },
-            Release {
-                tag_name: "v2.0.0".into(),
-                published_at: Some("2023-02-01T00:00:00Z".into()),
-                ..Default::default()
-            },
-            Release {
-                tag_name: "v0.9.0".into(),
-                published_at: Some("2022-12-01T00:00:00Z".into()),
-                ..Default::default()
-            },
-        ];
-        let meta = Meta::from(repo, info, releases, "v2.0.0", "https://api");
-        assert_eq!(meta.releases[0].version, "v2.0.0");
-        assert_eq!(meta.releases[1].version, "v1.0.0");
-        assert_eq!(meta.releases[2].version, "v0.9.0");
-    }
-
-    #[test]
-    fn test_meta_merge_sorting() {
-        let mut meta = Meta {
-            name: "o/r".into(),
-            api_url: "api".into(),
-            repo_info_url: "url".into(),
-            releases_url: "url".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "t1".into(),
-            current_version: "v1".into(),
-            releases: vec![
-                Release {
-                    tag_name: "v1".into(),
-                    published_at: Some("2023-01-01".into()),
-                    ..Default::default()
-                }
-                .into(),
-            ],
-        };
-        let other = Meta {
-            name: "o/r".into(),
-            api_url: "api".into(),
-            repo_info_url: "url".into(),
-            releases_url: "url".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "t2".into(),
-            current_version: "v1".into(),
-            releases: vec![
-                Release {
-                    tag_name: "v2".into(),
-                    published_at: Some("2023-02-01".into()),
-                    ..Default::default()
-                }
-                .into(),
-            ],
-        };
-        meta.merge(other);
-        assert_eq!(meta.releases[0].version, "v2");
-        assert_eq!(meta.releases[1].version, "v1");
-    }
-
-    #[test]
-    fn test_meta_sorting_fallback() {
-        let mut releases = vec![
-            MetaRelease {
-                version: "v1".into(),
-                published_at: None,
-                title: None,
-                is_prerelease: false,
-                tarball_url: "".into(),
-                assets: vec![],
-            },
-            MetaRelease {
-                version: "v2".into(),
-                published_at: None,
-                title: None,
-                is_prerelease: false,
-                tarball_url: "".into(),
-                assets: vec![],
-            },
-            MetaRelease {
-                version: "v1.5".into(),
-                published_at: Some("2023".into()),
-                title: None,
-                is_prerelease: false,
-                tarball_url: "".into(),
-                assets: vec![],
-            },
-        ];
-        Meta::sort_releases_internal(&mut releases);
-        assert_eq!(releases[0].version, "v1.5");
-        assert_eq!(releases[1].version, "v2");
-        assert_eq!(releases[2].version, "v1");
-    }
+    // Meta tests (test_meta_releases_sorting, test_meta_merge_sorting, test_meta_sorting_fallback,
+    // test_meta_conversions, test_meta_get_latest_stable_release*) are now in package/meta.rs
+    // Symlink tests are now in symlink.rs
 
     #[tokio::test]
     async fn test_get_or_fetch_meta_fetch_fail() {
@@ -1412,180 +841,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_meta_conversions() {
-        let meta_asset = MetaAsset {
-            name: "n".into(),
-            size: 1,
-            download_url: "u".into(),
-        };
-        let asset: ReleaseAsset = meta_asset.clone().into();
-        assert_eq!(asset.name, meta_asset.name);
+    // More Meta tests that are now in package/meta.rs
 
-        let meta_release = MetaRelease {
-            version: "v1".into(),
-            title: Some("t".into()),
-            published_at: Some("d".into()),
-            is_prerelease: false,
-            tarball_url: "u".into(),
-            assets: vec![meta_asset],
-        };
-        let release: Release = meta_release.clone().into();
-        assert_eq!(release.tag_name, meta_release.version);
-    }
-
-    #[test]
-    fn test_meta_get_latest_stable_release() {
-        let mut meta = Meta {
-            name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-        };
-        meta.releases.push(MetaRelease {
-            version: "v1".into(),
-            is_prerelease: false,
-            published_at: Some("2023".into()),
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
-        });
-        meta.releases.push(MetaRelease {
-            version: "v2-rc".into(),
-            is_prerelease: true,
-            published_at: Some("2024".into()),
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
-        });
-
-        let latest = meta.get_latest_stable_release().unwrap();
-        assert_eq!(latest.version, "v1");
-    }
-
-    #[test]
-    fn test_meta_get_latest_stable_release_empty() {
-        let meta = Meta {
-            name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-        };
-        assert!(meta.get_latest_stable_release().is_none());
-    }
-
-    #[test]
-    fn test_meta_get_latest_stable_release_only_prerelease() {
-        let mut meta = Meta {
-            name: "n".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: None,
-            homepage: None,
-            license: None,
-            updated_at: "".into(),
-            current_version: "".into(),
-            releases: vec![],
-        };
-        meta.releases.push(MetaRelease {
-            version: "v1-rc".into(),
-            is_prerelease: true,
-            published_at: None,
-            title: None,
-            tarball_url: "".into(),
-            assets: vec![],
-        });
-        assert!(meta.get_latest_stable_release().is_none());
-    }
-
-    #[test]
-    fn test_update_current_symlink_fails_if_not_symlink() {
-        let mut runtime = MockRuntime::new();
-        let target_dir = PathBuf::from("/root/o/r/v1");
-        let current_link = PathBuf::from("/root/o/r/current");
-
-        runtime
-            .expect_exists()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| false);
-
-        let result = update_current_symlink(&runtime, &target_dir, "v1");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_update_current_symlink_idempotent() {
-        let mut runtime = MockRuntime::new();
-        let target_dir = PathBuf::from("/root/o/r/v1");
-        let current_link = PathBuf::from("/root/o/r/current");
-
-        // Exists, matches
-        runtime
-            .expect_exists()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link.clone()))
-            .returning(|_| Ok(PathBuf::from("v1")));
-
-        // Should NOT call remove_symlink or symlink
-        let result = update_current_symlink(&runtime, &target_dir, "v1");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_update_current_symlink_read_link_fail() {
-        let mut runtime = MockRuntime::new();
-        let target_dir = PathBuf::from("/root/o/r/v1");
-        let current_link = PathBuf::from("/root/o/r/current");
-
-        runtime
-            .expect_exists()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link.clone()))
-            .returning(|_| Err(anyhow::anyhow!("fail")));
-
-        // Should remove and recreate
-        runtime
-            .expect_remove_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| Ok(()));
-        runtime
-            .expect_symlink()
-            .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
-            .returning(|_, _| Ok(()));
-
-        update_current_symlink(&runtime, &target_dir, "v1").unwrap();
-    }
+    // Symlink tests are now in symlink.rs
 
     #[tokio::test]
     async fn test_save_metadata_failure_warning() {
@@ -1658,19 +916,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_default_install_root_privileged_mock() {
-        let mut runtime = MockRuntime::new();
-        runtime.expect_is_privileged().returning(|| true);
-
-        let root = default_install_root(&runtime).unwrap();
-        #[cfg(target_os = "macos")]
-        assert_eq!(root, PathBuf::from("/opt/ghri"));
-        #[cfg(all(unix, not(target_os = "macos")))]
-        assert_eq!(root, PathBuf::from("/usr/local/ghri"));
-        #[cfg(target_os = "windows")]
-        assert_eq!(root, PathBuf::from("C:\\ProgramData\\ghri"));
-    }
+    // default_install_root_privileged_mock test is now in paths.rs
+    
     #[tokio::test]
     async fn test_get_or_fetch_meta_exists_interaction() {
         let repo = GitHubRepo {
@@ -1782,18 +1029,7 @@ mod tests {
         update(runtime, None, None).await.unwrap();
     }
 
-    #[test]
-    fn test_update_current_symlink_no_op_if_already_correct() {
-        let mut runtime = MockRuntime::new();
-        runtime.expect_exists().returning(|_| true);
-        runtime.expect_is_symlink().returning(|_| true);
-        runtime
-            .expect_read_link()
-            .returning(|_| Ok(PathBuf::from("v1")));
-
-        // No symlink calls
-        update_current_symlink(&runtime, &PathBuf::from("/root/o/r/v1"), "v1").unwrap();
-    }
+    // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
 
     #[tokio::test]
     async fn test_update_atomic_safety() {
@@ -1839,34 +1075,5 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn test_update_timestamp_behavior() {
-        let mut meta = Meta {
-            name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: Some("old".into()),
-            homepage: None,
-            license: None,
-            updated_at: "old".into(),
-            current_version: "".into(),
-            releases: vec![],
-        };
-        let other = Meta {
-            name: "o/r".into(),
-            api_url: "".into(),
-            repo_info_url: "".into(),
-            releases_url: "".into(),
-            description: Some("new".into()),
-            homepage: None,
-            license: None,
-            updated_at: "new".into(),
-            current_version: "".into(),
-            releases: vec![],
-        };
-
-        assert!(meta.merge(other));
-        assert_eq!(meta.description, Some("new".into()));
-    }
+    // test_update_timestamp_behavior is now in package/meta.rs
 }

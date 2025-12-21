@@ -10,7 +10,7 @@ fn main() {
     let cargo_version = env!("CARGO_PKG_VERSION");
 
     let output = Command::new("git")
-        .args(&["describe", "--tags", "--always", "--dirty"])
+        .args(["describe", "--tags", "--always", "--dirty"])
         .output();
     let now = SystemTime::now();
     let secs = now
