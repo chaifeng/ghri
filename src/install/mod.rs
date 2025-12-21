@@ -9,7 +9,7 @@ use crate::{
     cleanup::CleanupContext,
     download::download_file,
     github::{GetReleases, GitHubRepo, LinkSpec, Release, RepoSpec},
-    package::{Meta, find_all_packages},
+    package::{LinkRule, Meta, find_all_packages},
     runtime::Runtime,
 };
 
@@ -175,9 +175,23 @@ pub fn link<R: Runtime>(
         determine_link_target(&runtime, &version_dir)?
     };
 
-    // If dest is an existing directory, create link inside it with repo name
+    // If dest is an existing directory, create link inside it
+    // Use the filename from the link target (either specified path or detected file)
     let final_dest = if runtime.exists(&dest) && runtime.is_dir(&dest) {
-        dest.join(&spec.repo.repo)
+        let filename = if let Some(ref path) = spec.path {
+            // Use the filename from the specified path
+            Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| spec.repo.repo.clone())
+        } else {
+            // Use repo name for default behavior, or filename if linking to single file
+            link_target
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| spec.repo.repo.clone())
+        };
+        dest.join(filename)
     } else {
         dest
     };
@@ -232,9 +246,25 @@ pub fn link<R: Runtime>(
     // Create the symlink
     runtime.symlink(&link_target, &final_dest)?;
 
-    // Update meta.json with the linked_to path and linked_path
-    meta.linked_to = Some(final_dest.clone());
-    meta.linked_path = spec.path.clone();
+    // Add or update link rule in meta.json
+    let new_rule = LinkRule {
+        dest: final_dest.clone(),
+        path: spec.path.clone(),
+    };
+
+    // Check if a rule with the same dest already exists
+    if let Some(existing) = meta.links.iter_mut().find(|l| l.dest == final_dest) {
+        // Update existing rule
+        existing.path = new_rule.path;
+    } else {
+        // Add new rule
+        meta.links.push(new_rule);
+    }
+
+    // Clear legacy fields (migration is done by apply_defaults on load)
+    meta.linked_to = None;
+    meta.linked_path = None;
+
     let json = serde_json::to_string_pretty(&meta)?;
     let tmp_path = meta_path.with_extension("json.tmp");
     runtime.write(&tmp_path, json.as_bytes())?;
@@ -267,56 +297,100 @@ fn determine_link_target<R: Runtime>(runtime: &R, version_dir: &Path) -> Result<
     Ok(version_dir.to_path_buf())
 }
 
-/// Update the external link for a package after installation
+/// Update external links for a package after installation
+/// Iterates through all link rules and updates each symlink
 #[tracing::instrument(skip(runtime, _package_dir, version_dir))]
-pub(crate) fn update_external_link<R: Runtime>(
+pub(crate) fn update_external_links<R: Runtime>(
     runtime: &R,
     _package_dir: &Path,
     version_dir: &Path,
     meta: &Meta,
 ) -> Result<()> {
-    if let Some(ref linked_to) = meta.linked_to {
-        // Determine link target based on linked_path or default behavior
-        let link_target = if let Some(ref path) = meta.linked_path {
-            let target = version_dir.join(path);
-            if !runtime.exists(&target) {
-                warn!(
-                    "Linked path '{}' does not exist in {:?}, skipping link update",
-                    path, version_dir
-                );
-                return Ok(());
-            }
-            target
-        } else {
-            determine_link_target(runtime, version_dir)?
-        };
+    let mut errors = Vec::new();
 
-        if runtime.exists(linked_to) || runtime.is_symlink(linked_to) {
-            if runtime.is_symlink(linked_to) {
-                // Remove the old symlink
-                runtime.remove_symlink(linked_to)?;
-
-                // Create new symlink to the new version
-                runtime.symlink(&link_target, linked_to)?;
-
-                info!("Updated external link {:?} -> {:?}", linked_to, link_target);
-            } else {
-                warn!(
-                    "External link target {:?} exists but is not a symlink, skipping update",
-                    linked_to
-                );
-            }
-        } else {
-            // linked_to path doesn't exist anymore, create it
-            if let Some(parent) = linked_to.parent() {
-                if !runtime.exists(parent) {
-                    runtime.create_dir_all(parent)?;
-                }
-            }
-
-            runtime.symlink(&link_target, linked_to)?;
-            info!("Recreated external link {:?} -> {:?}", linked_to, link_target);
+    for rule in &meta.links {
+        if let Err(e) = update_single_link(runtime, version_dir, rule) {
+            // Log error but continue with other links
+            eprintln!(
+                "Error updating link {:?}: {}",
+                rule.dest, e
+            );
+            errors.push((rule.dest.clone(), e));
         }
+    }
+
+    // Also handle legacy linked_to field for backward compatibility
+    if let Some(ref linked_to) = meta.linked_to {
+        let legacy_rule = LinkRule {
+            dest: linked_to.clone(),
+            path: meta.linked_path.clone(),
+        };
+        if let Err(e) = update_single_link(runtime, version_dir, &legacy_rule) {
+            eprintln!(
+                "Error updating legacy link {:?}: {}",
+                linked_to, e
+            );
+            errors.push((linked_to.clone(), e));
+        }
+    }
+
+    if !errors.is_empty() {
+        warn!(
+            "{} link(s) failed to update, but continuing",
+            errors.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Update a single link according to a link rule
+fn update_single_link<R: Runtime>(
+    runtime: &R,
+    version_dir: &Path,
+    rule: &LinkRule,
+) -> Result<()> {
+    // Determine link target based on rule.path or default behavior
+    let link_target = if let Some(ref path) = rule.path {
+        let target = version_dir.join(path);
+        if !runtime.exists(&target) {
+            anyhow::bail!(
+                "Path '{}' does not exist in {:?}",
+                path, version_dir
+            );
+        }
+        target
+    } else {
+        determine_link_target(runtime, version_dir)?
+    };
+
+    let linked_to = &rule.dest;
+
+    if runtime.exists(linked_to) || runtime.is_symlink(linked_to) {
+        if runtime.is_symlink(linked_to) {
+            // Remove the old symlink
+            runtime.remove_symlink(linked_to)?;
+
+            // Create new symlink to the new version
+            runtime.symlink(&link_target, linked_to)?;
+
+            info!("Updated external link {:?} -> {:?}", linked_to, link_target);
+        } else {
+            warn!(
+                "External link target {:?} exists but is not a symlink, skipping update",
+                linked_to
+            );
+        }
+    } else {
+        // linked_to path doesn't exist anymore, create it
+        if let Some(parent) = linked_to.parent() {
+            if !runtime.exists(parent) {
+                runtime.create_dir_all(parent)?;
+            }
+        }
+
+        runtime.symlink(&link_target, linked_to)?;
+        info!("Recreated external link {:?} -> {:?}", linked_to, link_target);
     }
 
     Ok(())
@@ -397,10 +471,10 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
         update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
 
-        // Update external link if configured
+        // Update external links if configured
         if let Some(parent) = target_dir.parent() {
-            if let Err(e) = update_external_link(&self.runtime, parent, &target_dir, &meta) {
-                warn!("Failed to update external link: {}. Continuing.", e);
+            if let Err(e) = update_external_links(&self.runtime, parent, &target_dir, &meta) {
+                warn!("Failed to update external links: {}. Continuing.", e);
             }
         }
 
@@ -1575,7 +1649,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_external_link_no_linked_to() {
+    fn test_update_external_links_no_links() {
         let runtime = MockRuntime::new();
         let meta = Meta {
             name: "o/r".into(),
@@ -1584,7 +1658,7 @@ mod tests {
         };
 
         // Should return Ok without doing anything
-        let result = update_external_link(
+        let result = update_external_links(
             &runtime,
             Path::new("/root/o/r"),
             Path::new("/root/o/r/v1"),
@@ -1594,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_external_link_updates_existing_symlink() {
+    fn test_update_external_links_updates_existing_symlink() {
         let mut runtime = MockRuntime::new();
         let linked_to = PathBuf::from("/usr/local/bin/tool");
         let version_dir = PathBuf::from("/root/o/r/v2");
@@ -1602,7 +1676,10 @@ mod tests {
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v2".into(),
-            linked_to: Some(linked_to.clone()),
+            links: vec![LinkRule {
+                dest: linked_to.clone(),
+                path: None,
+            }],
             ..Default::default()
         };
 
@@ -1641,7 +1718,7 @@ mod tests {
             .with(eq(PathBuf::from("/root/o/r/v2/tool")), eq(linked_to.clone()))
             .returning(|_, _| Ok(()));
 
-        let result = update_external_link(
+        let result = update_external_links(
             &runtime,
             Path::new("/root/o/r"),
             &version_dir,
@@ -1653,13 +1730,13 @@ mod tests {
     #[test]
     fn test_link_dest_is_directory() {
         // When dest is an existing directory, the link should be created inside it
-        // with the repo name as the symlink name
+        // with the filename from the link target (single file case)
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
         let root = PathBuf::from("/home/user/.ghri");
         let dest_dir = PathBuf::from("/usr/local/bin");
-        let final_link = dest_dir.join("repo"); // /usr/local/bin/repo
+        let final_link = dest_dir.join("tool"); // /usr/local/bin/tool (filename from single file)
 
         // Package exists
         runtime

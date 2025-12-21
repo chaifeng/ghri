@@ -208,9 +208,9 @@ fn test_link_single_file_to_path() {
     let link_target = std::fs::read_link(&link_path).unwrap();
     assert!(link_target.to_string_lossy().contains("tool"));
 
-    // Verify meta.json has linked_to field
+    // Verify meta.json has links field
     let meta_content = std::fs::read_to_string(install_root.join("test/tool/meta.json")).unwrap();
-    assert!(meta_content.contains("linked_to"));
+    assert!(meta_content.contains("links"));
     assert!(meta_content.contains("my-tool"));
 }
 
@@ -278,9 +278,9 @@ fn test_link_to_directory() {
     let expected_link = bin_dir.path().join("cli");
     assert!(expected_link.is_symlink(), "Expected symlink at {:?}", expected_link);
 
-    // Verify meta.json has the full path
+    // Verify meta.json has the full path in links array
     let meta_content = std::fs::read_to_string(install_root.join("org/cli/meta.json")).unwrap();
-    assert!(meta_content.contains("linked_to"));
+    assert!(meta_content.contains("links"));
     assert!(meta_content.contains("/cli\"")); // Full path ends with /cli"
 }
 

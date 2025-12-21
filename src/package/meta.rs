@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::github::{GitHubRepo, Release, ReleaseAsset, RepoInfo};
 use crate::runtime::Runtime;
 
+use super::LinkRule;
+
 const DEFAULT_API_URL: &str = "https://api.github.com";
 
 /// Deserialize a string that may be null as empty string
@@ -38,11 +40,15 @@ pub struct Meta {
     pub current_version: String,
     #[serde(default)]
     pub releases: Vec<MetaRelease>,
-    /// Path where the current version is linked to (external symlink)
+    /// List of link rules for creating external symlinks
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkRule>,
+    /// Legacy: Path where the current version is linked to (external symlink)
+    /// Deprecated: Use `links` instead. Kept for backward compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_to: Option<PathBuf>,
-    /// Relative path within version directory to link (e.g., "bin/tool")
-    /// If None, uses default behavior (single file or version directory)
+    /// Legacy: Relative path within version directory to link
+    /// Deprecated: Use `links` instead. Kept for backward compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_path: Option<String>,
 }
@@ -70,6 +76,7 @@ impl Meta {
                 Meta::sort_releases_internal(&mut r);
                 r
             },
+            links: vec![],
             linked_to: None,
             linked_path: None,
         }
@@ -174,6 +181,21 @@ impl Meta {
                     }
                 }
             }
+        }
+
+        // Migrate legacy linked_to/linked_path to links array
+        if let Some(ref linked_to) = self.linked_to {
+            // Check if this link already exists in links array
+            let exists = self.links.iter().any(|l| l.dest == *linked_to);
+            if !exists {
+                self.links.push(LinkRule {
+                    dest: linked_to.clone(),
+                    path: self.linked_path.clone(),
+                });
+            }
+            // Clear legacy fields after migration
+            self.linked_to = None;
+            self.linked_path = None;
         }
     }
 
