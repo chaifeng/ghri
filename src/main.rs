@@ -39,6 +39,9 @@ enum Commands {
 
     /// Update release information for all installed packages
     Update(UpdateArgs),
+
+    /// List all installed packages
+    List(ListArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -55,6 +58,9 @@ pub struct InstallArgs {
 #[derive(clap::Args, Debug)]
 pub struct UpdateArgs {}
 
+#[derive(clap::Args, Debug)]
+pub struct ListArgs {}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -70,6 +76,7 @@ async fn main() -> Result<()> {
             install(runtime, &args.repo, cli.install_root, args.api_url).await?
         }
         Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
+        Commands::List(_args) => ghri::install::list(runtime, cli.install_root)?,
     }
     Ok(())
 }

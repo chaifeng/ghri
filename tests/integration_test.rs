@@ -107,4 +107,17 @@ fn test_end_to_end_install() {
     let meta_content = std::fs::read_to_string(meta_file).unwrap();
     assert!(meta_content.contains("v1.0.0"));
     assert!(meta_content.contains("owner/repo"));
+
+    // Test list command shows the installed package
+    let mut list_cmd = Command::new(cargo::cargo_bin!("ghri"));
+    list_cmd
+        .arg("list")
+        .arg("--root")
+        .arg(install_root);
+
+    list_cmd
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("owner/repo"))
+        .stdout(predicates::str::contains("v1.0.0"));
 }
