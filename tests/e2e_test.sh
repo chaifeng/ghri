@@ -15,6 +15,26 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+#######################################
+# Check for GITHUB_TOKEN
+#######################################
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    echo -e "${RED}Error: GITHUB_TOKEN environment variable is not set.${NC}"
+    echo ""
+    echo "This test suite requires a GitHub token to avoid API rate limiting."
+    echo "Anonymous access to the GitHub API is limited to 60 requests per hour,"
+    echo "which may cause test failures."
+    echo ""
+    echo "To set a token, run:"
+    echo "  export GITHUB_TOKEN=your_github_token"
+    echo ""
+    echo "You can create a personal access token at:"
+    echo "  https://github.com/settings/tokens"
+    echo ""
+    echo "The token only needs 'public_repo' scope for this test."
+    exit 1
+fi
+
 # Test counters
 TESTS_PASSED=0
 TESTS_FAILED=0
