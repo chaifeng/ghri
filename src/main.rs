@@ -54,6 +54,9 @@ enum Commands {
 
     /// Remove a package or specific version
     Remove(RemoveArgs),
+
+    /// Show detailed information about a package
+    Show(ShowArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -117,6 +120,13 @@ pub struct RemoveArgs {
     pub force: bool,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct ShowArgs {
+    /// The GitHub repository in the format "owner/repo"
+    #[arg(value_name = "OWNER/REPO")]
+    pub repo: String,
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -137,6 +147,7 @@ async fn main() -> Result<()> {
         Commands::Unlink(args) => ghri::install::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
         Commands::Links(args) => ghri::install::links(runtime, &args.repo, cli.install_root)?,
         Commands::Remove(args) => ghri::install::remove(runtime, &args.repo, args.force, cli.install_root)?,
+        Commands::Show(args) => ghri::install::show(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())
 }
@@ -358,6 +369,29 @@ mod tests {
                 assert!(args.force);
             }
             _ => panic!("Expected Remove command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_show_parsing() {
+        let cli = Cli::try_parse_from(&["ghri", "show", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Show(args) => {
+                assert_eq!(args.repo, "owner/repo");
+            }
+            _ => panic!("Expected Show command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_show_with_root() {
+        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp/test", "show", "owner/repo"]).unwrap();
+        assert_eq!(cli.install_root, Some(PathBuf::from("/tmp/test")));
+        match cli.command {
+            Commands::Show(args) => {
+                assert_eq!(args.repo, "owner/repo");
+            }
+            _ => panic!("Expected Show command"),
         }
     }
 }
