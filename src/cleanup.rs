@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 /// Tracks paths that need cleanup on interruption
 #[derive(Default)]
 pub struct CleanupContext {
+    #[cfg(test)]
+    pub paths: Vec<PathBuf>,
+    #[cfg(not(test))]
     paths: Vec<PathBuf>,
 }
 

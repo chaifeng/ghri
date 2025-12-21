@@ -431,4 +431,191 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_extract_with_cleanup_registers_temp_dir() -> Result<()> {
+        use crate::cleanup;
+
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        create_test_archive(
+            &archive_path,
+            HashMap::from([("test_dir/file1.txt", "test")]),
+        )?;
+
+        let cleanup_ctx = cleanup::new_shared();
+        ArchiveExtractor.extract_with_cleanup(
+            &RealRuntime,
+            &archive_path,
+            &extract_path,
+            cleanup_ctx.clone(),
+        )?;
+
+        // After successful extraction, cleanup context should be empty
+        let ctx = cleanup_ctx.lock().unwrap();
+        assert!(ctx.paths.is_empty(), "Cleanup context should be empty after successful extraction");
+
+        let extracted_file = extract_path.join("file1.txt");
+        assert!(extracted_file.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_extract_archive_with_symlinks() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        // Create archive with a symlink
+        {
+            let file = File::create(&archive_path)?;
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar = Builder::new(enc);
+
+            // Add a regular file
+            let mut header = tar::Header::new_gnu();
+            header.set_path("test_dir/target.txt")?;
+            let content = b"target content";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, &content[..])?;
+
+            // Add a symlink pointing to the file
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_path("test_dir/link.txt")?;
+            link_header.set_entry_type(tar::EntryType::Symlink);
+            link_header.set_size(0);
+            link_header.set_link_name("target.txt")?;
+            link_header.set_cksum();
+            tar.append(&link_header, &[] as &[u8])?;
+
+            tar.finish()?;
+        }
+
+        ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        // Verify the target file was extracted
+        let target_path = extract_path.join("target.txt");
+        assert!(target_path.exists());
+
+        // Verify the symlink was created
+        let link_path = extract_path.join("link.txt");
+        assert!(link_path.is_symlink() || link_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_archive_with_directory_entries() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        // Create archive with explicit directory entries
+        {
+            let file = File::create(&archive_path)?;
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar = Builder::new(enc);
+
+            // Add a directory entry
+            let mut dir_header = tar::Header::new_gnu();
+            dir_header.set_path("test_dir/subdir/")?;
+            dir_header.set_entry_type(tar::EntryType::Directory);
+            dir_header.set_size(0);
+            dir_header.set_mode(0o755);
+            dir_header.set_cksum();
+            tar.append(&dir_header, &[] as &[u8])?;
+
+            // Add a file inside the directory
+            let mut file_header = tar::Header::new_gnu();
+            file_header.set_path("test_dir/subdir/file.txt")?;
+            let content = b"nested file";
+            file_header.set_size(content.len() as u64);
+            file_header.set_mode(0o644);
+            file_header.set_cksum();
+            tar.append(&file_header, &content[..])?;
+
+            tar.finish()?;
+        }
+
+        ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        // Verify the directory was created
+        let subdir_path = extract_path.join("subdir");
+        assert!(subdir_path.is_dir());
+
+        // Verify the file inside was extracted
+        let nested_file = extract_path.join("subdir/file.txt");
+        assert!(nested_file.exists());
+        assert_eq!(fs::read_to_string(nested_file)?, "nested file");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_archive_with_xheader() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        // Create archive with XHeader (extended header)
+        {
+            let file = File::create(&archive_path)?;
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar = Builder::new(enc);
+
+            // Add an extended header entry
+            let mut xheader = tar::Header::new_ustar();
+            xheader.set_entry_type(tar::EntryType::XHeader);
+            xheader.set_path("./PaxHeaders.0/file.txt")?;
+            let xheader_data = b"30 mtime=1234567890.123456789\n";
+            xheader.set_size(xheader_data.len() as u64);
+            xheader.set_cksum();
+            tar.append(&xheader, &xheader_data[..])?;
+
+            // Add actual file
+            let mut header = tar::Header::new_gnu();
+            header.set_path("test_dir/file.txt")?;
+            let content = b"file content";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, &content[..])?;
+
+            tar.finish()?;
+        }
+
+        ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        // Verify the actual file was extracted
+        let extracted_file = extract_path.join("file.txt");
+        assert!(extracted_file.exists());
+        assert_eq!(fs::read_to_string(&extracted_file)?, "file content");
+
+        // Verify XHeader was NOT extracted as a file
+        assert!(!extract_path.join("PaxHeaders.0").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_nonexistent_archive() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("nonexistent.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path).unwrap();
+
+        let result = ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to open archive"));
+    }
 }

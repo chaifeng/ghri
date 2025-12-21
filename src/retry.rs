@@ -212,4 +212,186 @@ mod tests {
         let err = anyhow::anyhow!("some other error");
         assert!(!is_retryable_error(&err));
     }
+
+    #[test]
+    fn test_non_retryable_error_client_error_display() {
+        let err = NonRetryableError::ClientError("HTTP 400".to_string());
+        assert!(err.to_string().contains("Request error"));
+        assert!(err.to_string().contains("HTTP 400"));
+    }
+
+    #[test]
+    fn test_is_retryable_error_timeout() {
+        let err = anyhow::anyhow!("operation timeout occurred");
+        assert!(is_retryable_error(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_error_broken_pipe() {
+        let err = anyhow::anyhow!("broken pipe error");
+        assert!(is_retryable_error(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_error_dns() {
+        let err = anyhow::anyhow!("dns resolution failed");
+        assert!(is_retryable_error(&err));
+    }
+
+    #[test]
+    fn test_is_retryable_error_resolve() {
+        let err = anyhow::anyhow!("could not resolve host");
+        assert!(is_retryable_error(&err));
+    }
+
+    #[tokio::test]
+    async fn test_with_retry_retries_on_network_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let result = with_retry("test", || {
+            let attempts = Arc::clone(&attempts_clone);
+            async move {
+                let count = attempts.fetch_add(1, Ordering::SeqCst);
+                if count < 2 {
+                    Err::<i32, _>(anyhow::anyhow!("connection reset"))
+                } else {
+                    Ok(42)
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_with_retry_exhausts_retries() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let result = with_retry("test", || {
+            let attempts = Arc::clone(&attempts_clone);
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<i32, _>(anyhow::anyhow!("connection timeout"))
+            }
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), MAX_RETRIES);
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_unauthorized() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(401).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(matches!(result, Err(NonRetryableError::AuthenticationFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_forbidden() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(403).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(matches!(result, Err(NonRetryableError::Forbidden(_))));
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_too_many_requests() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(429).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(matches!(result, Err(NonRetryableError::RateLimitExceeded(_))));
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(404).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(matches!(result, Err(NonRetryableError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_other_client_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(400).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(matches!(result, Err(NonRetryableError::ClientError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_classify_error_server_error_is_retryable() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(500).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = classify_error(&err);
+        assert!(result.is_ok()); // Server errors are retryable
+    }
+
+    #[tokio::test]
+    async fn test_check_retryable_non_retryable() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(404).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = check_retryable(err);
+        assert!(result.downcast_ref::<NonRetryableError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_check_retryable_retryable() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server.mock("GET", "/").with_status(503).create_async().await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(server.url()).send().await.unwrap();
+        let err = response.error_for_status().unwrap_err();
+
+        let result = check_retryable(err);
+        // Server errors are retryable, so it should remain as reqwest::Error
+        assert!(result.downcast_ref::<NonRetryableError>().is_none());
+    }
 }
