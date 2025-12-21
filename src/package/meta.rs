@@ -41,6 +41,10 @@ pub struct Meta {
     /// Path where the current version is linked to (external symlink)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_to: Option<PathBuf>,
+    /// Relative path within version directory to link (e.g., "bin/tool")
+    /// If None, uses default behavior (single file or version directory)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_path: Option<String>,
 }
 
 impl Meta {
@@ -67,6 +71,7 @@ impl Meta {
                 r
             },
             linked_to: None,
+            linked_path: None,
         }
     }
 

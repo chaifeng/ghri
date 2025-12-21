@@ -66,8 +66,8 @@ pub struct ListArgs {}
 
 #[derive(clap::Args, Debug)]
 pub struct LinkArgs {
-    /// The GitHub repository in the format "owner/repo"
-    #[arg(value_name = "OWNER/REPO")]
+    /// Repository specification: "owner/repo", "owner/repo@version", "owner/repo:path", or "owner/repo@version:path"
+    #[arg(value_name = "OWNER/REPO[@VERSION][:PATH]")]
     pub repo: String,
 
     /// Destination path for the symlink

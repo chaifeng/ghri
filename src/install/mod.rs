@@ -8,7 +8,7 @@ use crate::{
     archive::Extractor,
     cleanup::CleanupContext,
     download::download_file,
-    github::{GetReleases, GitHubRepo, Release, RepoSpec},
+    github::{GetReleases, GitHubRepo, LinkSpec, Release, RepoSpec},
     package::{Meta, find_all_packages},
     runtime::Runtime,
 };
@@ -108,7 +108,7 @@ pub fn link<R: Runtime>(
     dest: PathBuf,
     install_root: Option<PathBuf>,
 ) -> Result<()> {
-    let spec = repo_str.parse::<RepoSpec>()?;
+    let spec = repo_str.parse::<LinkSpec>()?;
     let root = match install_root {
         Some(path) => path,
         None => default_install_root(&runtime)?,
@@ -128,14 +128,30 @@ pub fn link<R: Runtime>(
 
     let mut meta = Meta::load(&runtime, &meta_path)?;
 
-    if meta.current_version.is_empty() {
-        anyhow::bail!(
-            "No current version set for {}. Install a version first.",
-            spec.repo
-        );
-    }
+    // Determine which version to link
+    let version = if let Some(ref v) = spec.version {
+        // Check if specified version exists
+        if !runtime.exists(&package_dir.join(v)) {
+            anyhow::bail!(
+                "Version {} is not installed for {}. Install it first with: ghri install {}@{}",
+                v,
+                spec.repo,
+                spec.repo,
+                v
+            );
+        }
+        v.clone()
+    } else {
+        if meta.current_version.is_empty() {
+            anyhow::bail!(
+                "No current version set for {}. Install a version first.",
+                spec.repo
+            );
+        }
+        meta.current_version.clone()
+    };
 
-    let version_dir = package_dir.join(&meta.current_version);
+    let version_dir = package_dir.join(&version);
     if !runtime.exists(&version_dir) {
         anyhow::bail!(
             "Version directory {:?} does not exist. The package may be corrupted.",
@@ -143,8 +159,21 @@ pub fn link<R: Runtime>(
         );
     }
 
-    // Determine link target: if version dir has only one file, link to that file
-    let link_target = determine_link_target(&runtime, &version_dir)?;
+    // Determine link target based on spec.path or default behavior
+    let link_target = if let Some(ref path) = spec.path {
+        let target = version_dir.join(path);
+        if !runtime.exists(&target) {
+            anyhow::bail!(
+                "Path '{}' does not exist in version {} of {}",
+                path,
+                version,
+                spec.repo
+            );
+        }
+        target
+    } else {
+        determine_link_target(&runtime, &version_dir)?
+    };
 
     // If dest is an existing directory, create link inside it with repo name
     let final_dest = if runtime.exists(&dest) && runtime.is_dir(&dest) {
@@ -203,8 +232,9 @@ pub fn link<R: Runtime>(
     // Create the symlink
     runtime.symlink(&link_target, &final_dest)?;
 
-    // Update meta.json with the linked_to path (final complete path)
+    // Update meta.json with the linked_to path and linked_path
     meta.linked_to = Some(final_dest.clone());
+    meta.linked_path = spec.path.clone();
     let json = serde_json::to_string_pretty(&meta)?;
     let tmp_path = meta_path.with_extension("json.tmp");
     runtime.write(&tmp_path, json.as_bytes())?;
@@ -212,7 +242,7 @@ pub fn link<R: Runtime>(
 
     println!(
         "Linked {} {} -> {:?}",
-        spec.repo, meta.current_version, final_dest
+        spec.repo, version, final_dest
     );
 
     Ok(())
@@ -246,13 +276,27 @@ pub(crate) fn update_external_link<R: Runtime>(
     meta: &Meta,
 ) -> Result<()> {
     if let Some(ref linked_to) = meta.linked_to {
+        // Determine link target based on linked_path or default behavior
+        let link_target = if let Some(ref path) = meta.linked_path {
+            let target = version_dir.join(path);
+            if !runtime.exists(&target) {
+                warn!(
+                    "Linked path '{}' does not exist in {:?}, skipping link update",
+                    path, version_dir
+                );
+                return Ok(());
+            }
+            target
+        } else {
+            determine_link_target(runtime, version_dir)?
+        };
+
         if runtime.exists(linked_to) || runtime.is_symlink(linked_to) {
             if runtime.is_symlink(linked_to) {
                 // Remove the old symlink
                 runtime.remove_symlink(linked_to)?;
 
                 // Create new symlink to the new version
-                let link_target = determine_link_target(runtime, version_dir)?;
                 runtime.symlink(&link_target, linked_to)?;
 
                 info!("Updated external link {:?} -> {:?}", linked_to, link_target);
@@ -264,8 +308,6 @@ pub(crate) fn update_external_link<R: Runtime>(
             }
         } else {
             // linked_to path doesn't exist anymore, create it
-            let link_target = determine_link_target(runtime, version_dir)?;
-
             if let Some(parent) = linked_to.parent() {
                 if !runtime.exists(parent) {
                     runtime.create_dir_all(parent)?;
