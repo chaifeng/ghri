@@ -60,7 +60,7 @@ pub struct UpdateArgs {}
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(EnvFilter::from_default_env().add_directive("warn".parse()?))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))
         .init();
     let cli = Cli::parse();
     let runtime = ghri::runtime::RealRuntime;
