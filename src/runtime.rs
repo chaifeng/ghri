@@ -28,6 +28,9 @@ pub trait Runtime: Send + Sync {
     fn remove_dir_all(&self, path: &Path) -> Result<()>;
     fn is_dir(&self, path: &Path) -> bool;
 
+    /// Set file permissions (mode) on Unix systems. No-op on Windows.
+    fn set_permissions(&self, path: &Path, mode: u32) -> Result<()>;
+
     // Directories
     fn home_dir(&self) -> Option<PathBuf>;
     fn config_dir(&self) -> Option<PathBuf>;
@@ -172,6 +175,21 @@ impl Runtime for RealRuntime {
     #[tracing::instrument(skip(self))]
     fn is_dir(&self, path: &Path) -> bool {
         path.is_dir()
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn set_permissions(&self, path: &Path, mode: u32) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = fs::Permissions::from_mode(mode);
+            fs::set_permissions(path, permissions).context("Failed to set permissions")?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, mode); // Suppress unused warnings on non-Unix
+        }
+        Ok(())
     }
 
     #[tracing::instrument(skip(self))]

@@ -51,19 +51,46 @@ impl Extractor for ArchiveExtractor {
             .context("Failed to read archive entries")?
         {
             let mut entry = entry?;
-            let entry_path = entry.path()?.to_path_buf();
-            let full_path = temp_extract_dir.join(entry_path);
+            let entry_type = entry.header().entry_type();
 
-            if entry.header().entry_type().is_dir() {
+            // Skip PAX global/extended headers - these are metadata entries, not actual files
+            if entry_type == tar::EntryType::XGlobalHeader
+                || entry_type == tar::EntryType::XHeader
+            {
+                debug!("Skipping PAX header entry");
+                continue;
+            }
+
+            let entry_path = entry.path()?.to_path_buf();
+            let full_path = temp_extract_dir.join(&entry_path);
+
+            if entry_type.is_dir() {
                 runtime.create_dir_all(&full_path)?;
-            } else {
+            } else if entry_type.is_file() {
                 if let Some(parent) = full_path.parent() {
                     runtime.create_dir_all(parent)?;
                 }
                 let mut dest_file = runtime.create_file(&full_path)?;
                 std::io::copy(&mut entry, &mut dest_file)
                     .with_context(|| format!("Failed to extract file {:?}", full_path))?;
+
+                // Set file permissions from archive metadata
+                if let Ok(mode) = entry.header().mode() {
+                    if let Err(e) = runtime.set_permissions(&full_path, mode) {
+                        debug!("Failed to set permissions on {:?}: {}", full_path, e);
+                    }
+                }
+            } else if entry_type.is_symlink() {
+                if let Some(link_name) = entry.link_name()? {
+                    if let Some(parent) = full_path.parent() {
+                        runtime.create_dir_all(parent)?;
+                    }
+                    if let Err(e) = runtime.symlink(link_name.as_ref(), &full_path) {
+                        debug!("Failed to create symlink {:?} -> {:?}: {}", full_path, link_name, e);
+                    }
+                }
             }
+            // Skip other entry types (hard links, etc.)
         }
 
         // Find the single directory inside the temp extraction dir
@@ -236,6 +263,127 @@ mod tests {
         let extracted_file = extract_path.join("file1.txt");
         assert!(extracted_file.exists());
         assert_eq!(fs::read_to_string(extracted_file)?, "test");
+
+        Ok(())
+    }
+
+    /// Creates a test archive with PAX global header (like GitHub's source tarballs)
+    fn create_pax_archive(path: &Path, files: HashMap<&str, &str>) -> Result<()> {
+        let file = File::create(path)?;
+        let enc = GzEncoder::new(file, Compression::default());
+        let mut tar = Builder::new(enc);
+
+        // Add a PAX global header entry (this is what GitHub adds to source tarballs)
+        let mut pax_header = tar::Header::new_ustar();
+        pax_header.set_entry_type(tar::EntryType::XGlobalHeader);
+        pax_header.set_path("pax_global_header")?;
+        let pax_data = b"52 comment=some git commit hash here\n";
+        pax_header.set_size(pax_data.len() as u64);
+        pax_header.set_cksum();
+        tar.append(&pax_header, &pax_data[..])?;
+
+        // Add actual files
+        let mut header = tar::Header::new_gnu();
+        for (f, content) in files.iter() {
+            header.set_path(f)?;
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, content.as_bytes())?;
+        }
+
+        tar.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_archive_skips_pax_global_header() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        create_pax_archive(
+            &archive_path,
+            HashMap::from([("test_dir/file1.txt", "test content")]),
+        )?;
+
+        ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        // Verify the actual file was extracted
+        let extracted_file = extract_path.join("file1.txt");
+        assert!(extracted_file.exists());
+        assert_eq!(fs::read_to_string(&extracted_file)?, "test content");
+
+        // Verify pax_global_header was NOT extracted
+        assert!(!extract_path.join("pax_global_header").exists());
+
+        // Verify no other unexpected files exist
+        let entries: Vec<_> = fs::read_dir(&extract_path)?
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "Expected only file1.txt, but found: {:?}", entries);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_extract_archive_preserves_file_permissions() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.tar.gz");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        // Create archive with executable file (mode 0o755)
+        {
+            let file = File::create(&archive_path)?;
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar = Builder::new(enc);
+
+            let mut header = tar::Header::new_gnu();
+            header.set_path("test_dir/script.sh")?;
+            let content = b"#!/bin/bash\necho hello";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755); // Executable
+            header.set_cksum();
+            tar.append(&header, &content[..])?;
+
+            // Add a regular file (mode 0o644)
+            let mut header2 = tar::Header::new_gnu();
+            header2.set_path("test_dir/config.txt")?;
+            let config_content = b"some config";
+            header2.set_size(config_content.len() as u64);
+            header2.set_mode(0o644); // Regular file
+            header2.set_cksum();
+            tar.append(&header2, &config_content[..])?;
+
+            tar.finish()?;
+        }
+
+        ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        // Verify executable file has execute permission
+        let script_path = extract_path.join("script.sh");
+        assert!(script_path.exists());
+        let script_mode = fs::metadata(&script_path)?.permissions().mode();
+        assert!(
+            script_mode & 0o111 != 0,
+            "Expected script.sh to be executable, but mode was {:o}",
+            script_mode
+        );
+
+        // Verify regular file does NOT have execute permission
+        let config_path = extract_path.join("config.txt");
+        assert!(config_path.exists());
+        let config_mode = fs::metadata(&config_path)?.permissions().mode();
+        assert!(
+            config_mode & 0o111 == 0,
+            "Expected config.txt to NOT be executable, but mode was {:o}",
+            config_mode
+        );
 
         Ok(())
     }
