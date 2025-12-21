@@ -583,3 +583,254 @@ fn test_link_fails_for_existing_non_symlink() {
         .failure()
         .stderr(predicates::str::contains("not a symlink"));
 }
+
+#[test]
+fn test_unlink_removes_link_and_rule() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    let _mock_releases = server
+        .mock("GET", "/repos/test/unlink/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
+            url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/unlink")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz = create_tar_gz_with_executable(&[("unlink-v1/tool", "#!/bin/bash\necho test", 0o755)]);
+    let _mock_download = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+    let link_dir = tempdir().unwrap();
+    let link_path = link_dir.path().join("my-tool");
+
+    // Install
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/unlink")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Create link
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("link")
+        .arg("test/unlink")
+        .arg(&link_path)
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify link exists
+    assert!(link_path.is_symlink());
+
+    // Verify meta has link rule
+    let meta_content = std::fs::read_to_string(install_root.join("test/unlink/meta.json")).unwrap();
+    assert!(meta_content.contains("links"));
+
+    // Unlink
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("unlink")
+        .arg("test/unlink")
+        .arg(&link_path)
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify link removed
+    assert!(!link_path.exists());
+
+    // Verify meta no longer has link rule
+    let meta_content = std::fs::read_to_string(install_root.join("test/unlink/meta.json")).unwrap();
+    assert!(!meta_content.contains(&link_path.to_string_lossy().to_string()));
+}
+
+#[test]
+fn test_unlink_all_removes_all_links() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    let _mock_releases = server
+        .mock("GET", "/repos/test/unlinkall/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
+            url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/unlinkall")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz = create_tar_gz_with_executable(&[
+        ("unlinkall-v1/tool1", "#!/bin/bash\necho tool1", 0o755),
+        ("unlinkall-v1/tool2", "#!/bin/bash\necho tool2", 0o755),
+    ]);
+    let _mock_download = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+    let link_dir = tempdir().unwrap();
+    let link1 = link_dir.path().join("link1");
+    let link2 = link_dir.path().join("link2");
+
+    // Install
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/unlinkall")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    // Create two links
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("link")
+        .arg("test/unlinkall:tool1")
+        .arg(&link1)
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("link")
+        .arg("test/unlinkall:tool2")
+        .arg(&link2)
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify both links exist
+    assert!(link1.is_symlink());
+    assert!(link2.is_symlink());
+
+    // Unlink all
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("unlink")
+        .arg("test/unlinkall")
+        .arg("--all")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Verify both links removed
+    assert!(!link1.exists());
+    assert!(!link2.exists());
+
+    // Verify meta has empty links
+    let meta_content = std::fs::read_to_string(install_root.join("test/unlinkall/meta.json")).unwrap();
+    assert!(!meta_content.contains("\"links\"") || meta_content.contains("\"links\": []") || !meta_content.contains("link1"));
+}
+
+#[test]
+fn test_unlink_fails_for_uninstalled_package() {
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("unlink")
+        .arg("nonexistent/package")
+        .arg("--all")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not installed"));
+}
+
+#[test]
+fn test_unlink_requires_dest_or_all() {
+    let mut server = Server::new();
+    let url = server.url();
+
+    let _mock_releases = server
+        .mock("GET", "/repos/test/needarg/releases?per_page=100&page=1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(format!(
+            r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
+            url
+        ))
+        .create();
+
+    let _mock_repo = server
+        .mock("GET", "/repos/test/needarg")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
+        .create();
+
+    let tar_gz = create_tar_gz(&[("needarg-v1/tool", "content")]);
+    let _mock_download = server
+        .mock("GET", "/download/v1.0.0.tar.gz")
+        .with_status(200)
+        .with_body(&tar_gz)
+        .create();
+
+    let root_dir = tempdir().unwrap();
+    let install_root = root_dir.path();
+    let link_dir = tempdir().unwrap();
+
+    // Install and create a link
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("install")
+        .arg("test/needarg")
+        .arg("--root")
+        .arg(install_root)
+        .arg("--api-url")
+        .arg(&url)
+        .assert()
+        .success();
+
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("link")
+        .arg("test/needarg")
+        .arg(link_dir.path().join("tool"))
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .success();
+
+    // Try to unlink without dest or --all
+    Command::new(cargo::cargo_bin!("ghri"))
+        .arg("unlink")
+        .arg("test/needarg")
+        .arg("--root")
+        .arg(install_root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--all"));
+}

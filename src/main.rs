@@ -46,6 +46,9 @@ enum Commands {
     /// Link a package's current version to a destination path
     Link(LinkArgs),
 
+    /// Remove a link rule and its symlink
+    Unlink(UnlinkArgs),
+
     /// Show link rules for a package
     Links(LinksArgs),
 }
@@ -79,6 +82,21 @@ pub struct LinkArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct UnlinkArgs {
+    /// The GitHub repository in the format "owner/repo"
+    #[arg(value_name = "OWNER/REPO")]
+    pub repo: String,
+
+    /// Destination path of the symlink to remove (optional, removes all if not specified)
+    #[arg(value_name = "DEST")]
+    pub dest: Option<PathBuf>,
+
+    /// Remove all link rules for the package
+    #[arg(long, short)]
+    pub all: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct LinksArgs {
     /// The GitHub repository in the format "owner/repo"
     #[arg(value_name = "OWNER/REPO")]
@@ -102,6 +120,7 @@ async fn main() -> Result<()> {
         Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
         Commands::List(_args) => ghri::install::list(runtime, cli.install_root)?,
         Commands::Link(args) => ghri::install::link(runtime, &args.repo, args.dest, cli.install_root)?,
+        Commands::Unlink(args) => ghri::install::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
         Commands::Links(args) => ghri::install::links(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())
@@ -238,6 +257,44 @@ mod tests {
                 assert_eq!(args.repo, "owner/repo");
             }
             _ => panic!("Expected Links command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_unlink_with_dest() {
+        let cli = Cli::try_parse_from(&["ghri", "unlink", "owner/repo", "/usr/local/bin/tool"]).unwrap();
+        match cli.command {
+            Commands::Unlink(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.dest, Some(PathBuf::from("/usr/local/bin/tool")));
+                assert!(!args.all);
+            }
+            _ => panic!("Expected Unlink command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_unlink_all() {
+        let cli = Cli::try_parse_from(&["ghri", "unlink", "owner/repo", "--all"]).unwrap();
+        match cli.command {
+            Commands::Unlink(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.dest, None);
+                assert!(args.all);
+            }
+            _ => panic!("Expected Unlink command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_unlink_short_all() {
+        let cli = Cli::try_parse_from(&["ghri", "unlink", "-a", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Unlink(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert!(args.all);
+            }
+            _ => panic!("Expected Unlink command"),
         }
     }
 }

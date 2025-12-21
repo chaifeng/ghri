@@ -992,6 +992,264 @@ test_link_single_file_detection() {
 }
 
 #######################################
+# Unlink Tests
+#######################################
+
+test_unlink_single_link() {
+    log_section "Test: Unlink removes single link"
+
+    local install_root="$TEST_ROOT/unlink_single"
+    local link_path="$TEST_ROOT/unlink_single_bin/my-tool"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create link
+    log_info "Creating link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link_path" --root "$install_root"; then
+        log_fail "Link command failed"
+        return 1
+    fi
+
+    # Verify link exists
+    if [[ -L "$link_path" ]]; then
+        log_success "Link created"
+    else
+        log_fail "Link was not created"
+        return 1
+    fi
+
+    # Unlink
+    log_info "Unlinking..."
+    if "$GHRI_BIN" unlink bach-sh/bach "$link_path" --root "$install_root"; then
+        log_success "Unlink command succeeded"
+    else
+        log_fail "Unlink command failed"
+        return 1
+    fi
+
+    # Verify link removed
+    if [[ ! -e "$link_path" ]]; then
+        log_success "Link removed"
+    else
+        log_fail "Link still exists after unlink"
+    fi
+
+    # Verify meta.json no longer has the link rule
+    if ! grep -q "$link_path" "$install_root/bach-sh/bach/meta.json" 2>/dev/null; then
+        log_success "Link rule removed from meta.json"
+    else
+        log_fail "Link rule still in meta.json"
+    fi
+}
+
+test_unlink_all_links() {
+    log_section "Test: Unlink --all removes all links"
+
+    local install_root="$TEST_ROOT/unlink_all"
+    local link1="$TEST_ROOT/unlink_all_bin/link1"
+    local link2="$TEST_ROOT/unlink_all_bin/link2"
+    mkdir -p "$install_root" "$(dirname "$link1")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create two links
+    log_info "Creating first link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link1" --root "$install_root"; then
+        log_fail "First link command failed"
+        return 1
+    fi
+
+    log_info "Creating second link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link2" --root "$install_root"; then
+        log_fail "Second link command failed"
+        return 1
+    fi
+
+    # Verify both links exist
+    if [[ -L "$link1" ]] && [[ -L "$link2" ]]; then
+        log_success "Both links created"
+    else
+        log_fail "Links were not created"
+        return 1
+    fi
+
+    # Show links before unlink
+    log_info "Link rules before unlink:"
+    "$GHRI_BIN" links bach-sh/bach --root "$install_root" || true
+
+    # Unlink all
+    log_info "Unlinking all..."
+    if "$GHRI_BIN" unlink bach-sh/bach --all --root "$install_root"; then
+        log_success "Unlink --all command succeeded"
+    else
+        log_fail "Unlink --all command failed"
+        return 1
+    fi
+
+    # Verify both links removed
+    if [[ ! -e "$link1" ]] && [[ ! -e "$link2" ]]; then
+        log_success "All links removed"
+    else
+        log_fail "Some links still exist after unlink --all"
+    fi
+}
+
+test_unlink_nonexistent_symlink() {
+    log_section "Test: Unlink removes rule even if symlink doesn't exist"
+
+    local install_root="$TEST_ROOT/unlink_nonexistent"
+    local link_path="$TEST_ROOT/unlink_nonexistent_bin/my-tool"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install bach
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Create link
+    log_info "Creating link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link_path" --root "$install_root"; then
+        log_fail "Link command failed"
+        return 1
+    fi
+
+    # Manually remove the symlink (simulating external deletion)
+    rm -f "$link_path"
+    log_info "Manually removed symlink (simulating external deletion)"
+
+    # Unlink should still succeed and remove the rule
+    log_info "Unlinking (symlink already deleted)..."
+    if "$GHRI_BIN" unlink bach-sh/bach "$link_path" --root "$install_root"; then
+        log_success "Unlink command succeeded (removed rule only)"
+    else
+        log_fail "Unlink command failed"
+        return 1
+    fi
+
+    # Verify rule removed from meta.json
+    if ! grep -q "$link_path" "$install_root/bach-sh/bach/meta.json" 2>/dev/null; then
+        log_success "Link rule removed from meta.json"
+    else
+        log_fail "Link rule still in meta.json"
+    fi
+}
+
+test_unlink_fails_for_uninstalled() {
+    log_section "Test: Unlink fails for uninstalled package"
+
+    local install_root="$TEST_ROOT/unlink_not_installed"
+    mkdir -p "$install_root"
+
+    log_info "Attempting to unlink uninstalled package..."
+    local output
+    if output=$("$GHRI_BIN" unlink nonexistent/package --all --root "$install_root" 2>&1); then
+        log_fail "Unlink should have failed for uninstalled package"
+    else
+        if echo "$output" | grep -qi "not installed"; then
+            log_success "Unlink correctly fails for uninstalled package"
+        else
+            log_info "Error output: $output"
+            log_success "Unlink command failed (expected)"
+        fi
+    fi
+}
+
+test_unlink_requires_dest_or_all() {
+    log_section "Test: Unlink requires dest or --all"
+
+    local install_root="$TEST_ROOT/unlink_needs_arg"
+    local link_path="$TEST_ROOT/unlink_needs_arg_bin/tool"
+    mkdir -p "$install_root" "$(dirname "$link_path")"
+
+    # Install and link
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    log_info "Creating link..."
+    if ! "$GHRI_BIN" link bach-sh/bach "$link_path" --root "$install_root"; then
+        log_fail "Link command failed"
+        return 1
+    fi
+
+    # Try unlink without dest or --all
+    log_info "Attempting unlink without dest or --all..."
+    local output
+    if output=$("$GHRI_BIN" unlink bach-sh/bach --root "$install_root" 2>&1); then
+        log_fail "Unlink should require dest or --all"
+    else
+        if echo "$output" | grep -qi "\-\-all\|destination"; then
+            log_success "Unlink correctly requires dest or --all"
+        else
+            log_info "Error output: $output"
+            log_success "Unlink command failed (expected)"
+        fi
+    fi
+
+    # Verify link still exists
+    if [[ -L "$link_path" ]]; then
+        log_success "Link preserved after failed unlink"
+    else
+        log_fail "Link should still exist"
+    fi
+}
+
+test_links_command() {
+    log_section "Test: Links command shows link rules"
+
+    local install_root="$TEST_ROOT/links_cmd"
+    local link1="$TEST_ROOT/links_cmd_bin/tool1"
+    local link2="$TEST_ROOT/links_cmd_bin/tool2"
+    mkdir -p "$install_root" "$(dirname "$link1")"
+
+    # Install
+    log_info "Installing bach-sh/bach..."
+    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+        log_fail "Install command failed"
+        return 1
+    fi
+
+    # Initially no links
+    log_info "Checking links (should be empty)..."
+    local output
+    output=$("$GHRI_BIN" links bach-sh/bach --root "$install_root" 2>&1)
+    if echo "$output" | grep -qi "no link"; then
+        log_success "No links initially"
+    else
+        log_info "Output: $output"
+    fi
+
+    # Create links
+    "$GHRI_BIN" link bach-sh/bach "$link1" --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" link bach-sh/bach "$link2" --root "$install_root" >/dev/null 2>&1
+
+    # Check links command output
+    log_info "Checking links after creating two..."
+    output=$("$GHRI_BIN" links bach-sh/bach --root "$install_root" 2>&1)
+    if echo "$output" | grep -q "$link1" && echo "$output" | grep -q "$link2"; then
+        log_success "Links command shows both links"
+    else
+        log_info "Output: $output"
+        log_fail "Links command should show both links"
+    fi
+}
+
+#######################################
 # Main
 #######################################
 main() {
@@ -1033,6 +1291,14 @@ main() {
     test_link_fails_for_uninstalled
     test_link_fails_for_existing_file
     test_link_single_file_detection
+
+    # Unlink command tests
+    test_unlink_single_link
+    test_unlink_all_links
+    test_unlink_nonexistent_symlink
+    test_unlink_fails_for_uninstalled
+    test_unlink_requires_dest_or_all
+    test_links_command
 
     # Summary
     log_section "Test Summary"
