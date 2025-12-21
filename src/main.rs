@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use ghri::install::install;
+use ghri::commands::install;
 use std::path::PathBuf;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
@@ -141,13 +141,13 @@ async fn main() -> Result<()> {
         Commands::Install(args) => {
             install(runtime, &args.repo, cli.install_root, args.api_url).await?
         }
-        Commands::Update(_args) => ghri::install::update(runtime, cli.install_root, None).await?,
-        Commands::List(_args) => ghri::install::list(runtime, cli.install_root)?,
-        Commands::Link(args) => ghri::install::link(runtime, &args.repo, args.dest, cli.install_root)?,
-        Commands::Unlink(args) => ghri::install::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
-        Commands::Links(args) => ghri::install::links(runtime, &args.repo, cli.install_root)?,
-        Commands::Remove(args) => ghri::install::remove(runtime, &args.repo, args.force, cli.install_root)?,
-        Commands::Show(args) => ghri::install::show(runtime, &args.repo, cli.install_root)?,
+        Commands::Update(_args) => ghri::commands::update(runtime, cli.install_root, None).await?,
+        Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
+        Commands::Link(args) => ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?,
+        Commands::Unlink(args) => ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
+        Commands::Links(args) => ghri::commands::links(runtime, &args.repo, cli.install_root)?,
+        Commands::Remove(args) => ghri::commands::remove(runtime, &args.repo, args.force, cli.install_root)?,
+        Commands::Show(args) => ghri::commands::show(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())
 }
