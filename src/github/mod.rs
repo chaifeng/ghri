@@ -1,3 +1,4 @@
+use crate::retry::{check_retryable, with_retry};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use log::debug;
@@ -67,19 +68,27 @@ impl GitHub {
 
         debug!("Fetching repo info from {}...", url);
 
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to send request to GitHub API")?;
+        with_retry("Fetching repository info", || {
+            let client = client.clone();
+            let url = url.clone();
+            async move {
+                let response = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("Failed to send request to GitHub API")?;
 
-        let info = response
-            .error_for_status()?
-            .json::<RepoInfo>()
-            .await
-            .context("Failed to parse JSON response from GitHub API")?;
+                let response = response.error_for_status().map_err(check_retryable)?;
 
-        Ok(info)
+                let info = response
+                    .json::<RepoInfo>()
+                    .await
+                    .context("Failed to parse JSON response from GitHub API")?;
+
+                Ok(info)
+            }
+        })
+        .await
     }
 
     #[tracing::instrument(skip(client, api_url))]
@@ -95,22 +104,31 @@ impl GitHub {
         while page <= 10 {
             let url = format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo);
 
-            let request = client
-                .get(&url)
-                .query(&[("per_page", "100"), ("page", &page.to_string())]);
-
             debug!("Fetching releases page {} from {}...", page, url);
 
-            let response = request
-                .send()
-                .await
-                .context("Failed to send request to GitHub API")?;
+            let parsed: Vec<Release> = with_retry("Fetching releases", || {
+                let client = client.clone();
+                let url = url.clone();
+                let page = page;
+                async move {
+                    let response = client
+                        .get(&url)
+                        .query(&[("per_page", "100"), ("page", &page.to_string())])
+                        .send()
+                        .await
+                        .context("Failed to send request to GitHub API")?;
 
-            let parsed: Vec<Release> = response
-                .error_for_status()?
-                .json()
-                .await
-                .context("Failed to parse JSON response from GitHub API")?;
+                    let response = response.error_for_status().map_err(check_retryable)?;
+
+                    let parsed: Vec<Release> = response
+                        .json()
+                        .await
+                        .context("Failed to parse JSON response from GitHub API")?;
+
+                    Ok(parsed)
+                }
+            })
+            .await?;
 
             if parsed.is_empty() {
                 break;
