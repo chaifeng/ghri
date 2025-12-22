@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::{
     github::LinkSpec,
     package::{LinkRule, Meta},
-    runtime::Runtime,
+    runtime::{is_path_under, Runtime},
 };
 
 use super::paths::default_install_root;
@@ -117,6 +117,7 @@ pub fn unlink<R: Runtime>(
     // Remove symlinks and rules
     let mut removed_count = 0;
     let mut error_count = 0;
+    let mut skipped_external = Vec::new();
 
     for rule in &rules_to_remove {
         debug!("Processing rule: {:?}", rule);
@@ -124,6 +125,56 @@ pub fn unlink<R: Runtime>(
         // Try to remove the symlink
         if runtime.exists(&rule.dest) || runtime.is_symlink(&rule.dest) {
             if runtime.is_symlink(&rule.dest) {
+                // Security check: verify the symlink points to a path within the package directory
+                match runtime.resolve_link(&rule.dest) {
+                    Ok(target) => {
+                        if !is_path_under(&target, &package_dir) {
+                            // Symlink points outside the package directory - security risk
+                            if all {
+                                // When using --all, skip this symlink and continue
+                                warn!(
+                                    "Skipping symlink {:?} -> {:?}: points outside package directory {:?}",
+                                    rule.dest, target, package_dir
+                                );
+                                eprintln!(
+                                    "Warning: Skipping {:?} - points to external path {:?}",
+                                    rule.dest, target
+                                );
+                                skipped_external.push(rule.dest.clone());
+                                error_count += 1;
+                                continue; // Don't remove this rule from meta
+                            } else {
+                                // When specifying a single destination, fail with error
+                                anyhow::bail!(
+                                    "Cannot remove symlink {:?}: it points to external path {:?} which is outside the package directory {:?}",
+                                    rule.dest,
+                                    target,
+                                    package_dir
+                                );
+                            }
+                        }
+                        // Target is within package directory, safe to remove
+                        debug!("Removing symlink {:?} -> {:?}", rule.dest, target);
+                    }
+                    Err(e) => {
+                        warn!("Cannot resolve symlink target for {:?}: {}", rule.dest, e);
+                        if all {
+                            eprintln!(
+                                "Warning: Cannot verify symlink {:?}, skipping: {}",
+                                rule.dest, e
+                            );
+                            error_count += 1;
+                            continue;
+                        } else {
+                            anyhow::bail!(
+                                "Cannot remove symlink {:?}: unable to resolve target: {}",
+                                rule.dest,
+                                e
+                            );
+                        }
+                    }
+                }
+
                 debug!("Removing symlink {:?}", rule.dest);
                 match runtime.remove_symlink(&rule.dest) {
                     Ok(()) => {
@@ -251,7 +302,17 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // --- 3. Remove Symlink ---
+        // --- 3. Verify Symlink Target (Security Check) ---
+
+        // Resolve symlink: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1/tool
+        // (Points to package directory - allowed)
+        let target = root.join("owner/repo/v1/tool");
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(target.clone()));
+
+        // --- 4. Remove Symlink ---
 
         // Remove symlink: /usr/local/bin/tool
         runtime
@@ -259,7 +320,7 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(()));
 
-        // --- 4. Save Updated Metadata ---
+        // --- 5. Save Updated Metadata ---
 
         // Write and rename meta.json (rule removed)
         runtime.expect_write().returning(|_, _| Ok(()));
@@ -315,6 +376,14 @@ mod tests {
             .expect_is_symlink()
             .with(eq(link1.clone()))
             .returning(|_| true);
+
+        // Resolve symlink: /usr/local/bin/tool1 -> /home/user/.ghri/owner/repo/v1/tool1
+        let target1 = root.join("owner/repo/v1/tool1");
+        runtime
+            .expect_resolve_link()
+            .with(eq(link1.clone()))
+            .returning(move |_| Ok(target1.clone()));
+
         runtime
             .expect_remove_symlink()
             .with(eq(link1.clone()))
@@ -330,6 +399,14 @@ mod tests {
             .expect_is_symlink()
             .with(eq(link2.clone()))
             .returning(|_| true);
+
+        // Resolve symlink: /usr/local/bin/tool2 -> /home/user/.ghri/owner/repo/v1/tool2
+        let target2 = root.join("owner/repo/v1/tool2");
+        runtime
+            .expect_resolve_link()
+            .with(eq(link2.clone()))
+            .returning(move |_| Ok(target2.clone()));
+
         runtime
             .expect_remove_symlink()
             .with(eq(link2.clone()))
@@ -524,6 +601,204 @@ mod tests {
 
         // Should succeed with message "No link rules" (no error)
         let result = unlink(runtime, "owner/repo", None, true, Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unlink_should_fail_if_symlink_points_to_external_path() {
+        // Security test: unlink should NOT remove a symlink if it points to a path
+        // outside of the ghri managed directory (install_root).
+        // This prevents accidentally deleting important system symlinks.
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let meta_path = package_dir.join("meta.json");
+
+        // The symlink exists but points to an external path (NOT under /home/user/.ghri)
+        let external_target = PathBuf::from("/opt/external/tool");
+
+        // --- 1. Load Package Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read Meta: Has a link rule for /usr/local/bin/tool
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(), // Set version to avoid read_link call in Meta::load
+            links: vec![LinkRule {
+                dest: link_dest.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. Check Symlink Status ---
+
+        // File exists: /usr/local/bin/tool
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // Is Symlink: /usr/local/bin/tool -> true
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // --- 3. Validate Symlink Target (Security Check) ---
+
+        // Resolve Link: /usr/local/bin/tool -> /opt/external/tool
+        // This points OUTSIDE the ghri install root (/home/user/.ghri)!
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(external_target.clone()));
+
+        // --- Expected: Should NOT call remove_symlink ---
+        // --- Expected: Should fail with an error message ---
+
+        // No remove_symlink call expected (symlink points to external path)
+        // No write/rename calls expected (meta.json should not be updated)
+
+        // --- Execute & Verify ---
+
+        let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
+
+        // Should fail because symlink points to external path
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("external") || err_msg.contains("outside"),
+            "Error message should mention external path: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_unlink_all_should_skip_symlinks_pointing_to_external_paths() {
+        // Security test: unlink --all should skip symlinks that point to external paths
+        // and only remove symlinks that point to paths within the ghri managed directory.
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+
+        // Two link destinations
+        let internal_link = PathBuf::from("/usr/local/bin/internal-tool");
+        let external_link = PathBuf::from("/usr/local/bin/external-tool");
+
+        // Internal symlink points to ghri managed path
+        let internal_target = package_dir.join("v1/internal-tool");
+        // External symlink points outside ghri
+        let external_target = PathBuf::from("/opt/other/external-tool");
+
+        // --- 1. Load Package Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read Meta: Has two link rules
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(), // Set version to avoid read_link call in Meta::load
+            links: vec![
+                LinkRule {
+                    dest: internal_link.clone(),
+                    path: None,
+                },
+                LinkRule {
+                    dest: external_link.clone(),
+                    path: None,
+                },
+            ],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. Check First Symlink (Internal - Should Be Removed) ---
+
+        // File exists: /usr/local/bin/internal-tool
+        runtime
+            .expect_exists()
+            .with(eq(internal_link.clone()))
+            .returning(|_| true);
+
+        // Is Symlink: /usr/local/bin/internal-tool -> true
+        runtime
+            .expect_is_symlink()
+            .with(eq(internal_link.clone()))
+            .returning(|_| true);
+
+        // Resolve Link: /usr/local/bin/internal-tool -> /home/user/.ghri/owner/repo/v1/internal-tool
+        runtime
+            .expect_resolve_link()
+            .with(eq(internal_link.clone()))
+            .returning(move |_| Ok(internal_target.clone()));
+
+        // Remove Symlink: /usr/local/bin/internal-tool (allowed - points to ghri path)
+        runtime
+            .expect_remove_symlink()
+            .with(eq(internal_link.clone()))
+            .returning(|_| Ok(()));
+
+        // --- 3. Check Second Symlink (External - Should Be Skipped) ---
+
+        // File exists: /usr/local/bin/external-tool
+        runtime
+            .expect_exists()
+            .with(eq(external_link.clone()))
+            .returning(|_| true);
+
+        // Is Symlink: /usr/local/bin/external-tool -> true
+        runtime
+            .expect_is_symlink()
+            .with(eq(external_link.clone()))
+            .returning(|_| true);
+
+        // Resolve Link: /usr/local/bin/external-tool -> /opt/other/external-tool
+        // Points OUTSIDE ghri install root - should NOT be removed
+        runtime
+            .expect_resolve_link()
+            .with(eq(external_link.clone()))
+            .returning(move |_| Ok(external_target.clone()));
+
+        // NO remove_symlink call for external_link (should be skipped)
+
+        // --- 4. Update Meta (Only Internal Rule Removed) ---
+
+        // Write updated meta.json (with only external_link rule remaining)
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute & Verify ---
+
+        let result = unlink(runtime, "owner/repo", None, true, Some(root));
+
+        // Should succeed but with warning about skipped external symlink
         assert!(result.is_ok());
     }
 }

@@ -29,6 +29,32 @@ fn normalize_path(path: &Path) -> PathBuf {
     result
 }
 
+/// Check if a path is under a given directory by comparing normalized path components.
+/// This function normalizes both paths to handle `..` components safely.
+/// Returns true if `path` is under `dir` (i.e., `dir` is a prefix of `path`).
+///
+/// # Security
+/// This function normalizes paths to prevent directory traversal attacks.
+/// For example, `/usr/local/bin/../../../etc/passwd` is NOT under `/usr/local`.
+pub fn is_path_under(path: &Path, dir: &Path) -> bool {
+    let normalized_path = normalize_path(path);
+    let normalized_dir = normalize_path(dir);
+
+    let path_components: Vec<_> = normalized_path.components().collect();
+    let dir_components: Vec<_> = normalized_dir.components().collect();
+
+    // Path must have at least as many components as dir
+    if path_components.len() < dir_components.len() {
+        return false;
+    }
+
+    // All dir components must match the beginning of path components
+    dir_components
+        .iter()
+        .zip(path_components.iter())
+        .all(|(d, p)| d == p)
+}
+
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Runtime: Send + Sync {
@@ -296,17 +322,8 @@ impl Runtime for RealRuntime {
                 let canonicalized_prefix = fs::canonicalize(target_prefix)
                     .unwrap_or_else(|_| target_prefix.to_path_buf());
 
-                // Check if the target is under the prefix by comparing path components
-                let target_components: Vec<_> = canonicalized_target.components().collect();
-                let prefix_components: Vec<_> = canonicalized_prefix.components().collect();
-
-                let is_under_prefix = prefix_components.len() <= target_components.len()
-                    && prefix_components
-                        .iter()
-                        .zip(target_components.iter())
-                        .all(|(p, t)| p == t);
-
-                if !is_under_prefix {
+                // Check if the target is under the prefix using safe path comparison
+                if !is_path_under(&canonicalized_target, &canonicalized_prefix) {
                     eprintln!(
                         "Warning: {} {:?} points to {:?} which is not within {:?}, skipping removal",
                         description, link_path, canonicalized_target, canonicalized_prefix
@@ -998,5 +1015,153 @@ mod tests {
         let path = PathBuf::from(r"C:\Users\.\foo\..\bar");
         let result = normalize_path(&path);
         assert_eq!(result, PathBuf::from(r"C:\Users\bar"));
+    }
+
+    // --- is_path_under tests ---
+
+    #[test]
+    fn test_is_path_under_simple() {
+        // --- Test: Simple path under directory ---
+        // Path: /usr/local/bin/tool
+        // Dir:  /usr/local
+        // Expected: true
+        let path = Path::new("/usr/local/bin/tool");
+        let dir = Path::new("/usr/local");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_same_path() {
+        // --- Test: Path equals directory ---
+        // Path: /usr/local
+        // Dir:  /usr/local
+        // Expected: true (path is under itself)
+        let path = Path::new("/usr/local");
+        let dir = Path::new("/usr/local");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_not_under() {
+        // --- Test: Path not under directory ---
+        // Path: /opt/bin/tool
+        // Dir:  /usr/local
+        // Expected: false
+        let path = Path::new("/opt/bin/tool");
+        let dir = Path::new("/usr/local");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_partial_component_match() {
+        // --- Test: Partial component match (security check) ---
+        // Path: /usr/local-other/bin/tool
+        // Dir:  /usr/local
+        // Expected: false (different component, not just prefix string)
+        let path = Path::new("/usr/local-other/bin/tool");
+        let dir = Path::new("/usr/local");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_directory_traversal_attack() {
+        // --- Test: Directory traversal attack prevention ---
+        // Path: /usr/local/bin/../../../etc/passwd
+        // Dir:  /usr/local
+        // Expected: false (after normalization, path is /etc/passwd)
+        let path = Path::new("/usr/local/bin/../../../etc/passwd");
+        let dir = Path::new("/usr/local");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_directory_traversal_subtle() {
+        // --- Test: Subtle directory traversal ---
+        // Path: /home/user/.ghri/owner/repo/v1/../../other/malicious
+        // Dir:  /home/user/.ghri/owner/repo
+        // Expected: false (after normalization, path is /home/user/.ghri/owner/other/malicious)
+        let path = Path::new("/home/user/.ghri/owner/repo/v1/../../other/malicious");
+        let dir = Path::new("/home/user/.ghri/owner/repo");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_with_dot_components() {
+        // --- Test: Path with . components ---
+        // Path: /usr/local/./bin/./tool
+        // Dir:  /usr/local
+        // Expected: true (after normalization, path is /usr/local/bin/tool)
+        let path = Path::new("/usr/local/./bin/./tool");
+        let dir = Path::new("/usr/local");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_normalized_still_under() {
+        // --- Test: Path with .. that still remains under directory ---
+        // Path: /usr/local/bin/../lib/tool
+        // Dir:  /usr/local
+        // Expected: true (after normalization, path is /usr/local/lib/tool)
+        let path = Path::new("/usr/local/bin/../lib/tool");
+        let dir = Path::new("/usr/local");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_relative_paths() {
+        // --- Test: Relative paths ---
+        // Path: owner/repo/v1/bin/tool
+        // Dir:  owner/repo
+        // Expected: true
+        let path = Path::new("owner/repo/v1/bin/tool");
+        let dir = Path::new("owner/repo");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[test]
+    fn test_is_path_under_path_shorter_than_dir() {
+        // --- Test: Path shorter than directory ---
+        // Path: /usr
+        // Dir:  /usr/local/bin
+        // Expected: false
+        let path = Path::new("/usr");
+        let dir = Path::new("/usr/local/bin");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_path_under_windows() {
+        // --- Test: Windows paths ---
+        // Path: C:\Users\foo\AppData\Local\ghri\owner\repo\v1\tool.exe
+        // Dir:  C:\Users\foo\AppData\Local\ghri
+        // Expected: true
+        let path = Path::new(r"C:\Users\foo\AppData\Local\ghri\owner\repo\v1\tool.exe");
+        let dir = Path::new(r"C:\Users\foo\AppData\Local\ghri");
+        assert!(is_path_under(path, dir));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_path_under_windows_traversal() {
+        // --- Test: Windows directory traversal attack ---
+        // Path: C:\Users\foo\ghri\owner\repo\..\..\..\Windows\System32\cmd.exe
+        // Dir:  C:\Users\foo\ghri
+        // Expected: false
+        let path = Path::new(r"C:\Users\foo\ghri\owner\repo\..\..\..\Windows\System32\cmd.exe");
+        let dir = Path::new(r"C:\Users\foo\ghri");
+        assert!(!is_path_under(path, dir));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_path_under_windows_partial_match() {
+        // --- Test: Windows partial component match ---
+        // Path: C:\Users\foobar\data
+        // Dir:  C:\Users\foo
+        // Expected: false (foobar != foo)
+        let path = Path::new(r"C:\Users\foobar\data");
+        let dir = Path::new(r"C:\Users\foo");
+        assert!(!is_path_under(path, dir));
     }
 }

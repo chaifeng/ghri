@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::RepoSpec,
     package::Meta,
-    runtime::Runtime,
+    runtime::{is_path_under, Runtime},
 };
 
 use super::paths::default_install_root;
@@ -110,8 +110,8 @@ fn remove_version<R: Runtime>(
             // For regular links, only remove if pointing to this specific version
             if runtime.is_symlink(&rule.dest) {
                 if let Ok(resolved_target) = runtime.resolve_link(&rule.dest) {
-                    // Check if link points to this version
-                    if resolved_target.starts_with(&version_dir) {
+                    // Check if link points to this version (using safe path comparison)
+                    if is_path_under(&resolved_target, &version_dir) {
                         let _ = runtime.remove_symlink_if_target_under(
                             &rule.dest,
                             &version_dir,

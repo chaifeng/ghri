@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::LinkSpec,
     package::{LinkRule, Meta, VersionedLink},
-    runtime::Runtime,
+    runtime::{is_path_under, Runtime},
 };
 
 use super::paths::default_install_root;
@@ -118,8 +118,8 @@ pub fn link<R: Runtime>(
         if runtime.is_symlink(&final_dest) {
             // Check if the existing symlink points to a version in this package
             if let Ok(existing_target) = runtime.resolve_link(&final_dest) {
-                // Check if existing target is within the package directory
-                if existing_target.starts_with(&package_dir) {
+                // Check if existing target is within the package directory (using safe path comparison)
+                if is_path_under(&existing_target, &package_dir) {
                     debug!(
                         "Updating existing link from {:?} to {:?}",
                         existing_target, link_target
