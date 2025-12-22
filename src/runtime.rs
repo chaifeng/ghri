@@ -2,8 +2,32 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tracing::{debug, warn};
+
+/// Normalize a path by processing `.` and `..` components lexically.
+/// This does not access the filesystem and does not follow symlinks.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {
+                // Skip `.` components
+            }
+            Component::ParentDir => {
+                // Pop the last component if possible
+                if !result.pop() {
+                    // If we can't pop (e.g., at root), keep the `..`
+                    result.push(component);
+                }
+            }
+            _ => {
+                result.push(component);
+            }
+        }
+    }
+    result
+}
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
@@ -23,6 +47,12 @@ pub trait Runtime: Send + Sync {
     fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>>;
     fn symlink(&self, original: &Path, link: &Path) -> Result<()>;
     fn read_link(&self, path: &Path) -> Result<PathBuf>;
+
+    /// Resolve a symlink to an absolute path (without recursively resolving symlinks).
+    /// If the link target is relative, it is resolved relative to the link's parent directory.
+    /// Unlike canonicalize, this does not follow nested symlinks.
+    fn resolve_link(&self, path: &Path) -> Result<PathBuf>;
+
     fn is_symlink(&self, path: &Path) -> bool;
     fn create_file(&self, path: &Path) -> Result<Box<dyn std::io::Write + Send>>;
     fn open(&self, path: &Path) -> Result<Box<dyn std::io::Read + Send>>;
@@ -156,6 +186,23 @@ impl Runtime for RealRuntime {
     #[tracing::instrument(skip(self))]
     fn read_link(&self, path: &Path) -> Result<PathBuf> {
         fs::read_link(path).context("Failed to read symlink")
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn resolve_link(&self, path: &Path) -> Result<PathBuf> {
+        let target = fs::read_link(path).context("Failed to read symlink")?;
+        if target.is_absolute() {
+            Ok(target)
+        } else {
+            // Resolve relative path against the link's parent directory
+            let parent = path
+                .parent()
+                .context("Failed to get parent directory of symlink")?;
+            // Use lexical path joining and normalize the result
+            let resolved = parent.join(&target);
+            // Normalize the path by processing . and .. components
+            Ok(normalize_path(&resolved))
+        }
     }
 
     #[tracing::instrument(skip(self))]
@@ -442,6 +489,164 @@ mod tests {
         rt.remove_symlink(&link).unwrap();
         assert!(!rt.exists(&link));
         assert!(rt.exists(&target_file));
+    }
+
+    #[test]
+    fn test_resolve_link_absolute_target() {
+        // --- Test: Resolve symlink with absolute target ---
+        // Symlink /tmp/xxx/link -> /tmp/xxx/target.txt (absolute)
+        // Expected: /tmp/xxx/target.txt
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+
+        // --- Setup Paths ---
+        let target_file = dir.path().join("target.txt");
+        let link = dir.path().join("link");
+
+        // --- Create Files ---
+        // Create file: /tmp/xxx/target.txt
+        rt.write(&target_file, b"hello").unwrap();
+
+        // Create symlink: /tmp/xxx/link -> /tmp/xxx/target.txt (absolute path)
+        rt.symlink(&target_file, &link).unwrap();
+
+        // --- Verify ---
+        // resolve_link should return the absolute path
+        let resolved = rt.resolve_link(&link).unwrap();
+        assert_eq!(resolved, target_file);
+    }
+
+    #[test]
+    fn test_resolve_link_relative_target_same_dir() {
+        // --- Test: Resolve symlink with relative target in same directory ---
+        // Symlink /tmp/xxx/link -> target.txt (relative)
+        // Expected: /tmp/xxx/target.txt
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+
+        // --- Setup Paths ---
+        let target_file = dir.path().join("target.txt");
+        let link = dir.path().join("link");
+
+        // --- Create Files ---
+        // Create file: /tmp/xxx/target.txt
+        rt.write(&target_file, b"hello").unwrap();
+
+        // Create symlink: /tmp/xxx/link -> target.txt (relative path)
+        rt.symlink(Path::new("target.txt"), &link).unwrap();
+
+        // --- Verify ---
+        // read_link returns raw target: "target.txt"
+        let raw_target = rt.read_link(&link).unwrap();
+        assert_eq!(raw_target, PathBuf::from("target.txt"));
+
+        // resolve_link should return absolute path: /tmp/xxx/target.txt
+        let resolved = rt.resolve_link(&link).unwrap();
+        assert_eq!(resolved, target_file);
+    }
+
+    #[test]
+    fn test_resolve_link_relative_target_parent_dir() {
+        // --- Test: Resolve symlink with relative target using .. ---
+        // Directory structure:
+        //   /tmp/xxx/package/bin/tool
+        //   /tmp/xxx/links/tool -> ../package/bin/tool
+        // Expected: /tmp/xxx/package/bin/tool
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+
+        // --- Setup Paths ---
+        let package_dir = dir.path().join("package/bin");
+        let target_file = package_dir.join("tool");
+        let links_dir = dir.path().join("links");
+        let link = links_dir.join("tool");
+
+        // --- Create Files ---
+        // Create directory: /tmp/xxx/package/bin
+        rt.create_dir_all(&package_dir).unwrap();
+
+        // Create file: /tmp/xxx/package/bin/tool
+        rt.write(&target_file, b"binary").unwrap();
+
+        // Create directory: /tmp/xxx/links
+        rt.create_dir_all(&links_dir).unwrap();
+
+        // Create symlink: /tmp/xxx/links/tool -> ../package/bin/tool
+        rt.symlink(Path::new("../package/bin/tool"), &link).unwrap();
+
+        // --- Verify ---
+        // read_link returns raw target: "../package/bin/tool"
+        let raw_target = rt.read_link(&link).unwrap();
+        assert_eq!(raw_target, PathBuf::from("../package/bin/tool"));
+
+        // resolve_link should return absolute path: /tmp/xxx/package/bin/tool
+        let resolved = rt.resolve_link(&link).unwrap();
+        assert_eq!(resolved, target_file);
+    }
+
+    #[test]
+    fn test_resolve_link_multiple_parent_dirs() {
+        // --- Test: Resolve symlink with multiple .. components ---
+        // Directory structure:
+        //   /tmp/xxx/a/b/c/target.txt
+        //   /tmp/xxx/x/y/z/link -> ../../../a/b/c/target.txt
+        // Expected: /tmp/xxx/a/b/c/target.txt
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+
+        // --- Setup Paths ---
+        let target_dir = dir.path().join("a/b/c");
+        let target_file = target_dir.join("target.txt");
+        let link_dir = dir.path().join("x/y/z");
+        let link = link_dir.join("link");
+
+        // --- Create Files ---
+        // Create directory: /tmp/xxx/a/b/c
+        rt.create_dir_all(&target_dir).unwrap();
+
+        // Create file: /tmp/xxx/a/b/c/target.txt
+        rt.write(&target_file, b"content").unwrap();
+
+        // Create directory: /tmp/xxx/x/y/z
+        rt.create_dir_all(&link_dir).unwrap();
+
+        // Create symlink: /tmp/xxx/x/y/z/link -> ../../../a/b/c/target.txt
+        rt.symlink(Path::new("../../../a/b/c/target.txt"), &link)
+            .unwrap();
+
+        // --- Verify ---
+        // resolve_link should return absolute path: /tmp/xxx/a/b/c/target.txt
+        let resolved = rt.resolve_link(&link).unwrap();
+        assert_eq!(resolved, target_file);
+    }
+
+    #[test]
+    fn test_resolve_link_with_dot_components() {
+        // --- Test: Resolve symlink with . components ---
+        // Symlink /tmp/xxx/link -> ./subdir/./file.txt
+        // Expected: /tmp/xxx/subdir/file.txt
+        let rt = RealRuntime;
+        let dir = tempdir().unwrap();
+
+        // --- Setup Paths ---
+        let subdir = dir.path().join("subdir");
+        let target_file = subdir.join("file.txt");
+        let link = dir.path().join("link");
+
+        // --- Create Files ---
+        // Create directory: /tmp/xxx/subdir
+        rt.create_dir_all(&subdir).unwrap();
+
+        // Create file: /tmp/xxx/subdir/file.txt
+        rt.write(&target_file, b"content").unwrap();
+
+        // Create symlink: /tmp/xxx/link -> ./subdir/./file.txt
+        rt.symlink(Path::new("./subdir/./file.txt"), &link).unwrap();
+
+        // --- Verify ---
+        // resolve_link should normalize and return: /tmp/xxx/subdir/file.txt
+        let resolved = rt.resolve_link(&link).unwrap();
+        assert_eq!(resolved, target_file);
     }
 
     #[test]
