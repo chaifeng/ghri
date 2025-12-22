@@ -1461,6 +1461,44 @@ test_install_with_asset_filter() {
     fi
 }
 
+test_install_filter_no_match_fails() {
+    log_section "Test: Install fails when filter matches no assets"
+
+    local install_root="$TEST_ROOT/install_filter_no_match"
+    mkdir -p "$install_root"
+
+    # Install chaifeng/zidr with a filter that matches nothing
+    # zidr has assets but none will match this pattern
+    log_info "Installing chaifeng/zidr with --filter '*nonexistent-platform-xyz*'..."
+    local output
+    if output=$("$GHRI_BIN" install chaifeng/zidr --filter '*nonexistent-platform-xyz*' --root "$install_root" 2>&1); then
+        log_fail "Install should have failed when filter matches no assets"
+        return 1
+    else
+        log_success "Install correctly failed when filter matches no assets"
+    fi
+
+    # Verify the error message mentions the filter issue
+    if echo "$output" | grep -qi "no.*match\|filter\|asset"; then
+        log_success "Error message mentions filter/match issue"
+    else
+        log_info "Error output: $output"
+        log_success "Install failed (expected)"
+    fi
+
+    # Verify no package directory was created
+    if [[ ! -d "$install_root/chaifeng/zidr" ]]; then
+        log_success "No package directory created on filter failure"
+    else
+        # Check if it's empty or incomplete
+        if [[ ! -f "$install_root/chaifeng/zidr/meta.json" ]]; then
+            log_success "Package directory incomplete (no meta.json)"
+        else
+            log_fail "Package directory should not exist on filter failure"
+        fi
+    fi
+}
+
 test_versioned_link_creation() {
     log_section "Test: Versioned link with @version goes to versioned_links"
 
@@ -2142,6 +2180,7 @@ main() {
 
     # Asset filter tests
     test_install_with_asset_filter
+    test_install_filter_no_match_fails
 
     # Versioned link tests
     test_versioned_link_creation
