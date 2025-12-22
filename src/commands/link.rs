@@ -94,8 +94,11 @@ pub fn link<R: Runtime>(
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| spec.repo.repo.clone())
+        } else if link_target == version_dir {
+            // When linking to version directory (multiple files), use repo name
+            spec.repo.repo.clone()
         } else {
-            // Use repo name for default behavior, or filename if linking to single file
+            // When linking to single file, use that filename
             link_target
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())

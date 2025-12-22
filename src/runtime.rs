@@ -63,23 +63,17 @@ pub fn is_path_under(path: &Path, dir: &Path) -> bool {
 ///
 /// Returns `None` if a relative path cannot be computed (e.g., different drive letters on Windows).
 pub fn relative_symlink_path(from_link: &Path, to_target: &Path) -> Option<PathBuf> {
-    // On Windows, check if paths are on different drives
-    #[cfg(windows)]
-    {
-        use std::path::Component;
-        let from_prefix = from_link.components().next();
-        let to_prefix = to_target.components().next();
-        match (from_prefix, to_prefix) {
-            (Some(Component::Prefix(a)), Some(Component::Prefix(b))) if a != b => {
-                return None;
-            }
-            _ => {}
-        }
-    }
-
     // Get the directory containing the symlink
     let from_dir = from_link.parent()?;
-    pathdiff::diff_paths(to_target, from_dir)
+    let result = pathdiff::diff_paths(to_target, from_dir)?;
+
+    // If the result is an absolute path, it means we couldn't compute a relative path
+    // (e.g., different drives on Windows). Return None in this case.
+    if result.is_absolute() {
+        return None;
+    }
+
+    Some(result)
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -1248,6 +1242,20 @@ mod tests {
         let target = Path::new("/opt/ghri/bach-sh/bach/0.7.2");
         let result = relative_symlink_path(link, target);
         assert_eq!(result, Some(PathBuf::from("../ghri/bach-sh/bach/0.7.2")));
+    }
+
+    #[test]
+    fn test_relative_symlink_path_sibling_directories() {
+        // --- Test: E2E scenario - sibling directories with similar names ---
+        // install_root: /tmp/xxx/external_link_relative
+        // bin_dir:      /tmp/xxx/external_link_relative_bin
+        // Link:   /tmp/xxx/external_link_relative_bin/bach
+        // Target: /tmp/xxx/external_link_relative/bach-sh/bach/0.7.2
+        // Expected: ../external_link_relative/bach-sh/bach/0.7.2
+        let link = Path::new("/tmp/xxx/external_link_relative_bin/bach");
+        let target = Path::new("/tmp/xxx/external_link_relative/bach-sh/bach/0.7.2");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from("../external_link_relative/bach-sh/bach/0.7.2")));
     }
 
     #[cfg(windows)]
