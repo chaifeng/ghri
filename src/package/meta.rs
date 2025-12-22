@@ -336,6 +336,9 @@ mod tests {
 
     #[test]
     fn test_meta_serialization_with_api_urls() {
+        // Test that Meta serializes and deserializes with custom API URL preserved
+
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -347,16 +350,27 @@ mod tests {
             updated_at: "now".into(),
         };
         let api_url = "https://custom.api";
+
+        // --- Execute ---
+
+        // Create Meta with custom API URL
         let meta = Meta::from(repo, info, vec![], "v1", api_url);
 
+        // Serialize to JSON and deserialize back
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: Meta = serde_json::from_str(&json).unwrap();
 
+        // --- Verify ---
+
+        // Custom API URL should be preserved through serialization roundtrip
         assert_eq!(deserialized.api_url, api_url);
     }
 
     #[test]
     fn test_meta_releases_sorting() {
+        // Test that releases are sorted by published_at date in descending order (newest first)
+
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -367,31 +381,45 @@ mod tests {
             license: None,
             updated_at: "now".into(),
         };
+
+        // Releases in random order with different published dates
         let releases = vec![
             Release {
                 tag_name: "v1.0.0".into(),
-                published_at: Some("2023-01-01T00:00:00Z".into()),
+                published_at: Some("2023-01-01T00:00:00Z".into()),  // Oldest
                 ..Default::default()
             },
             Release {
                 tag_name: "v2.0.0".into(),
-                published_at: Some("2023-02-01T00:00:00Z".into()),
+                published_at: Some("2023-02-01T00:00:00Z".into()),  // Newest
                 ..Default::default()
             },
             Release {
                 tag_name: "v0.9.0".into(),
-                published_at: Some("2022-12-01T00:00:00Z".into()),
+                published_at: Some("2022-12-01T00:00:00Z".into()),  // Middle
                 ..Default::default()
             },
         ];
+
+        // --- Execute ---
+
         let meta = Meta::from(repo, info, releases, "v2.0.0", "https://api");
-        assert_eq!(meta.releases[0].version, "v2.0.0");
-        assert_eq!(meta.releases[1].version, "v1.0.0");
-        assert_eq!(meta.releases[2].version, "v0.9.0");
+
+        // --- Verify ---
+
+        // Releases should be sorted by published_at descending (newest first)
+        assert_eq!(meta.releases[0].version, "v2.0.0");  // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].version, "v1.0.0");  // 2023-01-01
+        assert_eq!(meta.releases[2].version, "v0.9.0");  // 2022-12-01 (oldest)
     }
 
     #[test]
     fn test_meta_merge_sorting() {
+        // Test that merge() adds new releases and re-sorts by published_at
+
+        // --- Setup ---
+
+        // Existing meta with v1 release (older)
         let mut meta = Meta {
             name: "o/r".into(),
             api_url: "api".into(),
@@ -399,12 +427,14 @@ mod tests {
             current_version: "v1".into(),
             releases: vec![Release {
                 tag_name: "v1".into(),
-                published_at: Some("2023-01-01".into()),
+                published_at: Some("2023-01-01".into()),  // Older
                 ..Default::default()
             }
             .into()],
             ..Default::default()
         };
+
+        // New meta with v2 release (newer)
         let other = Meta {
             name: "o/r".into(),
             api_url: "api".into(),
@@ -412,23 +442,35 @@ mod tests {
             current_version: "v1".into(),
             releases: vec![Release {
                 tag_name: "v2".into(),
-                published_at: Some("2023-02-01".into()),
+                published_at: Some("2023-02-01".into()),  // Newer
                 ..Default::default()
             }
             .into()],
             ..Default::default()
         };
+
+        // --- Execute ---
+
         meta.merge(other);
-        assert_eq!(meta.releases[0].version, "v2");
-        assert_eq!(meta.releases[1].version, "v1");
+
+        // --- Verify ---
+
+        // After merge, releases should be sorted (newest first)
+        assert_eq!(meta.releases[0].version, "v2");  // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].version, "v1");  // 2023-01-01 (oldest)
     }
 
     #[test]
     fn test_meta_sorting_fallback() {
+        // Test sorting behavior when some releases have no published_at date
+        // Releases with published_at should come first, then fallback to version string comparison
+
+        // --- Setup ---
+
         let mut releases = vec![
             MetaRelease {
                 version: "v1".into(),
-                published_at: None,
+                published_at: None,  // No date - will be sorted by version
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
@@ -436,7 +478,7 @@ mod tests {
             },
             MetaRelease {
                 version: "v2".into(),
-                published_at: None,
+                published_at: None,  // No date - will be sorted by version
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
@@ -444,114 +486,193 @@ mod tests {
             },
             MetaRelease {
                 version: "v1.5".into(),
-                published_at: Some("2023".into()),
+                published_at: Some("2023".into()),  // Has date - comes first
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
                 assets: vec![],
             },
         ];
+
+        // --- Execute ---
+
         Meta::sort_releases_internal(&mut releases);
+
+        // --- Verify ---
+
+        // v1.5 has published_at, so it comes first
         assert_eq!(releases[0].version, "v1.5");
+        // v1 and v2 have no published_at, sorted by version descending
         assert_eq!(releases[1].version, "v2");
         assert_eq!(releases[2].version, "v1");
     }
 
     #[test]
     fn test_meta_get_latest_stable_release() {
+        // Test that get_latest_stable_release() returns the latest non-prerelease version
+
+        // --- Setup ---
+
         let mut meta = Meta {
             name: "n".into(),
             ..Default::default()
         };
+
+        // Add stable release v1 (older)
         meta.releases.push(MetaRelease {
             version: "v1".into(),
             is_prerelease: false,
             published_at: Some("2023".into()),
             ..Default::default()
         });
+
+        // Add prerelease v2-rc (newer, but prerelease)
         meta.releases.push(MetaRelease {
             version: "v2-rc".into(),
-            is_prerelease: true,
+            is_prerelease: true,  // This is a prerelease!
             published_at: Some("2024".into()),
             ..Default::default()
         });
 
+        // --- Execute ---
+
         let latest = meta.get_latest_stable_release().unwrap();
+
+        // --- Verify ---
+
+        // Should return v1 (the only stable release), not v2-rc (prerelease)
         assert_eq!(latest.version, "v1");
     }
 
     #[test]
     fn test_meta_get_latest_stable_release_empty() {
+        // Test that get_latest_stable_release() returns None when no releases exist
+
+        // --- Setup ---
+
         let meta = Meta {
             name: "n".into(),
+            releases: vec![],  // No releases
             ..Default::default()
         };
+
+        // --- Execute & Verify ---
+
+        // Should return None when there are no releases
         assert!(meta.get_latest_stable_release().is_none());
     }
 
     #[test]
     fn test_meta_get_latest_stable_release_only_prerelease() {
+        // Test that get_latest_stable_release() returns None when only prereleases exist
+
+        // --- Setup ---
+
         let mut meta = Meta {
             name: "n".into(),
             ..Default::default()
         };
+
+        // Add only a prerelease version
         meta.releases.push(MetaRelease {
             version: "v1-rc".into(),
-            is_prerelease: true,
+            is_prerelease: true,  // Only prerelease available
             ..Default::default()
         });
+
+        // --- Execute & Verify ---
+
+        // Should return None when all releases are prereleases
         assert!(meta.get_latest_stable_release().is_none());
     }
 
     #[test]
     fn test_meta_conversions() {
+        // Test conversion between Meta types and GitHub API types (MetaAsset <-> ReleaseAsset, MetaRelease <-> Release)
+
+        // --- Test MetaAsset -> ReleaseAsset ---
+
         let meta_asset = MetaAsset {
-            name: "n".into(),
-            size: 1,
-            download_url: "u".into(),
+            name: "app.tar.gz".into(),
+            size: 1024,
+            download_url: "https://example.com/app.tar.gz".into(),
         };
+
         let asset: ReleaseAsset = meta_asset.clone().into();
-        assert_eq!(asset.name, meta_asset.name);
+
+        // Verify conversion preserves all fields
+        assert_eq!(asset.name, "app.tar.gz");
+        assert_eq!(asset.size, 1024);
+        assert_eq!(asset.browser_download_url, "https://example.com/app.tar.gz");
+
+        // --- Test MetaRelease -> Release ---
 
         let meta_release = MetaRelease {
-            version: "v1".into(),
-            title: Some("t".into()),
-            published_at: Some("d".into()),
+            version: "v1.0.0".into(),
+            title: Some("Release 1.0.0".into()),
+            published_at: Some("2023-01-01".into()),
             is_prerelease: false,
-            tarball_url: "u".into(),
+            tarball_url: "https://example.com/tarball".into(),
             assets: vec![meta_asset],
         };
+
         let release: Release = meta_release.clone().into();
-        assert_eq!(release.tag_name, meta_release.version);
+
+        // Verify conversion preserves all fields
+        assert_eq!(release.tag_name, "v1.0.0");
+        assert_eq!(release.name, Some("Release 1.0.0".into()));
+        assert_eq!(release.published_at, Some("2023-01-01".into()));
+        assert_eq!(release.prerelease, false);
+        assert_eq!(release.tarball_url, "https://example.com/tarball");
+        assert_eq!(release.assets.len(), 1);
     }
 
     #[test]
     fn test_update_timestamp_behavior() {
+        // Test that merge() updates description when it changes
+
+        // --- Setup ---
+
         let mut meta = Meta {
             name: "o/r".into(),
-            description: Some("old".into()),
+            description: Some("old description".into()),
             updated_at: "old".into(),
             ..Default::default()
         };
+
         let other = Meta {
             name: "o/r".into(),
-            description: Some("new".into()),
+            description: Some("new description".into()),  // Changed description
             updated_at: "new".into(),
             ..Default::default()
         };
 
-        assert!(meta.merge(other));
-        assert_eq!(meta.description, Some("new".into()));
+        // --- Execute ---
+
+        let changed = meta.merge(other);
+
+        // --- Verify ---
+
+        // merge() should return true and update description
+        assert!(changed);
+        assert_eq!(meta.description, Some("new description".into()));
     }
 
     #[test]
     fn test_meta_load() {
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/test/owner/repo/meta.json");
+        // Test loading a complete meta.json file with all fields populated
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> complete JSON with all fields
         runtime
             .expect_read_to_string()
-            .with(eq(path.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| {
                 Ok(r#"{
                     "name": "o/r",
@@ -569,7 +690,13 @@ mod tests {
             });
 
         // No symlink read needed since current_version is provided
-        let meta = Meta::load(&runtime, &path).unwrap();
+
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
         assert_eq!(meta.name, "o/r");
         assert_eq!(meta.current_version, "v1");
         assert_eq!(meta.api_url, "https://api.example.com");
@@ -578,24 +705,39 @@ mod tests {
 
     #[test]
     fn test_meta_load_minimal_json_backward_compat() {
-        // Test loading a minimal meta.json that might have been created by an older version
-        // Only the required field "name" is present
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/test/owner/repo/meta.json");
+        // Test backward compatibility: loading minimal meta.json with only "name" field
+        // Should apply default values for missing fields
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+        let current_link = PathBuf::from("/test/owner/repo/current");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> minimal JSON with only "name"
         runtime
             .expect_read_to_string()
-            .with(eq(path.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| {
                 Ok(r#"{"name": "owner/repo"}"#.into())
             });
 
-        // Mock read_link for current symlink (will fail, so current_version stays empty)
+        // --- Try to Read Current Symlink (for current_version default) ---
+
+        // Read symlink /test/owner/repo/current -> fails (not found)
         runtime
             .expect_read_link()
+            .with(eq(current_link))
             .returning(|_| Err(anyhow::anyhow!("not found")));
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify Defaults Applied ---
+
         assert_eq!(meta.name, "owner/repo");
         // api_url should default to GitHub API
         assert_eq!(meta.api_url, "https://api.github.com");
@@ -604,6 +746,7 @@ mod tests {
         assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
         // homepage should default to GitHub page
         assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
+        // Optional fields stay empty
         assert_eq!(meta.description, None);
         assert_eq!(meta.license, None);
         assert_eq!(meta.updated_at, "");
@@ -614,13 +757,20 @@ mod tests {
 
     #[test]
     fn test_meta_load_partial_fields_backward_compat() {
-        // Test loading meta.json with some fields missing (simulating older format)
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/test/owner/repo/meta.json");
+        // Test backward compatibility: loading meta.json with some fields missing
+        // Missing fields should get default values
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> partial JSON (no api_url, repo_info_url, etc.)
         runtime
             .expect_read_to_string()
-            .with(eq(path.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| {
                 Ok(r#"{
                     "name": "owner/repo",
@@ -633,54 +783,84 @@ mod tests {
 
         // No symlink read needed since current_version is provided
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
         assert_eq!(meta.name, "owner/repo");
         assert_eq!(meta.current_version, "v1.0.0");
         // api_url should default to GitHub API
         assert_eq!(meta.api_url, "https://api.github.com");
+        // Should have 1 release with minimal fields defaulted
         assert!(meta.releases.len() == 1);
-        // Release with minimal fields
         let release = &meta.releases[0];
         assert_eq!(release.version, "v1.0.0");
-        assert_eq!(release.tarball_url, "");
-        assert!(!release.is_prerelease);
-        assert!(release.assets.is_empty());
+        assert_eq!(release.tarball_url, "");  // Defaulted to empty
+        assert!(!release.is_prerelease);       // Defaulted to false
+        assert!(release.assets.is_empty());    // Defaulted to empty
     }
 
     #[test]
     fn test_meta_release_minimal_backward_compat() {
-        // Test deserializing a release with only version field
+        // Test backward compatibility: deserializing a release with only version field
+        // Missing fields should get default values
+
+        // --- Setup ---
+
         let json = r#"{"version": "v2.0.0"}"#;
+
+        // --- Execute ---
+
         let release: MetaRelease = serde_json::from_str(json).unwrap();
-        
+
+        // --- Verify Defaults Applied ---
+
         assert_eq!(release.version, "v2.0.0");
-        assert_eq!(release.title, None);
-        assert_eq!(release.published_at, None);
-        assert!(!release.is_prerelease);
-        assert_eq!(release.tarball_url, "");
-        assert!(release.assets.is_empty());
+        assert_eq!(release.title, None);            // Default: None
+        assert_eq!(release.published_at, None);     // Default: None
+        assert!(!release.is_prerelease);            // Default: false
+        assert_eq!(release.tarball_url, "");        // Default: empty string
+        assert!(release.assets.is_empty());         // Default: empty vec
     }
 
     #[test]
     fn test_meta_asset_minimal_backward_compat() {
-        // Test deserializing an asset with only name field
+        // Test backward compatibility: deserializing an asset with only name field
+        // Missing fields should get default values
+
+        // --- Setup ---
+
         let json = r#"{"name": "app-linux-x64.tar.gz"}"#;
+
+        // --- Execute ---
+
         let asset: MetaAsset = serde_json::from_str(json).unwrap();
-        
+
+        // --- Verify Defaults Applied ---
+
         assert_eq!(asset.name, "app-linux-x64.tar.gz");
-        assert_eq!(asset.size, 0);
-        assert_eq!(asset.download_url, "");
+        assert_eq!(asset.size, 0);              // Default: 0
+        assert_eq!(asset.download_url, "");     // Default: empty string
     }
 
     #[test]
     fn test_meta_load_with_unknown_fields_forward_compat() {
-        // Test that unknown fields are ignored (forward compatibility)
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/test/owner/repo/meta.json");
+        // Test forward compatibility: loading meta.json with unknown fields from future versions
+        // Unknown fields should be ignored without error
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> JSON with unknown future fields
         runtime
             .expect_read_to_string()
-            .with(eq(path.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| {
                 Ok(r#"{
                     "name": "owner/repo",
@@ -691,58 +871,96 @@ mod tests {
                 }"#.into())
             });
 
+        // --- Execute ---
+
         // Should not fail even with unknown fields
-        let meta = Meta::load(&runtime, &path).unwrap();
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
         assert_eq!(meta.name, "owner/repo");
         assert_eq!(meta.current_version, "v1.0.0");
     }
 
     #[test]
     fn test_meta_load_current_version_from_symlink() {
-        // Test that current_version is read from symlink when missing in JSON
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that current_version is derived from symlink when missing in JSON
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        // --- Read meta.json ---
+
+        // Read /root/owner/repo/meta.json -> no current_version field
         runtime
             .expect_read_to_string()
-            .with(eq(path.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| {
                 Ok(r#"{"name": "owner/repo"}"#.into())
             });
 
-        // Mock read_link to return the version from symlink
+        // --- Read Current Symlink ---
+
+        // Read symlink /root/owner/repo/current -> "v2.0.0"
         runtime
             .expect_read_link()
-            .with(eq(PathBuf::from("/root/owner/repo/current")))
+            .with(eq(current_link))
             .returning(|_| Ok(PathBuf::from("v2.0.0")));
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
         assert_eq!(meta.name, "owner/repo");
-        // current_version should be read from symlink
+        // current_version should be derived from symlink target
         assert_eq!(meta.current_version, "v2.0.0");
     }
 
     #[test]
     fn test_meta_load_homepage_default_for_github() {
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that homepage defaults to GitHub URL when missing
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read meta.json -> no homepage field
         runtime
             .expect_read_to_string()
             .returning(|_| {
                 Ok(r#"{"name": "test-owner/test-repo", "current_version": "v1"}"#.into())
             });
 
-        let meta = Meta::load(&runtime, &path).unwrap();
-        // Homepage should default to GitHub URL
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
+        // Homepage should default to GitHub URL based on name
         assert_eq!(meta.homepage, Some("https://github.com/test-owner/test-repo".into()));
     }
 
     #[test]
     fn test_meta_load_preserves_explicit_homepage() {
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that explicit homepage value is preserved (not overwritten by default)
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read meta.json -> has explicit homepage
         runtime
             .expect_read_to_string()
             .returning(|_| {
@@ -753,41 +971,71 @@ mod tests {
                 }"#.into())
             });
 
-        let meta = Meta::load(&runtime, &path).unwrap();
-        // Explicit homepage should be preserved
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
+        // Explicit homepage should be preserved, not overwritten with GitHub default
         assert_eq!(meta.homepage, Some("https://custom-homepage.com".into()));
     }
 
     #[test]
     fn test_meta_parse_owner_repo() {
+        // Test parsing valid "owner/repo" name format
+
+        // --- Setup ---
+
         let meta = Meta {
             name: "owner/repo".into(),
             ..Default::default()
         };
 
+        // --- Execute ---
+
         let (owner, repo) = meta.parse_owner_repo();
+
+        // --- Verify ---
+
         assert_eq!(owner, "owner");
         assert_eq!(repo, "repo");
     }
 
     #[test]
     fn test_meta_parse_owner_repo_invalid() {
+        // Test parsing invalid name format (missing slash)
+
+        // --- Setup ---
+
         let meta = Meta {
-            name: "invalid-name".into(),
+            name: "invalid-name".into(),  // No "/" separator
             ..Default::default()
         };
 
+        // --- Execute ---
+
         let (owner, repo) = meta.parse_owner_repo();
+
+        // --- Verify ---
+
+        // Should return empty strings for invalid format
         assert_eq!(owner, "");
         assert_eq!(repo, "");
     }
 
     #[test]
     fn test_meta_load_with_null_values() {
-        // Test that null values in JSON are handled properly
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that null values in JSON are treated as missing and defaults applied
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read meta.json -> fields with explicit null values
         runtime
             .expect_read_to_string()
             .returning(|_| {
@@ -801,7 +1049,12 @@ mod tests {
                 }"#.into())
             });
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify Defaults Applied ---
+
         assert_eq!(meta.name, "owner/repo");
         // Null should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
@@ -812,10 +1065,16 @@ mod tests {
 
     #[test]
     fn test_meta_load_with_empty_strings() {
-        // Test that empty strings are treated as missing
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that empty strings are treated as missing and defaults applied
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read meta.json -> fields with empty string values
         runtime
             .expect_read_to_string()
             .returning(|_| {
@@ -829,7 +1088,12 @@ mod tests {
                 }"#.into())
             });
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify Defaults Applied ---
+
         // Empty strings should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
         assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
@@ -839,10 +1103,16 @@ mod tests {
 
     #[test]
     fn test_meta_load_with_whitespace_strings() {
-        // Test that whitespace-only strings are treated as missing
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
+        // Test that whitespace-only strings are treated as missing and defaults applied
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read meta.json -> fields with whitespace-only values
         runtime
             .expect_read_to_string()
             .returning(|_| {
@@ -856,7 +1126,12 @@ mod tests {
                 }"#.into())
             });
 
-        let meta = Meta::load(&runtime, &path).unwrap();
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify Defaults Applied ---
+
         // Whitespace-only strings should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
         assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
@@ -867,9 +1142,16 @@ mod tests {
     #[test]
     fn test_meta_load_current_version_whitespace_reads_symlink() {
         // Test that whitespace-only current_version triggers symlink read
-        let mut runtime = MockRuntime::new();
-        let path = PathBuf::from("/root/owner/repo/meta.json");
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/root/owner/repo/meta.json");
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        // --- Read meta.json ---
+
+        // Read /root/owner/repo/meta.json -> current_version is whitespace
         runtime
             .expect_read_to_string()
             .returning(|_| {
@@ -879,30 +1161,49 @@ mod tests {
                 }"#.into())
             });
 
+        // --- Read Current Symlink ---
+
+        // Whitespace current_version triggers symlink read
+        // Read symlink /root/owner/repo/current -> "v3.0.0"
         runtime
             .expect_read_link()
-            .with(eq(PathBuf::from("/root/owner/repo/current")))
+            .with(eq(current_link))
             .returning(|_| Ok(PathBuf::from("v3.0.0")));
 
-        let meta = Meta::load(&runtime, &path).unwrap();
-        // Whitespace current_version should trigger symlink read
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
+        // current_version should be derived from symlink (whitespace triggered read)
         assert_eq!(meta.current_version, "v3.0.0");
     }
 
     #[test]
     fn test_is_empty_or_blank() {
-        assert!(Meta::is_empty_or_blank(""));
-        assert!(Meta::is_empty_or_blank("   "));
-        assert!(Meta::is_empty_or_blank("\t\n"));
-        assert!(!Meta::is_empty_or_blank("value"));
-        assert!(!Meta::is_empty_or_blank("  value  "));
+        // Test the is_empty_or_blank() helper function
+
+        // --- Empty/Blank Cases (should return true) ---
+        assert!(Meta::is_empty_or_blank(""));           // Empty string
+        assert!(Meta::is_empty_or_blank("   "));        // Spaces only
+        assert!(Meta::is_empty_or_blank("\t\n"));       // Tab and newline
+
+        // --- Non-Empty Cases (should return false) ---
+        assert!(!Meta::is_empty_or_blank("value"));    // Normal value
+        assert!(!Meta::is_empty_or_blank("  value  ")); // Value with surrounding whitespace
     }
 
     #[test]
     fn test_is_option_empty_or_blank() {
-        assert!(Meta::is_option_empty_or_blank(&None));
-        assert!(Meta::is_option_empty_or_blank(&Some("".into())));
-        assert!(Meta::is_option_empty_or_blank(&Some("   ".into())));
-        assert!(!Meta::is_option_empty_or_blank(&Some("value".into())));
+        // Test the is_option_empty_or_blank() helper function
+
+        // --- Empty/Blank Cases (should return true) ---
+        assert!(Meta::is_option_empty_or_blank(&None));                    // None
+        assert!(Meta::is_option_empty_or_blank(&Some("".into())));         // Some("")
+        assert!(Meta::is_option_empty_or_blank(&Some("   ".into())));      // Some("   ")
+
+        // --- Non-Empty Cases (should return false) ---
+        assert!(!Meta::is_option_empty_or_blank(&Some("value".into())));   // Some("value")
     }
 }
