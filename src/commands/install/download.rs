@@ -201,6 +201,53 @@ fn is_archive(name: &str) -> bool {
         || name_lower.ends_with(".zip")
 }
 
+/// Check if a file is a native binary executable for the current platform.
+/// Uses goblin to parse the binary format and determine if it's executable.
+/// Returns true only for native executables matching the current platform:
+/// - Linux: ELF binaries only
+/// - macOS: Mach-O binaries only (including universal/fat binaries)
+/// Scripts and binaries for other platforms are not considered native executables.
+#[cfg(unix)]
+fn is_native_executable<R: Runtime>(runtime: &R, path: &Path) -> bool {
+    use std::io::Read;
+    
+    let mut file = match runtime.open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    // Read enough bytes for goblin to detect the format
+    let mut buffer = Vec::new();
+    if file.read_to_end(&mut buffer).is_err() {
+        return false;
+    }
+
+    match goblin::Object::parse(&buffer) {
+        #[cfg(target_os = "linux")]
+        Ok(goblin::Object::Elf(_)) => true,
+        #[cfg(target_os = "macos")]
+        Ok(goblin::Object::Mach(_)) => true,
+        _ => false,
+    }
+}
+
+/// Set executable permission on a file if it's a native binary.
+/// This is a no-op on Windows.
+#[cfg(unix)]
+fn set_executable_if_binary<R: Runtime>(runtime: &R, path: &Path) -> Result<()> {
+    if is_native_executable(runtime, path) {
+        debug!("Setting executable permission on {:?}", path);
+        runtime.set_permissions(path, 0o755)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable_if_binary<R: Runtime>(_runtime: &R, _path: &Path) -> Result<()> {
+    // No-op on Windows
+    Ok(())
+}
+
 /// Download all release assets (when assets are available)
 /// If only one file is downloaded and it's an archive, extract it.
 /// If multiple files are downloaded, keep them as-is without extraction.
@@ -303,6 +350,12 @@ async fn download_all_assets<R: Runtime + 'static, E: Extractor>(
                 }
                 let _ = runtime.remove_dir_all(target_dir);
                 return Err(e.context(format!("Failed to copy asset: {}", asset.name)));
+            }
+            
+            // Set executable permission if the file is a native binary (Unix only)
+            if let Err(e) = set_executable_if_binary(runtime, &dest_path) {
+                debug!("Failed to set executable permission on {:?}: {}", dest_path, e);
+                // Non-fatal: continue even if permission setting fails
             }
         }
     }
@@ -887,6 +940,16 @@ mod tests {
         // Copy: /tmp/r-v1-checksums.txt -> /target/checksums.txt
         runtime.expect_copy().times(2).returning(|_, _| Ok(100));
 
+        // --- 4.5. Check if Files are Native Binaries (Unix only) ---
+        
+        // Open files to check magic bytes (for set_executable_if_binary)
+        // These are not native binaries, so no permission change needed
+        #[cfg(unix)]
+        runtime
+            .expect_open()
+            .times(2)
+            .returning(|_| Ok(Box::new(std::io::Cursor::new(b"not a binary".to_vec()))));
+
         // --- 5. Cleanup Temp Files ---
 
         // Remove both temp files after processing
@@ -1069,6 +1132,16 @@ mod tests {
 
         // Copy: /tmp/r-v1-app-linux-x86_64 -> /target/app-linux-x86_64
         runtime.expect_copy().times(1).returning(|_, _| Ok(100));
+
+        // --- 4.5. Check if File is Native Binary (Unix only) ---
+        
+        // Open file to check magic bytes (for set_executable_if_binary)
+        // This is not a native binary (no ELF/Mach-O magic), so no permission change
+        #[cfg(unix)]
+        runtime
+            .expect_open()
+            .times(1)
+            .returning(|_| Ok(Box::new(std::io::Cursor::new(b"not a binary".to_vec()))));
 
         // --- 5. Cleanup Temp File ---
 
@@ -1358,5 +1431,395 @@ mod tests {
             error_msg.contains("*windows*"),
             "Error should mention the filter pattern"
         );
+    }
+
+    // --- Tests for binary executable detection (Platform-specific) ---
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_is_native_executable_elf_on_linux() {
+        // Test that ELF binaries are detected as native on Linux
+        // Uses a minimal valid ELF64 header
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal valid ELF64 header (64 bytes)
+        let mut elf_header = vec![
+            0x7F, b'E', b'L', b'F', // Magic number
+            2,                      // 64-bit (EI_CLASS)
+            1,                      // Little endian (EI_DATA)
+            1,                      // ELF version (EI_VERSION)
+            0,                      // OS/ABI (EI_OSABI)
+            0, 0, 0, 0, 0, 0, 0, 0, // Padding
+            2, 0,                   // Type: ET_EXEC (executable)
+            0x3E, 0,                // Machine: x86-64
+            1, 0, 0, 0,             // Version
+        ];
+        // Pad to 64 bytes (minimum ELF header size)
+        elf_header.resize(64, 0);
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(elf_header.clone()))));
+        
+        assert!(is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_is_native_executable_macho_not_native_on_linux() {
+        // Test that Mach-O binaries are NOT detected as native on Linux
+        // Even though it's a valid binary, it's for macOS, not Linux
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal Mach-O 64-bit header (32 bytes)
+        let macho_header = vec![
+            0xCF, 0xFA, 0xED, 0xFE, // Magic: MH_MAGIC_64 (little endian)
+            0x0C, 0x00, 0x00, 0x01, // CPU type: ARM64
+            0x00, 0x00, 0x00, 0x00, // CPU subtype
+            0x02, 0x00, 0x00, 0x00, // File type: MH_EXECUTE
+            0x00, 0x00, 0x00, 0x00, // Number of load commands
+            0x00, 0x00, 0x00, 0x00, // Size of load commands
+            0x00, 0x00, 0x00, 0x00, // Flags
+            0x00, 0x00, 0x00, 0x00, // Reserved
+        ];
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(macho_header.clone()))));
+        
+        // On Linux, Mach-O should NOT be considered native
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_is_native_executable_macho_64_on_macos() {
+        // Test that Mach-O 64-bit binaries are detected as native on macOS
+        // Uses a minimal valid Mach-O 64-bit header
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal Mach-O 64-bit header (32 bytes)
+        let macho_header = vec![
+            0xCF, 0xFA, 0xED, 0xFE, // Magic: MH_MAGIC_64 (little endian)
+            0x0C, 0x00, 0x00, 0x01, // CPU type: ARM64
+            0x00, 0x00, 0x00, 0x00, // CPU subtype
+            0x02, 0x00, 0x00, 0x00, // File type: MH_EXECUTE
+            0x00, 0x00, 0x00, 0x00, // Number of load commands
+            0x00, 0x00, 0x00, 0x00, // Size of load commands
+            0x00, 0x00, 0x00, 0x00, // Flags
+            0x00, 0x00, 0x00, 0x00, // Reserved
+        ];
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(macho_header.clone()))));
+        
+        assert!(is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_is_native_executable_macho_fat_on_macos() {
+        // Test that Mach-O universal (fat) binaries are detected as native on macOS
+        // Uses a minimal valid Fat binary header
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal Fat binary header (8 bytes + arch entries)
+        // FAT_MAGIC is 0xCAFEBABE (big endian), with 1 arch entry
+        let fat_header = vec![
+            0xCA, 0xFE, 0xBA, 0xBE, // Magic: FAT_MAGIC (big endian)
+            0x00, 0x00, 0x00, 0x01, // Number of architectures: 1
+            0x01, 0x00, 0x00, 0x07, // CPU type (placeholder)
+            0x00, 0x00, 0x00, 0x03, // CPU subtype (placeholder)
+            0x00, 0x00, 0x10, 0x00, // Offset
+            0x00, 0x00, 0x10, 0x00, // Size
+            0x00, 0x00, 0x00, 0x0C, // Align
+        ];
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(fat_header.clone()))));
+        
+        assert!(is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_is_native_executable_elf_not_native_on_macos() {
+        // Test that ELF binaries are NOT detected as native on macOS
+        // Even though it's a valid binary, it's for Linux, not macOS
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal valid ELF64 header (64 bytes)
+        let mut elf_header = vec![
+            0x7F, b'E', b'L', b'F', // Magic number
+            2,                      // 64-bit (EI_CLASS)
+            1,                      // Little endian (EI_DATA)
+            1,                      // ELF version (EI_VERSION)
+            0,                      // OS/ABI (EI_OSABI)
+            0, 0, 0, 0, 0, 0, 0, 0, // Padding
+            2, 0,                   // Type: ET_EXEC (executable)
+            0x3E, 0,                // Machine: x86-64
+            1, 0, 0, 0,             // Version
+        ];
+        // Pad to 64 bytes (minimum ELF header size)
+        elf_header.resize(64, 0);
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(elf_header.clone()))));
+        
+        // On macOS, ELF should NOT be considered native
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_native_executable_script() {
+        // Test that scripts (shebang) are NOT detected as native executables
+        // Script starts with "#!" which should not be treated as native binary
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/script.sh");
+        
+        // Shebang for shell script
+        let script_header = b"#!/bin/bash\necho hello".to_vec();
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(script_header.clone()))));
+        
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_native_executable_text_file() {
+        // Test that plain text files are NOT detected as native executables
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/readme.txt");
+        
+        let text_content = b"This is a readme file".to_vec();
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(text_content.clone()))));
+        
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_native_executable_empty_file() {
+        // Test that empty files are NOT detected as native executables
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/empty");
+        
+        // Empty file (read_exact will fail)
+        let empty_content: Vec<u8> = vec![];
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(empty_content.clone()))));
+        
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_native_executable_file_not_found() {
+        // Test that non-existent files return false (not an error)
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/nonexistent");
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(|_| Err(anyhow::anyhow!("file not found")));
+        
+        assert!(!is_native_executable(&runtime, &path));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_set_executable_if_binary_sets_permission_for_elf_on_linux() {
+        // Test that set_executable_if_binary sets 0o755 for ELF binaries on Linux
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal valid ELF64 header (64 bytes)
+        let mut elf_header = vec![
+            0x7F, b'E', b'L', b'F', // Magic number
+            2,                      // 64-bit (EI_CLASS)
+            1,                      // Little endian (EI_DATA)
+            1,                      // ELF version (EI_VERSION)
+            0,                      // OS/ABI (EI_OSABI)
+            0, 0, 0, 0, 0, 0, 0, 0, // Padding
+            2, 0,                   // Type: ET_EXEC (executable)
+            0x3E, 0,                // Machine: x86-64
+            1, 0, 0, 0,             // Version
+        ];
+        // Pad to 64 bytes (minimum ELF header size)
+        elf_header.resize(64, 0);
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(elf_header.clone()))));
+        
+        // Expect set_permissions to be called with 0o755
+        runtime
+            .expect_set_permissions()
+            .with(eq(path.clone()), eq(0o755))
+            .times(1)
+            .returning(|_, _| Ok(()));
+        
+        let result = set_executable_if_binary(&runtime, &path);
+        assert!(result.is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_set_executable_if_binary_sets_permission_for_macho_on_macos() {
+        // Test that set_executable_if_binary sets 0o755 for Mach-O binaries on macOS
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal Mach-O 64-bit header (32 bytes)
+        let macho_header = vec![
+            0xCF, 0xFA, 0xED, 0xFE, // Magic: MH_MAGIC_64 (little endian)
+            0x0C, 0x00, 0x00, 0x01, // CPU type: ARM64
+            0x00, 0x00, 0x00, 0x00, // CPU subtype
+            0x02, 0x00, 0x00, 0x00, // File type: MH_EXECUTE
+            0x00, 0x00, 0x00, 0x00, // Number of load commands
+            0x00, 0x00, 0x00, 0x00, // Size of load commands
+            0x00, 0x00, 0x00, 0x00, // Flags
+            0x00, 0x00, 0x00, 0x00, // Reserved
+        ];
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(macho_header.clone()))));
+        
+        // Expect set_permissions to be called with 0o755
+        runtime
+            .expect_set_permissions()
+            .with(eq(path.clone()), eq(0o755))
+            .times(1)
+            .returning(|_, _| Ok(()));
+        
+        let result = set_executable_if_binary(&runtime, &path);
+        assert!(result.is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_set_executable_if_binary_skips_elf_on_macos() {
+        // Test that set_executable_if_binary does NOT set permission for ELF binaries on macOS
+        // ELF is not native to macOS, so no executable permission should be set
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal valid ELF64 header (64 bytes)
+        let mut elf_header = vec![
+            0x7F, b'E', b'L', b'F', // Magic number
+            2,                      // 64-bit (EI_CLASS)
+            1,                      // Little endian (EI_DATA)
+            1,                      // ELF version (EI_VERSION)
+            0,                      // OS/ABI (EI_OSABI)
+            0, 0, 0, 0, 0, 0, 0, 0, // Padding
+            2, 0,                   // Type: ET_EXEC (executable)
+            0x3E, 0,                // Machine: x86-64
+            1, 0, 0, 0,             // Version
+        ];
+        // Pad to 64 bytes (minimum ELF header size)
+        elf_header.resize(64, 0);
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(elf_header.clone()))));
+        
+        // set_permissions should NOT be called for ELF on macOS
+        // (MockRuntime will fail if an unexpected call is made)
+        
+        let result = set_executable_if_binary(&runtime, &path);
+        assert!(result.is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_set_executable_if_binary_skips_macho_on_linux() {
+        // Test that set_executable_if_binary does NOT set permission for Mach-O binaries on Linux
+        // Mach-O is not native to Linux, so no executable permission should be set
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/binary");
+        
+        // Minimal Mach-O 64-bit header (32 bytes)
+        let macho_header = vec![
+            0xCF, 0xFA, 0xED, 0xFE, // Magic: MH_MAGIC_64 (little endian)
+            0x0C, 0x00, 0x00, 0x01, // CPU type: ARM64
+            0x00, 0x00, 0x00, 0x00, // CPU subtype
+            0x02, 0x00, 0x00, 0x00, // File type: MH_EXECUTE
+            0x00, 0x00, 0x00, 0x00, // Number of load commands
+            0x00, 0x00, 0x00, 0x00, // Size of load commands
+            0x00, 0x00, 0x00, 0x00, // Flags
+            0x00, 0x00, 0x00, 0x00, // Reserved
+        ];
+        
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(macho_header.clone()))));
+        
+        // set_permissions should NOT be called for Mach-O on Linux
+        // (MockRuntime will fail if an unexpected call is made)
+        
+        let result = set_executable_if_binary(&runtime, &path);
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_set_executable_if_binary_skips_text_file() {
+        // Test that set_executable_if_binary does NOT set permission for text files
+        
+        let mut runtime = MockRuntime::new();
+        let path = PathBuf::from("/test/readme.txt");
+        
+        let text_content = b"plain text".to_vec();
+        runtime
+            .expect_open()
+            .with(eq(path.clone()))
+            .returning(move |_| Ok(Box::new(std::io::Cursor::new(text_content.clone()))));
+        
+        // set_permissions should NOT be called for text files
+        // (MockRuntime will fail if an unexpected call is made)
+        
+        let result = set_executable_if_binary(&runtime, &path);
+        assert!(result.is_ok());
     }
 }
