@@ -55,6 +55,10 @@ pub struct Meta {
     /// Deprecated: Use `links` instead. Kept for backward compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_path: Option<String>,
+    /// Asset filter patterns used during install/update
+    /// These patterns are saved and reused when updating the package
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
 }
 
 impl Meta {
@@ -84,6 +88,7 @@ impl Meta {
             versioned_links: vec![],
             linked_to: None,
             linked_path: None,
+            filters: vec![],
         }
     }
 
@@ -1205,5 +1210,149 @@ mod tests {
 
         // --- Non-Empty Cases (should return false) ---
         assert!(!Meta::is_option_empty_or_blank(&Some("value".into())));   // Some("value")
+    }
+
+    #[test]
+    fn test_meta_filters_serialization() {
+        // Test that filters are correctly serialized and deserialized
+
+        // --- Setup ---
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            filters: vec!["*aarch64*".into(), "*macos*".into()],
+            ..Default::default()
+        };
+
+        // --- Execute ---
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&meta).unwrap();
+
+        // Deserialize back
+        let deserialized: Meta = serde_json::from_str(&json).unwrap();
+
+        // --- Verify ---
+
+        // Filters should be preserved through serialization roundtrip
+        assert_eq!(deserialized.filters, vec!["*aarch64*", "*macos*"]);
+    }
+
+    #[test]
+    fn test_meta_filters_empty_not_serialized() {
+        // Test that empty filters array is not included in JSON output (skip_serializing_if)
+
+        // --- Setup ---
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            filters: vec![],  // Empty filters
+            ..Default::default()
+        };
+
+        // --- Execute ---
+
+        let json = serde_json::to_string(&meta).unwrap();
+
+        // --- Verify ---
+
+        // Empty filters should not appear in JSON output
+        assert!(!json.contains("filters"));
+    }
+
+    #[test]
+    fn test_meta_load_without_filters_backward_compat() {
+        // Test backward compatibility: loading meta.json without filters field
+        // Should default to empty filters
+
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> no filters field (old format)
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "current_version": "v1.0.0"
+                }"#.into())
+            });
+
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
+        // Filters should default to empty when not in JSON
+        assert!(meta.filters.is_empty());
+    }
+
+    #[test]
+    fn test_meta_load_with_filters() {
+        // Test loading meta.json with filters field
+
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/test/owner/repo/meta.json");
+
+        // --- Read meta.json ---
+
+        // Read /test/owner/repo/meta.json -> has filters field
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(|_| {
+                Ok(r#"{
+                    "name": "owner/repo",
+                    "current_version": "v1.0.0",
+                    "filters": ["*linux*", "*x86_64*"]
+                }"#.into())
+            });
+
+        // --- Execute ---
+
+        let meta = Meta::load(&runtime, &meta_path).unwrap();
+
+        // --- Verify ---
+
+        // Filters should be loaded from JSON
+        assert_eq!(meta.filters, vec!["*linux*", "*x86_64*"]);
+    }
+
+    #[test]
+    fn test_meta_from_does_not_include_filters() {
+        // Test that Meta::from() creates meta with empty filters
+        // Filters should only be set during install/update
+
+        // --- Setup ---
+
+        let repo = GitHubRepo {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let info = RepoInfo {
+            description: None,
+            homepage: None,
+            license: None,
+            updated_at: "now".into(),
+        };
+
+        // --- Execute ---
+
+        let meta = Meta::from(repo, info, vec![], "v1", "https://api.github.com");
+
+        // --- Verify ---
+
+        // Meta::from() should create meta with empty filters
+        assert!(meta.filters.is_empty());
     }
 }

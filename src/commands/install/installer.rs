@@ -43,6 +43,14 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             .get_or_fetch_meta(repo, install_root.as_deref())
             .await?;
 
+        // Use saved filters from meta if user didn't provide any
+        let effective_filters = if filters.is_empty() && !meta.filters.is_empty() {
+            info!("Using saved filters from meta: {:?}", meta.filters);
+            meta.filters.clone()
+        } else {
+            filters
+        };
+
         let meta_release = if let Some(ver) = version {
             // Find the specific version
             meta.releases
@@ -83,7 +91,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             &self.http_client,
             &self.extractor,
             Arc::clone(&cleanup_ctx),
-            &filters,
+            &effective_filters,
         )
         .await;
 
@@ -103,6 +111,9 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
         // Metadata handling - save meta only after successful install
         meta.current_version = release.tag_name.clone();
+        // Save filters to meta (for use during updates)
+        // Always update filters: use effective_filters which may be user-provided or from saved meta
+        meta.filters = effective_filters;
         if needs_save {
             // Newly fetched meta - need to create parent directory first
             if let Some(parent) = meta_path.parent() {
@@ -871,4 +882,246 @@ mod tests {
     }
 
     // test_update_timestamp_behavior is now in package/meta.rs
+
+    #[tokio::test]
+    async fn test_install_user_filters_override_saved_filters() {
+        // Test that user-provided --filter args completely override saved filters in meta.json
+        // When user specifies filters, meta.json filters should be ignored
+        let mut runtime = MockRuntime::new();
+        let github = MockGetReleases::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        #[cfg(not(windows))]
+        let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
+        #[cfg(windows)]
+        let meta_path = PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\meta.json");
+
+        // --- 1. Load Existing Metadata with SAVED filters ---
+
+        // File exists: meta.json -> true (use cache)
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read meta.json -> has saved filters ["*old-filter*"]
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            api_url: "api".into(),
+            filters: vec!["*old-filter*".to_string()],  // Saved filter from previous install
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Check if meta.json is a directory -> false
+        runtime.expect_is_dir().returning(|_| false);
+
+        // --- 2. Version Already Installed (skip download) ---
+
+        runtime.expect_exists().returning(|_| true);
+
+        // --- 3. Update Current Symlink ---
+
+        runtime.expect_is_symlink().returning(|_| true);
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
+        runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 4. Save Updated Metadata with NEW filters ---
+
+        // Verify that new user-provided filters are saved (not the old ones)
+        runtime
+            .expect_write()
+            .withf(|_, content| {
+                let saved_meta: Meta = serde_json::from_slice(content).unwrap();
+                // New filters should be saved, NOT the old "*old-filter*"
+                saved_meta.filters == vec!["*new-user-filter*"]
+            })
+            .returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+
+        // User provides NEW filter, should override saved "*old-filter*"
+        installer
+            .install(&repo, None, None, vec!["*new-user-filter*".to_string()])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_install_uses_saved_filters_when_user_provides_none() {
+        // Test that saved filters from meta.json are used when user doesn't provide any
+        let mut runtime = MockRuntime::new();
+        let github = MockGetReleases::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        #[cfg(not(windows))]
+        let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
+        #[cfg(windows)]
+        let meta_path = PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\meta.json");
+
+        // --- 1. Load Existing Metadata with SAVED filters ---
+
+        // File exists: meta.json -> true
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read meta.json -> has saved filters ["*linux*", "*x86_64*"]
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            api_url: "api".into(),
+            filters: vec!["*linux*".to_string(), "*x86_64*".to_string()],
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Check if meta.json is a directory -> false
+        runtime.expect_is_dir().returning(|_| false);
+
+        // --- 2. Version Already Installed ---
+
+        runtime.expect_exists().returning(|_| true);
+
+        // --- 3. Update Current Symlink ---
+
+        runtime.expect_is_symlink().returning(|_| true);
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
+        runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 4. Save Metadata (filters should remain the same) ---
+
+        runtime
+            .expect_write()
+            .withf(|_, content| {
+                let saved_meta: Meta = serde_json::from_slice(content).unwrap();
+                // Saved filters should be preserved
+                saved_meta.filters == vec!["*linux*", "*x86_64*"]
+            })
+            .returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+
+        // User provides NO filters -> should use saved filters from meta.json
+        installer.install(&repo, None, None, vec![]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_install_clears_saved_filters_when_user_provides_empty() {
+        // Test edge case: if user explicitly wants to clear filters, empty vec should clear saved filters
+        // Note: Currently there's no way to distinguish "user didn't specify --filter" from 
+        // "user wants to clear filters". This test documents the current behavior where
+        // empty filters from user will use saved filters.
+        let mut runtime = MockRuntime::new();
+        let github = MockGetReleases::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        #[cfg(not(windows))]
+        let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
+        #[cfg(windows)]
+        let meta_path = PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\meta.json");
+
+        // --- 1. Load Existing Metadata with SAVED filters ---
+
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            api_url: "api".into(),
+            filters: vec!["*saved-filter*".to_string()],
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path.clone()))
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        runtime.expect_is_dir().returning(|_| false);
+        runtime.expect_exists().returning(|_| true);
+        runtime.expect_is_symlink().returning(|_| true);
+        runtime
+            .expect_read_link()
+            .returning(|_| Ok(PathBuf::from("v1")));
+        runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- Verify saved filters are used (current behavior) ---
+
+        runtime
+            .expect_write()
+            .withf(|_, content| {
+                let saved_meta: Meta = serde_json::from_slice(content).unwrap();
+                // When user provides empty vec, saved filters are used (current behavior)
+                saved_meta.filters == vec!["*saved-filter*"]
+            })
+            .returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+
+        // Empty filters vec -> uses saved filters (current behavior)
+        installer.install(&repo, None, None, vec![]).await.unwrap();
+    }
 }
