@@ -80,7 +80,11 @@ pub struct InstallArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct UpdateArgs {}
+pub struct UpdateArgs {
+    /// Packages to update (default: all installed packages)
+    #[arg(value_name = "OWNER/REPO")]
+    pub repos: Vec<String>,
+}
 
 #[derive(clap::Args, Debug)]
 pub struct ListArgs {}
@@ -150,7 +154,7 @@ async fn main() -> Result<()> {
         Commands::Install(args) => {
             install(runtime, &args.repo, cli.install_root, args.api_url, args.filters, args.pre).await?
         }
-        Commands::Update(_args) => ghri::commands::update(runtime, cli.install_root, None).await?,
+        Commands::Update(args) => ghri::commands::update(runtime, cli.install_root, None, args.repos).await?,
         Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
         Commands::Link(args) => ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?,
         Commands::Unlink(args) => ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,

@@ -11,19 +11,21 @@ use super::config::Config;
 use super::install::Installer;
 use super::paths::default_install_root;
 
-#[tracing::instrument(skip(runtime, install_root, api_url))]
+#[tracing::instrument(skip(runtime, install_root, api_url, repos))]
 pub async fn update<R: Runtime + 'static>(
     runtime: R,
     install_root: Option<PathBuf>,
     api_url: Option<String>,
+    repos: Vec<String>,
 ) -> Result<()> {
     let config = Config::new(runtime, install_root, api_url)?;
-    run_update(config).await
+    run_update(config, repos).await
 }
 
-#[tracing::instrument(skip(config))]
+#[tracing::instrument(skip(config, repos))]
 async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     config: Config<R, G, E>,
+    repos: Vec<String>,
 ) -> Result<()> {
     let root = match config.install_root {
         Some(path) => path,
@@ -36,6 +38,12 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
         return Ok(());
     }
 
+    // Parse requested repos for filtering
+    let filter_repos: Vec<GitHubRepo> = repos
+        .iter()
+        .filter_map(|r| r.parse::<GitHubRepo>().ok())
+        .collect();
+
     let installer = Installer::new(
         config.runtime,
         config.github,
@@ -46,6 +54,11 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     for meta_path in meta_files {
         let meta = Meta::load(&installer.runtime, &meta_path)?;
         let repo = meta.name.parse::<GitHubRepo>()?;
+
+        // Skip if not in filter list (when filter is specified)
+        if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
+            continue;
+        }
 
         println!("   updating {}", repo);
         if let Err(e) = save_metadata(&installer, &repo, &meta.current_version, &meta_path).await {
@@ -189,7 +202,7 @@ mod tests {
 
         // --- Execute ---
 
-        update(runtime, None, None).await.unwrap();
+        update(runtime, None, None, vec![]).await.unwrap();
     }
 
     #[tokio::test]
@@ -302,7 +315,7 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
-        run_update(config).await.unwrap();
+        run_update(config, vec![]).await.unwrap();
     }
 
     #[tokio::test]
@@ -339,7 +352,139 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
-        let result = run_update(config).await;
+        let result = run_update(config, vec![]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_update_filter_specific_packages() {
+        // Test that update only updates specified packages when filter is provided
+
+        let mut runtime = MockRuntime::new();
+        #[cfg(not(windows))]
+        let root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let root = PathBuf::from("C:\\Users\\user\\.ghri");
+        configure_runtime_basics(&mut runtime);
+
+        // --- 1. Find Installed Packages ---
+
+        // Directory exists: ~/.ghri -> true
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+
+        // Read dir ~/.ghri -> [owner1, owner2] (two owners)
+        runtime
+            .expect_read_dir()
+            .with(eq(root.clone()))
+            .returning(|p| Ok(vec![p.join("owner1"), p.join("owner2")]));
+
+        // Is dir checks for owner/repo traversal
+        runtime.expect_is_dir().returning(|_| true);
+
+        // Read dir ~/.ghri/owner1 -> [repo1]
+        runtime
+            .expect_read_dir()
+            .with(eq(root.join("owner1")))
+            .returning(|p| Ok(vec![p.join("repo1")]));
+
+        // Read dir ~/.ghri/owner2 -> [repo2]
+        runtime
+            .expect_read_dir()
+            .with(eq(root.join("owner2")))
+            .returning(|p| Ok(vec![p.join("repo2")]));
+
+        // File exists: meta.json for both packages
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner1/repo1/meta.json")))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner2/repo2/meta.json")))
+            .returning(|_| true);
+
+        // --- 2. Load Current Metadata ---
+
+        // Read meta.json -> return different meta for each package
+        let meta1 = Meta {
+            name: "owner1/repo1".into(),
+            current_version: "v1".into(),
+            updated_at: "old".into(),
+            api_url: "api".into(),
+            releases: vec![Release {
+                tag_name: "v1".into(),
+                ..Default::default()
+            }.into()],
+            ..Default::default()
+        };
+        let meta2 = Meta {
+            name: "owner2/repo2".into(),
+            current_version: "v1".into(),
+            updated_at: "old".into(),
+            api_url: "api".into(),
+            releases: vec![Release {
+                tag_name: "v1".into(),
+                ..Default::default()
+            }.into()],
+            ..Default::default()
+        };
+        let meta1_json = serde_json::to_string(&meta1).unwrap();
+        let meta2_json = serde_json::to_string(&meta2).unwrap();
+
+        runtime
+            .expect_read_to_string()
+            .with(eq(root.join("owner1/repo1/meta.json")))
+            .returning(move |_| Ok(meta1_json.clone()));
+        runtime
+            .expect_read_to_string()
+            .with(eq(root.join("owner2/repo2/meta.json")))
+            .returning(move |_| Ok(meta2_json.clone()));
+
+        // --- 3. Fetch New Metadata from GitHub (only for owner1/repo1) ---
+
+        let mut github = MockGetReleases::new();
+        github.expect_api_url().return_const("api".to_string());
+
+        // Only owner1/repo1 should be updated, so expect exactly one call
+        github.expect_get_repo_info_at()
+            .times(1)
+            .returning(|_, _| {
+                Ok(RepoInfo {
+                    updated_at: "new".into(),
+                    description: None,
+                    homepage: None,
+                    license: None,
+                })
+            });
+
+        github.expect_get_releases_at()
+            .times(1)
+            .returning(|_, _| {
+                Ok(vec![Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }])
+            });
+
+        // --- 4. Save Updated Metadata ---
+
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+
+        let config = Config {
+            runtime,
+            github,
+            http_client: HttpClient::new(Client::new()),
+            extractor: MockExtractor::new(),
+            install_root: None,
+        };
+        // Only update owner1/repo1, skip owner2/repo2
+        let result = run_update(config, vec!["owner1/repo1".to_string()]).await;
         assert!(result.is_ok());
     }
 }

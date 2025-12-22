@@ -146,10 +146,23 @@ Shows detailed info about a package:
 
 ### update - Update Release Info
 
-Fetch latest release info from GitHub API for all installed packages.
+Fetch latest release info from GitHub API for installed packages.
 
 ```bash
+ghri update [OWNER/REPO]...
+```
+
+**Arguments:**
+- `OWNER/REPO` - Optional. Packages to update. If not specified, updates all installed packages.
+
+**Examples:**
+
+```bash
+# Update all installed packages
 ghri update
+
+# Update specific packages only
+ghri update chaifeng/zidr bach-sh/bach
 ```
 
 This does not upgrade packages. It only updates the local release info cache. To upgrade, run `ghri install` again.
