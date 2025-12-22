@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::LinkSpec,
     package::{LinkRule, Meta, VersionedLink},
-    runtime::{is_path_under, Runtime},
+    runtime::{is_path_under, relative_symlink_path, Runtime},
 };
 
 use super::paths::default_install_root;
@@ -147,8 +147,10 @@ pub fn link<R: Runtime>(
         }
     }
 
-    // Create the symlink
-    runtime.symlink(&link_target, &final_dest)?;
+    // Create the symlink using relative path for shorter, portable links
+    // Example: /usr/local/bin/tool -> ../ghri/owner/repo/v1/tool
+    let symlink_target = relative_symlink_path(&final_dest, &link_target).unwrap_or(link_target.clone());
+    runtime.symlink(&symlink_target, &final_dest)?;
 
     // Add or update link rule in meta.json
     // If a version was explicitly specified, save to versioned_links (not updated on install/update)
@@ -414,11 +416,11 @@ mod tests {
 
         // --- 4. Create Link ---
 
-        // Create symlink: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1/tool
+        // Create symlink: /usr/local/bin/tool -> ../../../home/user/.ghri/owner/repo/v1/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/tool")),
                 eq(final_link.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -508,11 +510,11 @@ mod tests {
 
         // --- 4. Create Link ---
 
-        // Create symlink: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v2/tool
+        // Create symlink: /usr/local/bin/tool -> ../../../home/user/.ghri/owner/repo/v2/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v2/tool")),
                 eq(dest.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -684,11 +686,11 @@ mod tests {
 
         // --- 4. Create Link ---
 
-        // Create symlink: /usr/local/bin/mytool -> /home/user/.ghri/owner/repo/v1/bin/tool
+        // Create symlink: /usr/local/bin/mytool -> ../../../home/user/.ghri/owner/repo/v1/bin/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(explicit_path),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/bin/tool")),
                 eq(dest.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -1008,11 +1010,11 @@ mod tests {
 
         // --- 4. Create Link ---
 
-        // Create symlink: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1/bin/tool
+        // Create symlink: /usr/local/bin/tool -> ../../../home/user/.ghri/owner/repo/v1/bin/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(explicit_path),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/bin/tool")),
                 eq(final_link.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -1110,11 +1112,11 @@ mod tests {
 
         // --- 5. Create Link ---
 
-        // Create symlink: /opt/mytools/bin/tool -> /home/user/.ghri/owner/repo/v1/tool
+        // Create symlink: /opt/mytools/bin/tool -> ../../../home/user/.ghri/owner/repo/v1/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/tool")),
                 eq(dest.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -1229,11 +1231,11 @@ mod tests {
             .with(eq(dest.clone()))
             .returning(|_| Ok(()));
 
-        // Create new symlink: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v2/tool
+        // Create new symlink: /usr/local/bin/tool -> ../../../home/user/.ghri/owner/repo/v2/tool (relative path)
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")),
+                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v2/tool")),
                 eq(dest.clone()),
             )
             .returning(|_, _| Ok(()));

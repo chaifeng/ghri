@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     package::{LinkRule, Meta},
-    runtime::{is_path_under, Runtime},
+    runtime::{Runtime, is_path_under, relative_symlink_path},
 };
 
 use crate::commands::determine_link_target;
@@ -223,8 +223,11 @@ fn execute_link_update<R: Runtime>(runtime: &R, validated: &ValidatedLink) -> Re
         runtime.remove_symlink(&validated.dest)?;
     }
 
-    // Create new symlink
-    runtime.symlink(&validated.link_target, &validated.dest)?;
+    // Create new symlink using relative path for shorter, portable links
+    // Example: /usr/local/bin/tool -> ../ghri/owner/repo/v1/tool
+    let symlink_target = relative_symlink_path(&validated.dest, &validated.link_target)
+        .unwrap_or_else(|| validated.link_target.clone());
+    runtime.symlink(&symlink_target, &validated.dest)?;
     info!(
         "Updated external link {:?} -> {:?}",
         validated.dest, validated.link_target
@@ -250,7 +253,7 @@ mod tests {
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
-            links: vec![],  // No links!
+            links: vec![], // No links!
             ..Default::default()
         };
 
@@ -274,10 +277,10 @@ mod tests {
 
         // --- Setup Paths ---
         let package_dir = PathBuf::from("/root/o/r");
-        let linked_to = PathBuf::from("/usr/local/bin/tool");     // External symlink location
-        let version_dir = PathBuf::from("/root/o/r/v2");          // New version directory
-        let link_target = PathBuf::from("/root/o/r/v2/tool");     // Target binary in new version
-        let old_target = PathBuf::from("/root/o/r/v1/tool");      // Old target (within package)
+        let linked_to = PathBuf::from("/usr/local/bin/tool"); // External symlink location
+        let version_dir = PathBuf::from("/root/o/r/v2"); // New version directory
+        let link_target = PathBuf::from("/root/o/r/v2/tool"); // Target binary in new version
+        let old_target = PathBuf::from("/root/o/r/v1/tool"); // Old target (within package)
 
         let meta = Meta {
             name: "o/r".into(),
@@ -336,20 +339,18 @@ mod tests {
 
         // --- 5. Create New Symlink ---
 
-        // Create symlink: /usr/local/bin/tool -> /root/o/r/v2/tool
+        // Create symlink: /usr/local/bin/tool -> ../../../root/o/r/v2/tool (relative path)
         runtime
             .expect_symlink()
-            .with(eq(link_target), eq(linked_to.clone()))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v2/tool")),
+                eq(linked_to.clone()),
+            )
             .returning(|_, _| Ok(()));
 
         // --- Execute ---
 
-        let result = update_external_links(
-            &runtime,
-            &package_dir,
-            &version_dir,
-            &meta,
-        );
+        let result = update_external_links(&runtime, &package_dir, &version_dir, &meta);
         assert!(result.is_ok());
     }
 
@@ -362,15 +363,15 @@ mod tests {
         // --- Setup Paths ---
         let package_dir = PathBuf::from("/root/o/r");
         let version_dir = PathBuf::from("/root/o/r/v1");
-        let linked_to = PathBuf::from("/usr/local/bin/mytool");   // External symlink location
-        let target_path = version_dir.join("bin/tool");           // /root/o/r/v1/bin/tool
+        let linked_to = PathBuf::from("/usr/local/bin/mytool"); // External symlink location
+        let target_path = version_dir.join("bin/tool"); // /root/o/r/v1/bin/tool
 
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
             links: vec![LinkRule {
                 dest: linked_to.clone(),
-                path: Some("bin/tool".to_string()),               // Explicit path!
+                path: Some("bin/tool".to_string()), // Explicit path!
             }],
             ..Default::default()
         };
@@ -407,10 +408,13 @@ mod tests {
 
         // --- 4. Create Symlink ---
 
-        // Create symlink: /usr/local/bin/mytool -> /root/o/r/v1/bin/tool
+        // Create symlink: /usr/local/bin/mytool -> ../../../root/o/r/v1/bin/tool (relative path)
         runtime
             .expect_symlink()
-            .with(eq(target_path), eq(linked_to))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v1/bin/tool")),
+                eq(linked_to),
+            )
             .returning(|_, _| Ok(()));
 
         // --- Execute ---
@@ -429,14 +433,14 @@ mod tests {
         let package_dir = PathBuf::from("/root/o/r");
         let version_dir = PathBuf::from("/root/o/r/v1");
         let linked_to = PathBuf::from("/usr/local/bin/mytool");
-        let target_path = version_dir.join("bin/nonexistent");    // /root/o/r/v1/bin/nonexistent
+        let target_path = version_dir.join("bin/nonexistent"); // /root/o/r/v1/bin/nonexistent
 
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
             links: vec![LinkRule {
                 dest: linked_to,
-                path: Some("bin/nonexistent".to_string()),        // Path doesn't exist!
+                path: Some("bin/nonexistent".to_string()), // Path doesn't exist!
             }],
             ..Default::default()
         };
@@ -582,10 +586,13 @@ mod tests {
 
         // --- 5. Create Symlink ---
 
-        // Create symlink: /new/path/bin/tool -> /root/o/r/v1/tool
+        // Create symlink: /new/path/bin/tool -> ../../../root/o/r/v1/tool (relative path)
         runtime
             .expect_symlink()
-            .with(eq(link_target), eq(linked_to))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v1/tool")),
+                eq(linked_to),
+            )
             .returning(|_, _| Ok(()));
 
         // --- Execute ---
@@ -609,9 +616,9 @@ mod tests {
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
-            linked_to: Some(linked_to.clone()),                   // Legacy field!
+            linked_to: Some(linked_to.clone()), // Legacy field!
             linked_path: None,
-            links: vec![],                                        // Empty links array
+            links: vec![], // Empty links array
             ..Default::default()
         };
 
@@ -662,20 +669,18 @@ mod tests {
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(()));
 
-        // Create new symlink
+        // Create new symlink: /usr/local/bin/legacy-tool -> ../../../root/o/r/v1/tool (relative path)
         runtime
             .expect_symlink()
-            .with(eq(link_target), eq(linked_to))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v1/tool")),
+                eq(linked_to),
+            )
             .returning(|_, _| Ok(()));
 
         // --- Execute ---
 
-        let result = update_external_links(
-            &runtime,
-            Path::new("/root/o/r"),
-            &version_dir,
-            &meta,
-        );
+        let result = update_external_links(&runtime, Path::new("/root/o/r"), &version_dir, &meta);
         assert!(result.is_ok());
     }
 
@@ -689,8 +694,8 @@ mod tests {
         // --- Setup Paths ---
         let package_dir = PathBuf::from("/root/o/r");
         let version_dir = PathBuf::from("/root/o/r/v1");
-        let linked_to1 = PathBuf::from("/usr/local/bin/tool1");   // Will succeed validation
-        let linked_to2 = PathBuf::from("/usr/local/bin/tool2");   // Will fail validation - path doesn't exist
+        let linked_to1 = PathBuf::from("/usr/local/bin/tool1"); // Will succeed validation
+        let linked_to2 = PathBuf::from("/usr/local/bin/tool2"); // Will fail validation - path doesn't exist
         let link_target = PathBuf::from("/root/o/r/v1/tool");
 
         let meta = Meta {
@@ -699,11 +704,11 @@ mod tests {
             links: vec![
                 LinkRule {
                     dest: linked_to1.clone(),
-                    path: None,                                   // Valid - uses default path
+                    path: None, // Valid - uses default path
                 },
                 LinkRule {
                     dest: linked_to2.clone(),
-                    path: Some("nonexistent".to_string()),        // Invalid - path doesn't exist!
+                    path: Some("nonexistent".to_string()), // Invalid - path doesn't exist!
                 },
             ],
             ..Default::default()
@@ -748,12 +753,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = update_external_links(
-            &runtime,
-            &package_dir,
-            &version_dir,
-            &meta,
-        );
+        let result = update_external_links(&runtime, &package_dir, &version_dir, &meta);
 
         // Should fail because second link validation failed (path doesn't exist)
         assert!(result.is_err());
@@ -802,9 +802,7 @@ mod tests {
             .returning(move |_| Ok(vec![new_target.clone()]));
 
         // Is Directory: /home/user/.ghri/owner/repo/v2/tool -> false
-        runtime
-            .expect_is_dir()
-            .returning(|_| false);
+        runtime.expect_is_dir().returning(|_| false);
 
         // --- 2. Check Destination Symlink ---
 
@@ -838,12 +836,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = update_external_links(
-            &runtime,
-            &package_dir,
-            &version_dir,
-            &meta,
-        );
+        let result = update_external_links(&runtime, &package_dir, &version_dir, &meta);
 
         // Should succeed (with warning) but NOT remove the external symlink
         assert!(result.is_ok());
@@ -925,28 +918,107 @@ mod tests {
 
         // --- Phase 2: Execution (all updates happen after validation) ---
 
-        // First link: remove old, create new
+        // First link: remove old, create new symlink with relative path
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to1.clone()))
             .returning(|_| Ok(()));
         runtime
             .expect_symlink()
-            .with(eq(new_target1), eq(linked_to1))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v2/tool1")),
+                eq(linked_to1),
+            )
             .returning(|_, _| Ok(()));
 
-        // Second link: remove old, create new
+        // Second link: remove old, create new symlink with relative path
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to2.clone()))
             .returning(|_| Ok(()));
         runtime
             .expect_symlink()
-            .with(eq(new_target2), eq(linked_to2))
+            .with(
+                eq(PathBuf::from("../../../root/o/r/v2/tool2")),
+                eq(linked_to2),
+            )
             .returning(|_, _| Ok(()));
 
         // --- Execute ---
 
+        let result = update_external_links(&runtime, &package_dir, &version_dir, &meta);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_relative_symlink() {
+        // Test that update is skipped when destination is a regular file (not symlink)
+
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let package_dir = PathBuf::from("/home/user/.ghri/o/r");
+        let version_dir = PathBuf::from("/home/user/.ghri/o/r/v1");
+        let linked_to = PathBuf::from("/home/user/.ghri/bin/tool");
+
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            links: vec![LinkRule {
+                dest: linked_to.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+
+        // --- 1. Determine Link Target ---
+
+        // Read dir /home/user/.ghri/o/r/v1 -> [tool]
+        runtime
+            .expect_read_dir()
+            .with(eq(version_dir.clone()))
+            .returning(|_| Ok(vec![PathBuf::from("/home/user/.ghri/o/r/v1/tool")]));
+
+        // Is dir: /home/user/.ghri/o/r/v1/tool -> false
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/o/r/v1/tool")))
+            .returning(|_| false);
+
+        // --- 2. Check Destination ---
+
+        // File exists: /home/user/.ghri/bin/tool -> true
+        runtime
+            .expect_exists()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
+        // Is symlink: /home/user/.ghri/bin/tool -> false (it's a regular file!)
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_resolve_link()
+            .with(eq(linked_to.clone()))
+            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/o/r/v0/tool")));
+
+        runtime
+            .expect_remove_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| Ok(()));
+
+        // Symlink /home/user/.ghri/bin/tool -> /home/user/.ghri/o/r/v1/tool
+        // Should be relative path: ../o/r/v1/tool
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("../o/r/v1/tool")), eq(linked_to.clone()))
+            .returning(|_, _| Ok(()));
+
+        // --- Execute ---
+
+        // Should succeed but skip the update (logs warning)
         let result = update_external_links(&runtime, &package_dir, &version_dir, &meta);
         assert!(result.is_ok());
     }

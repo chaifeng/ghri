@@ -55,6 +55,19 @@ pub fn is_path_under(path: &Path, dir: &Path) -> bool {
         .all(|(d, p)| d == p)
 }
 
+/// Calculate the relative path from a symlink location to a target.
+/// This is used to create shorter symlinks using relative paths when possible.
+///
+/// For example, if creating a symlink at `/usr/local/bin/tool` pointing to
+/// `/opt/ghri/owner/repo/v1/tool`, this returns `../../opt/ghri/owner/repo/v1/tool`.
+///
+/// Returns `None` if a relative path cannot be computed (e.g., different drive letters on Windows).
+pub fn relative_symlink_path(from_link: &Path, to_target: &Path) -> Option<PathBuf> {
+    // Get the directory containing the symlink
+    let from_dir = from_link.parent()?;
+    pathdiff::diff_paths(to_target, from_dir)
+}
+
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Runtime: Send + Sync {
@@ -1169,5 +1182,83 @@ mod tests {
         let path = Path::new(r"C:\Users\foobar\data");
         let dir = Path::new(r"C:\Users\foo");
         assert!(!is_path_under(path, dir));
+    }
+
+    // ==================== relative_symlink_path tests ====================
+
+    #[test]
+    fn test_relative_symlink_path_same_parent() {
+        // --- Test: Symlink and target in same directory ---
+        // Link:   /opt/bin/tool
+        // Target: /opt/bin/actual-tool
+        // Expected: actual-tool (just the filename)
+        let link = Path::new("/opt/bin/tool");
+        let target = Path::new("/opt/bin/actual-tool");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from("actual-tool")));
+    }
+
+    #[test]
+    fn test_relative_symlink_path_sibling_directory() {
+        // --- Test: Target in sibling directory ---
+        // Link:   /usr/local/bin/tool
+        // Target: /usr/local/ghri/owner/repo/v1/tool
+        // Expected: ../ghri/owner/repo/v1/tool
+        let link = Path::new("/usr/local/bin/tool");
+        let target = Path::new("/usr/local/ghri/owner/repo/v1/tool");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from("../ghri/owner/repo/v1/tool")));
+    }
+
+    #[test]
+    fn test_relative_symlink_path_deeper_nesting() {
+        // --- Test: Target in deeply nested directory ---
+        // Link:   /usr/local/bin/tool
+        // Target: /opt/ghri/owner/repo/v1/tool
+        // From /usr/local/bin to /opt: go up 3 levels (bin -> local -> usr -> /)
+        // Expected: ../../../opt/ghri/owner/repo/v1/tool
+        let link = Path::new("/usr/local/bin/tool");
+        let target = Path::new("/opt/ghri/owner/repo/v1/tool");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from("../../../opt/ghri/owner/repo/v1/tool")));
+    }
+
+    #[test]
+    fn test_relative_symlink_path_example_from_spec() {
+        // --- Test: Example from user spec ---
+        // ghri root: /opt/ghri
+        // Link:   /opt/lib/bach
+        // Target: /opt/ghri/bach-sh/bach/0.7.2
+        // Expected: ../ghri/bach-sh/bach/0.7.2
+        let link = Path::new("/opt/lib/bach");
+        let target = Path::new("/opt/ghri/bach-sh/bach/0.7.2");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from("../ghri/bach-sh/bach/0.7.2")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_relative_symlink_path_windows() {
+        // --- Test: Windows paths in same drive ---
+        // Link:   C:\Users\foo\bin\tool.exe
+        // Target: C:\Users\foo\ghri\owner\repo\v1\tool.exe
+        // Expected: ..\ghri\owner\repo\v1\tool.exe
+        let link = Path::new(r"C:\Users\foo\bin\tool.exe");
+        let target = Path::new(r"C:\Users\foo\ghri\owner\repo\v1\tool.exe");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, Some(PathBuf::from(r"..\ghri\owner\repo\v1\tool.exe")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_relative_symlink_path_windows_different_drives() {
+        // --- Test: Windows paths on different drives ---
+        // Link:   C:\Users\foo\bin\tool.exe
+        // Target: D:\ghri\owner\repo\v1\tool.exe
+        // Expected: None (cannot compute relative path across drives)
+        let link = Path::new(r"C:\Users\foo\bin\tool.exe");
+        let target = Path::new(r"D:\ghri\owner\repo\v1\tool.exe");
+        let result = relative_symlink_path(link, target);
+        assert_eq!(result, None);
     }
 }

@@ -688,6 +688,28 @@ test_symlink_target_is_relative() {
     fi
 }
 
+test_external_link_uses_relative_path() {
+    log_section "Test: external link (ghri link) uses relative path"
+
+    local install_root="$TEST_ROOT/external_link_relative"
+    local bin_dir="$TEST_ROOT/external_link_relative_bin"
+    mkdir -p "$install_root" "$bin_dir"
+
+    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" link bach-sh/bach "$bin_dir" --root "$install_root" >/dev/null 2>&1
+
+    local link="$bin_dir/bach"
+    local target
+    target=$(readlink "$link")
+
+    # Target should NOT start with / (should be relative like ../external_link_relative/bach-sh/bach/...)
+    if [[ "$target" != /* ]]; then
+        log_success "External link target is relative: $target"
+    else
+        log_fail "External link target is absolute (should be relative): $target"
+    fi
+}
+
 test_concurrent_installs() {
     log_section "Test: Concurrent installations (different packages)"
 
@@ -2167,6 +2189,7 @@ main() {
     test_custom_root_via_env
     test_meta_json_structure
     test_symlink_target_is_relative
+    test_external_link_uses_relative_path
     test_concurrent_installs
 
     # Link command tests
