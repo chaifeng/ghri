@@ -122,6 +122,18 @@ impl Meta {
             })
     }
 
+    /// Get the latest release including pre-releases
+    pub fn get_latest_release(&self) -> Option<&MetaRelease> {
+        self.releases
+            .iter()
+            .max_by(|a, b| {
+                match (&a.published_at, &b.published_at) {
+                    (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
+                    _ => a.version.cmp(&b.version),
+                }
+            })
+    }
+
     /// Load meta.json and apply default values for missing fields
     #[tracing::instrument(skip(runtime, path))]
     pub fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
@@ -589,6 +601,68 @@ mod tests {
 
         // Should return None when all releases are prereleases
         assert!(meta.get_latest_stable_release().is_none());
+    }
+
+    #[test]
+    fn test_meta_get_latest_release_includes_prerelease() {
+        // Test that get_latest_release() returns the latest release including prereleases
+
+        // --- Setup ---
+
+        let mut meta = Meta {
+            name: "n".into(),
+            ..Default::default()
+        };
+
+        // Add stable release v1 (older)
+        meta.releases.push(MetaRelease {
+            version: "v1".into(),
+            is_prerelease: false,
+            published_at: Some("2023".into()),
+            ..Default::default()
+        });
+
+        // Add prerelease v2-rc (newer)
+        meta.releases.push(MetaRelease {
+            version: "v2-rc".into(),
+            is_prerelease: true,
+            published_at: Some("2024".into()),
+            ..Default::default()
+        });
+
+        // --- Execute ---
+
+        let latest = meta.get_latest_release().unwrap();
+
+        // --- Verify ---
+
+        // Should return v2-rc (the latest including prereleases)
+        assert_eq!(latest.version, "v2-rc");
+    }
+
+    #[test]
+    fn test_meta_get_latest_release_only_prerelease() {
+        // Test that get_latest_release() returns prerelease when only prereleases exist
+
+        // --- Setup ---
+
+        let mut meta = Meta {
+            name: "n".into(),
+            ..Default::default()
+        };
+
+        // Add only a prerelease version
+        meta.releases.push(MetaRelease {
+            version: "v1-rc".into(),
+            is_prerelease: true,
+            ..Default::default()
+        });
+
+        // --- Execute & Verify ---
+
+        // Should return v1-rc (the only release)
+        let latest = meta.get_latest_release().unwrap();
+        assert_eq!(latest.version, "v1-rc");
     }
 
     #[test]

@@ -37,7 +37,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
     }
 
     #[tracing::instrument(skip(self, repo, version, install_root, filters))]
-    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>) -> Result<()> {
+    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>, pre: bool) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path, needs_save) = self
             .get_or_fetch_meta(repo, install_root.as_deref())
@@ -59,10 +59,14 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
                 .ok_or_else(|| anyhow::anyhow!("Version '{}' not found for {}. Available versions: {}", 
                     ver, repo, 
                     meta.releases.iter().take(5).map(|r| r.version.as_str()).collect::<Vec<_>>().join(", ")))?
+        } else if pre {
+            // Get latest release including pre-releases
+            meta.get_latest_release()
+                .ok_or_else(|| anyhow::anyhow!("No release found for {}.", repo))?
         } else {
             // Get latest stable release
             meta.get_latest_stable_release()
-                .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version.", repo))?
+                .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version or use --pre.", repo))?
         };
 
         info!("Found version: {}", meta_release.version);
@@ -375,7 +379,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, extractor);
-        installer.install(&repo, None, None, vec![]).await.unwrap();
+        installer.install(&repo, None, None, vec![], false).await.unwrap();
     }
 
     #[tokio::test]
@@ -510,7 +514,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // Should fail because no stable release found
-        let result = installer.install(&repo, None, None, vec![]).await;
+        let result = installer.install(&repo, None, None, vec![], false).await;
         assert!(result.is_err());
         assert!(
             result
@@ -518,6 +522,94 @@ mod tests {
                 .to_string()
                 .contains("No stable release found")
         );
+    }
+
+    #[tokio::test]
+    async fn test_install_prerelease_with_pre_flag() {
+        // Test that --pre flag allows selecting pre-release when no stable release exists
+        // This test verifies that with pre=true, get_latest_release() is used instead of get_latest_stable_release()
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Runtime Mocks ---
+
+        // Metadata file doesn't exist yet
+        runtime.expect_exists().returning(|_| false);
+
+        // Create directories - allow any number of times
+        runtime.expect_create_dir_all().returning(|_| Ok(()));
+
+        // Write meta.json
+        runtime.expect_write().returning(|_, _| Ok(()));
+
+        // Rename meta.json.tmp -> meta.json
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // Create temp file for download
+        runtime.expect_create_file().returning(|_| Ok(Box::new(std::io::sink())));
+        runtime.expect_remove_file().returning(|_| Ok(()));
+
+        // Symlink operations
+        runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- Setup GitHub API Mock ---
+
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        let mut github = MockGetReleases::new();
+        github
+            .expect_api_url()
+            .return_const("https://api.github.com".to_string());
+
+        // API returns repo info
+        github.expect_get_repo_info_at().returning(|_, _| {
+            Ok(RepoInfo {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: "now".into(),
+            })
+        });
+
+        // API returns ONLY a pre-release version (no stable release!)
+        let download_url = format!("{}/tarball", url);
+        github.expect_get_releases_at().return_once(move |_, _| {
+            Ok(vec![Release {
+                tag_name: "v1-rc".into(),
+                prerelease: true,  // This is a pre-release
+                tarball_url: download_url,
+                ..Default::default()
+            }])
+        });
+
+        // --- Setup HTTP Server Mock ---
+
+        let _m = server
+            .mock("GET", "/tarball")
+            .with_status(200)
+            .with_body("data")
+            .create();
+
+        // --- Setup Extractor Mock ---
+
+        let mut extractor = MockExtractor::new();
+        extractor
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
+
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, extractor);
+
+        // With pre=true, should succeed and install the pre-release
+        let result = installer.install(&repo, None, None, vec![], true).await;
+        assert!(result.is_ok());
     }
 
     // default_install_root test is now in paths.rs
@@ -580,7 +672,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run("invalid", config, vec![]).await;
+        let result = super::super::run("invalid", config, vec![], false).await;
         assert!(result.is_err());
     }
 
@@ -675,7 +767,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, extractor);
 
         // Should succeed despite metadata save failure (it's just a warning)
-        let result = installer.install(&repo, None, None, vec![]).await;
+        let result = installer.install(&repo, None, None, vec![], false).await;
         assert!(result.is_ok());
     }
 
@@ -781,7 +873,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
-        installer.install(&repo, None, None, vec![]).await.unwrap();
+        installer.install(&repo, None, None, vec![], false).await.unwrap();
     }
 
     #[tokio::test]
@@ -830,7 +922,7 @@ mod tests {
         };
 
         // Install o/r using run() entry point
-        super::super::run("o/r", config, vec![]).await.unwrap();
+        super::super::run("o/r", config, vec![], false).await.unwrap();
     }
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
@@ -964,7 +1056,7 @@ mod tests {
 
         // User provides NEW filter, should override saved "*old-filter*"
         installer
-            .install(&repo, None, None, vec!["*new-user-filter*".to_string()])
+            .install(&repo, None, None, vec!["*new-user-filter*".to_string()], false)
             .await
             .unwrap();
     }
@@ -1047,7 +1139,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // User provides NO filters -> should use saved filters from meta.json
-        installer.install(&repo, None, None, vec![]).await.unwrap();
+        installer.install(&repo, None, None, vec![], false).await.unwrap();
     }
 
     #[tokio::test]
@@ -1122,6 +1214,6 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // Empty filters vec -> uses saved filters (current behavior)
-        installer.install(&repo, None, None, vec![]).await.unwrap();
+        installer.install(&repo, None, None, vec![], false).await.unwrap();
     }
 }
