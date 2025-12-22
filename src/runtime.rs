@@ -65,6 +65,7 @@ pub trait Runtime: Send + Sync {
     fn write(&self, path: &Path, contents: &[u8]) -> Result<()>;
     fn read_to_string(&self, path: &Path) -> Result<String>;
     fn rename(&self, from: &Path, to: &Path) -> Result<()>;
+    fn copy(&self, from: &Path, to: &Path) -> Result<u64>;
     fn create_dir_all(&self, path: &Path) -> Result<()>;
     fn remove_file(&self, path: &Path) -> Result<()>;
     fn remove_dir(&self, path: &Path) -> Result<()>;
@@ -130,6 +131,11 @@ impl Runtime for RealRuntime {
     fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         fs::rename(from, to).context("Failed to rename file")?;
         Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn copy(&self, from: &Path, to: &Path) -> Result<u64> {
+        fs::copy(from, to).context("Failed to copy file")
     }
 
     #[tracing::instrument(skip(self))]
