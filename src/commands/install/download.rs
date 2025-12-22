@@ -96,8 +96,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_creates_dir_and_extracts() {
+        // Test successful installation: creates directory, downloads, and extracts
+
         let mut runtime = MockRuntime::new();
-        let target = PathBuf::from("/target");
+
+        // --- Setup ---
+        let target = PathBuf::from("/target");                    // Installation target directory
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -108,23 +112,40 @@ mod tests {
             ..Default::default()
         };
 
+        // --- 1. Check if Already Installed ---
+
+        // Directory exists: /target -> false (not yet installed)
         runtime
             .expect_exists()
             .with(eq(target.clone()))
             .returning(|_| false);
+
+        // --- 2. Create Target Directory ---
+
+        // Create directory: /target
         runtime
             .expect_create_dir_all()
             .with(eq(target.clone()))
             .returning(|_| Ok(()));
+
+        // --- 3. Download Archive ---
+
+        // Create temp file for download
         runtime
             .expect_create_file()
             .returning(|_| Ok(Box::new(std::io::sink())));
+
+        // Remove temp file after extraction
         runtime.expect_remove_file().returning(|_| Ok(()));
+
+        // --- 4. Extract Archive ---
 
         let mut extractor = MockExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
+
+        // --- Setup Mock HTTP Server ---
 
         let mut server = mockito::Server::new_async().await;
         let _m = server.mock("GET", "/tar").with_status(200).create();
@@ -132,6 +153,8 @@ mod tests {
             tarball_url: format!("{}/tar", server.url()),
             ..release
         };
+
+        // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let http_client = HttpClient::new(Client::new());
@@ -150,10 +173,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_cleanup_fail() {
+        // Test that cleanup failure (removing temp file) returns an error
+
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
 
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -163,32 +189,48 @@ mod tests {
             tarball_url: format!("{}/download", url),
             ..Default::default()
         };
-
-        let _m = server.mock("GET", "/download").with_status(200).create();
-
         let target_dir = PathBuf::from("/tmp/target");
 
+        // Mock server returns success for download
+        let _m = server.mock("GET", "/download").with_status(200).create();
+
+        // --- 1. Check if Already Installed ---
+
+        // Directory exists: /tmp/target -> false
         runtime
             .expect_exists()
             .with(eq(target_dir.clone()))
             .returning(|_| false);
+
+        // --- 2. Create Target Directory ---
+
+        // Create directory: /tmp/target
         runtime
             .expect_create_dir_all()
             .with(eq(target_dir.clone()))
             .returning(|_| Ok(()));
+
+        // --- 3. Download Archive ---
+
         runtime
             .expect_create_file()
             .returning(|_| Ok(Box::new(std::io::sink())));
 
-        // Fail cleanup
+        // --- 4. Remove Temp File FAILS ---
+
+        // Remove temp file: -> ERROR (cleanup fails!)
         runtime
             .expect_remove_file()
             .returning(|_| Err(anyhow::anyhow!("fail")));
+
+        // --- 5. Extract Archive (succeeds) ---
 
         let mut extractor = MockExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
+
+        // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let http_client = HttpClient::new(Client::new());
@@ -214,10 +256,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_download_fail_cleans_up_target_dir() {
+        // Test that download failure cleans up the created target directory
+
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
 
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -227,22 +272,30 @@ mod tests {
             tarball_url: format!("{}/download", url),
             ..Default::default()
         };
-
-        // Download will fail with 404
-        let _m = server.mock("GET", "/download").with_status(404).create();
-
         let target_dir = PathBuf::from("/tmp/target");
 
+        // Mock server returns 404 (download will fail)
+        let _m = server.mock("GET", "/download").with_status(404).create();
+
+        // --- 1. Check if Already Installed ---
+
+        // Directory exists: /tmp/target -> false
         runtime
             .expect_exists()
             .with(eq(target_dir.clone()))
             .returning(|_| false);
+
+        // --- 2. Create Target Directory ---
+
+        // Create directory: /tmp/target
         runtime
             .expect_create_dir_all()
             .with(eq(target_dir.clone()))
             .returning(|_| Ok(()));
 
-        // Should clean up target_dir on failure
+        // --- 3. Download Fails -> Cleanup Target Directory ---
+
+        // Remove directory: /tmp/target (cleanup on failure)
         runtime
             .expect_remove_dir_all()
             .with(eq(target_dir.clone()))
@@ -250,6 +303,8 @@ mod tests {
             .returning(|_| Ok(()));
 
         let extractor = MockExtractor::new();
+
+        // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let http_client = HttpClient::new(Client::new());
@@ -269,10 +324,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_extract_fail_cleans_up_target_dir() {
+        // Test that extraction failure cleans up both target directory and temp file
+
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
 
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -282,39 +340,56 @@ mod tests {
             tarball_url: format!("{}/download", url),
             ..Default::default()
         };
-
-        let _m = server.mock("GET", "/download").with_status(200).with_body("data").create();
-
         let target_dir = PathBuf::from("/tmp/target");
 
+        // Mock server returns success
+        let _m = server.mock("GET", "/download").with_status(200).with_body("data").create();
+
+        // --- 1. Check if Already Installed ---
+
+        // Directory exists: /tmp/target -> false
         runtime
             .expect_exists()
             .with(eq(target_dir.clone()))
             .returning(|_| false);
+
+        // --- 2. Create Target Directory ---
+
+        // Create directory: /tmp/target
         runtime
             .expect_create_dir_all()
             .with(eq(target_dir.clone()))
             .returning(|_| Ok(()));
+
+        // --- 3. Download Archive ---
+
         runtime
             .expect_create_file()
             .returning(|_| Ok(Box::new(std::io::sink())));
 
-        // Extraction fails
+        // --- 4. Extract Archive FAILS ---
+
         let mut extractor = MockExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Err(anyhow::anyhow!("extraction failed")));
 
-        // Should clean up target_dir and temp file on failure
+        // --- 5. Cleanup on Failure ---
+
+        // Remove directory: /tmp/target
         runtime
             .expect_remove_dir_all()
             .with(eq(target_dir.clone()))
             .times(1)
             .returning(|_| Ok(()));
+
+        // Remove temp file
         runtime
             .expect_remove_file()
             .times(1)
             .returning(|_| Ok(()));
+
+        // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let http_client = HttpClient::new(Client::new());
@@ -335,12 +410,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_already_exists() {
+        // Test that installation is skipped when target directory already exists
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup ---
         let target = PathBuf::from("/target");
+
+        // --- 1. Check if Already Installed ---
+
+        // Directory exists: /target -> true (already installed!)
         runtime
             .expect_exists()
             .with(eq(target.clone()))
             .returning(|_| true);
+
+        // (No other operations should be performed)
+
+        // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let http_client = HttpClient::new(Client::new());

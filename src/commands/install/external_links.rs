@@ -117,12 +117,19 @@ mod tests {
 
     #[test]
     fn test_update_external_links_no_links() {
+        // Test that update_external_links succeeds when there are no link rules
+
         let runtime = MockRuntime::new();
+
+        // --- Setup ---
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
+            links: vec![],  // No links!
             ..Default::default()
         };
+
+        // --- Execute ---
 
         // Should return Ok without doing anything
         let result = update_external_links(
@@ -136,9 +143,14 @@ mod tests {
 
     #[test]
     fn test_update_external_links_updates_existing_symlink() {
+        // Test updating an existing symlink to point to a new version
+
         let mut runtime = MockRuntime::new();
-        let linked_to = PathBuf::from("/usr/local/bin/tool");
-        let version_dir = PathBuf::from("/root/o/r/v2");
+
+        // --- Setup Paths ---
+        let linked_to = PathBuf::from("/usr/local/bin/tool");     // External symlink location
+        let version_dir = PathBuf::from("/root/o/r/v2");          // New version directory
+        let link_target = PathBuf::from("/root/o/r/v2/tool");     // Target binary in new version
 
         let meta = Meta {
             name: "o/r".into(),
@@ -150,40 +162,51 @@ mod tests {
             ..Default::default()
         };
 
-        // Check if linked_to exists
+        // --- 1. Check if Destination Exists ---
+
+        // File exists: /usr/local/bin/tool -> true
         runtime
             .expect_exists()
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
-        // Check if linked_to is symlink
+        // Is symlink: /usr/local/bin/tool -> true
         runtime
             .expect_is_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
-        // Remove old symlink
+        // --- 2. Remove Old Symlink ---
+
+        // Remove symlink: /usr/local/bin/tool
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(()));
 
-        // Read version dir to determine link target
+        // --- 3. Determine Link Target ---
+
+        // Read dir /root/o/r/v2 -> [tool]
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v2/tool")]));
 
+        // Is dir: /root/o/r/v2/tool -> false (it's a file)
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v2/tool")))
+            .with(eq(link_target.clone()))
             .returning(|_| false);
 
-        // Create new symlink
+        // --- 4. Create New Symlink ---
+
+        // Create symlink: /usr/local/bin/tool -> /root/o/r/v2/tool
         runtime
             .expect_symlink()
-            .with(eq(PathBuf::from("/root/o/r/v2/tool")), eq(linked_to.clone()))
+            .with(eq(link_target), eq(linked_to.clone()))
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let result = update_external_links(
             &runtime,
@@ -196,45 +219,59 @@ mod tests {
 
     #[test]
     fn test_update_single_link_with_specific_path() {
+        // Test creating a link with an explicit path specified in the rule
+
         let mut runtime = MockRuntime::new();
-        let linked_to = PathBuf::from("/usr/local/bin/mytool");
-        let version_dir = PathBuf::from("/root/o/r/v1");
-        let target_path = version_dir.join("bin/tool");
+
+        // --- Setup Paths ---
+        let linked_to = PathBuf::from("/usr/local/bin/mytool");   // External symlink location
+        let version_dir = PathBuf::from("/root/o/r/v1");          // Version directory
+        let target_path = version_dir.join("bin/tool");           // /root/o/r/v1/bin/tool
 
         let rule = LinkRule {
             dest: linked_to.clone(),
-            path: Some("bin/tool".to_string()),
+            path: Some("bin/tool".to_string()),                   // Explicit path!
         };
 
-        // Check if the specific path exists
+        // --- 1. Check if Explicit Path Exists ---
+
+        // File exists: /root/o/r/v1/bin/tool -> true
         runtime
             .expect_exists()
             .with(eq(target_path.clone()))
             .returning(|_| true);
 
-        // Check if linked_to exists
+        // --- 2. Check if Destination Exists ---
+
+        // File exists: /usr/local/bin/mytool -> false
         runtime
             .expect_exists()
             .with(eq(linked_to.clone()))
             .returning(|_| false);
 
-        // Check if linked_to is symlink (for broken symlink check)
+        // Is symlink: /usr/local/bin/mytool -> false (for broken symlink check)
         runtime
             .expect_is_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| false);
 
-        // Parent exists
+        // --- 3. Check Parent Directory ---
+
+        // Parent exists: /usr/local/bin -> true
         runtime
             .expect_exists()
             .with(eq(PathBuf::from("/usr/local/bin")))
             .returning(|_| true);
 
-        // Create symlink
+        // --- 4. Create Symlink ---
+
+        // Create symlink: /usr/local/bin/mytool -> /root/o/r/v1/bin/tool
         runtime
             .expect_symlink()
             .with(eq(target_path), eq(linked_to))
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let result = update_single_link(&runtime, &version_dir, &rule);
         assert!(result.is_ok());
@@ -242,21 +279,29 @@ mod tests {
 
     #[test]
     fn test_update_single_link_path_not_exists() {
+        // Test that link creation fails when the specified path doesn't exist
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let linked_to = PathBuf::from("/usr/local/bin/mytool");
         let version_dir = PathBuf::from("/root/o/r/v1");
-        let target_path = version_dir.join("bin/nonexistent");
+        let target_path = version_dir.join("bin/nonexistent");    // /root/o/r/v1/bin/nonexistent
 
         let rule = LinkRule {
             dest: linked_to,
-            path: Some("bin/nonexistent".to_string()),
+            path: Some("bin/nonexistent".to_string()),            // Path doesn't exist!
         };
 
-        // Check if the specific path exists - it doesn't
+        // --- 1. Check if Explicit Path Exists ---
+
+        // File exists: /root/o/r/v1/bin/nonexistent -> false
         runtime
             .expect_exists()
             .with(eq(target_path))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let result = update_single_link(&runtime, &version_dir, &rule);
         assert!(result.is_err());
@@ -265,7 +310,11 @@ mod tests {
 
     #[test]
     fn test_update_single_link_target_not_symlink() {
+        // Test that update is skipped when destination is a regular file (not symlink)
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let linked_to = PathBuf::from("/usr/local/bin/tool");
         let version_dir = PathBuf::from("/root/o/r/v1");
 
@@ -274,28 +323,35 @@ mod tests {
             path: None,
         };
 
-        // Read version dir to determine link target
+        // --- 1. Determine Link Target ---
+
+        // Read dir /root/o/r/v1 -> [tool]
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/tool")]));
 
+        // Is dir: /root/o/r/v1/tool -> false
         runtime
             .expect_is_dir()
             .with(eq(PathBuf::from("/root/o/r/v1/tool")))
             .returning(|_| false);
 
-        // linked_to exists
+        // --- 2. Check Destination ---
+
+        // File exists: /usr/local/bin/tool -> true
         runtime
             .expect_exists()
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
-        // linked_to is NOT a symlink (it's a regular file)
+        // Is symlink: /usr/local/bin/tool -> false (it's a regular file!)
         runtime
             .expect_is_symlink()
             .with(eq(linked_to))
             .returning(|_| false);
+
+        // --- Execute ---
 
         // Should succeed but skip the update (logs warning)
         let result = update_single_link(&runtime, &version_dir, &rule);
@@ -304,55 +360,73 @@ mod tests {
 
     #[test]
     fn test_update_single_link_create_parent_dir() {
+        // Test that parent directory is created when it doesn't exist
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let linked_to = PathBuf::from("/new/path/bin/tool");
+        let parent_dir = PathBuf::from("/new/path/bin");
         let version_dir = PathBuf::from("/root/o/r/v1");
+        let link_target = PathBuf::from("/root/o/r/v1/tool");
 
         let rule = LinkRule {
             dest: linked_to.clone(),
             path: None,
         };
 
-        // Read version dir to determine link target
+        // --- 1. Determine Link Target ---
+
+        // Read dir /root/o/r/v1 -> [tool]
+        let link_target_for_read = link_target.clone();
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
-            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/tool")]));
+            .returning(move |_| Ok(vec![link_target_for_read.clone()]));
 
+        // Is dir: /root/o/r/v1/tool -> false
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")))
+            .with(eq(link_target.clone()))
             .returning(|_| false);
 
-        // linked_to doesn't exist
+        // --- 2. Check Destination ---
+
+        // File exists: /new/path/bin/tool -> false
         runtime
             .expect_exists()
             .with(eq(linked_to.clone()))
             .returning(|_| false);
 
-        // linked_to is not a symlink
+        // Is symlink: /new/path/bin/tool -> false
         runtime
             .expect_is_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| false);
 
-        // Parent doesn't exist
+        // --- 3. Create Parent Directory ---
+
+        // Parent exists: /new/path/bin -> false
         runtime
             .expect_exists()
-            .with(eq(PathBuf::from("/new/path/bin")))
+            .with(eq(parent_dir.clone()))
             .returning(|_| false);
 
-        // Create parent directory
+        // Create parent dir: /new/path/bin
         runtime
             .expect_create_dir_all()
-            .with(eq(PathBuf::from("/new/path/bin")))
+            .with(eq(parent_dir))
             .returning(|_| Ok(()));
 
-        // Create symlink
+        // --- 4. Create Symlink ---
+
+        // Create symlink: /new/path/bin/tool -> /root/o/r/v1/tool
         runtime
             .expect_symlink()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")), eq(linked_to))
+            .with(eq(link_target), eq(linked_to))
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let result = update_single_link(&runtime, &version_dir, &rule);
         assert!(result.is_ok());
@@ -360,48 +434,69 @@ mod tests {
 
     #[test]
     fn test_update_external_links_with_legacy_linked_to() {
+        // Test backward compatibility with legacy linked_to field
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let linked_to = PathBuf::from("/usr/local/bin/legacy-tool");
         let version_dir = PathBuf::from("/root/o/r/v1");
+        let link_target = PathBuf::from("/root/o/r/v1/tool");
 
+        // Meta uses legacy linked_to field instead of links array
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
-            linked_to: Some(linked_to.clone()),
+            linked_to: Some(linked_to.clone()),                   // Legacy field!
             linked_path: None,
+            links: vec![],                                        // Empty links array
             ..Default::default()
         };
 
-        // For legacy link
+        // --- 1. Determine Link Target ---
+
+        // Read dir /root/o/r/v1 -> [tool]
+        let link_target_for_read = link_target.clone();
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
-            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/tool")]));
+            .returning(move |_| Ok(vec![link_target_for_read.clone()]));
 
+        // Is dir: /root/o/r/v1/tool -> false
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")))
+            .with(eq(link_target.clone()))
             .returning(|_| false);
 
+        // --- 2. Check Destination ---
+
+        // File exists: /usr/local/bin/legacy-tool -> true
         runtime
             .expect_exists()
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
+        // Is symlink: /usr/local/bin/legacy-tool -> true
         runtime
             .expect_is_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
+        // --- 3. Update Symlink ---
+
+        // Remove old symlink
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(()));
 
+        // Create new symlink
         runtime
             .expect_symlink()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")), eq(linked_to))
+            .with(eq(link_target), eq(linked_to))
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let result = update_external_links(
             &runtime,
@@ -414,10 +509,15 @@ mod tests {
 
     #[test]
     fn test_update_external_links_continues_on_error() {
+        // Test that update continues even when one link fails
+
         let mut runtime = MockRuntime::new();
-        let linked_to1 = PathBuf::from("/usr/local/bin/tool1");
-        let linked_to2 = PathBuf::from("/usr/local/bin/tool2");
+
+        // --- Setup Paths ---
+        let linked_to1 = PathBuf::from("/usr/local/bin/tool1");   // Will fail
+        let linked_to2 = PathBuf::from("/usr/local/bin/tool2");   // Will succeed
         let version_dir = PathBuf::from("/root/o/r/v1");
+        let link_target = PathBuf::from("/root/o/r/v1/tool");
 
         let meta = Meta {
             name: "o/r".into(),
@@ -425,52 +525,64 @@ mod tests {
             links: vec![
                 LinkRule {
                     dest: linked_to1.clone(),
-                    path: Some("nonexistent".to_string()),
+                    path: Some("nonexistent".to_string()),        // Will fail - path doesn't exist
                 },
                 LinkRule {
                     dest: linked_to2.clone(),
-                    path: None,
+                    path: None,                                   // Will succeed
                 },
             ],
             ..Default::default()
         };
 
-        // First link fails - path doesn't exist
+        // --- First Link FAILS ---
+
+        // File exists: /root/o/r/v1/nonexistent -> false
         runtime
             .expect_exists()
             .with(eq(version_dir.join("nonexistent")))
             .returning(|_| false);
 
-        // Second link succeeds
+        // --- Second Link SUCCEEDS ---
+
+        // Read dir /root/o/r/v1 -> [tool]
+        let link_target_for_read = link_target.clone();
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
-            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v1/tool")]));
+            .returning(move |_| Ok(vec![link_target_for_read.clone()]));
 
+        // Is dir: /root/o/r/v1/tool -> false
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")))
+            .with(eq(link_target.clone()))
             .returning(|_| false);
 
+        // File exists: /usr/local/bin/tool2 -> true
         runtime
             .expect_exists()
             .with(eq(linked_to2.clone()))
             .returning(|_| true);
 
+        // Is symlink: /usr/local/bin/tool2 -> true
         runtime
             .expect_is_symlink()
             .with(eq(linked_to2.clone()))
             .returning(|_| true);
 
+        // Remove old symlink
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to2.clone()))
             .returning(|_| Ok(()));
 
+        // Create new symlink
         runtime
             .expect_symlink()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")), eq(linked_to2))
+            .with(eq(link_target), eq(linked_to2))
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         // Should still succeed even though first link failed
         let result = update_external_links(

@@ -197,6 +197,7 @@ impl AssetPicker for PatternAssetPicker {
 mod tests {
     use super::*;
 
+    /// Helper function to create test assets from names
     fn make_assets(names: &[&str]) -> Vec<MetaAsset> {
         names
             .iter()
@@ -210,43 +211,54 @@ mod tests {
 
     #[test]
     fn test_default_picker_linux_x86_64() {
+        // Test that DefaultAssetPicker selects correct asset for Linux x86_64
+
+        // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
             os: "linux".into(),
             arch: "x86_64".into(),
         });
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",
-            "app-linux-x86_64.tar.gz",
-            "app-windows-x64.zip",
-            "app-linux-x86_64.tar.gz.sha256",
+            "app-darwin-arm64.tar.gz",           // macOS ARM - not matching
+            "app-linux-x86_64.tar.gz",           // Linux x86_64 - should match
+            "app-windows-x64.zip",               // Windows - not matching
+            "app-linux-x86_64.tar.gz.sha256",    // Checksum file - should be penalized
         ]);
 
+        // --- Execute & Verify ---
         let picked = picker.pick(&assets).unwrap();
         assert_eq!(picked.name, "app-linux-x86_64.tar.gz");
     }
 
     #[test]
     fn test_default_picker_macos_arm64() {
+        // Test that DefaultAssetPicker selects correct asset for macOS ARM64
+
+        // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
             os: "macos".into(),
             arch: "aarch64".into(),
         });
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",
-            "app-darwin-x86_64.tar.gz",
-            "app-linux-x86_64.tar.gz",
+            "app-darwin-arm64.tar.gz",           // macOS ARM - should match
+            "app-darwin-x86_64.tar.gz",          // macOS x86 - wrong arch
+            "app-linux-x86_64.tar.gz",           // Linux - wrong OS
         ]);
 
+        // --- Execute & Verify ---
         let picked = picker.pick(&assets).unwrap();
         assert_eq!(picked.name, "app-darwin-arm64.tar.gz");
     }
 
     #[test]
     fn test_default_picker_no_match() {
+        // Test that DefaultAssetPicker returns None when no asset matches platform
+
+        // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
-            os: "freebsd".into(),
+            os: "freebsd".into(),                 // Unsupported OS
             arch: "x86_64".into(),
         });
 
@@ -255,67 +267,93 @@ mod tests {
             "app-linux-x86_64.tar.gz",
         ]);
 
+        // --- Execute & Verify ---
         assert!(picker.pick(&assets).is_none());
     }
 
     #[test]
     fn test_default_picker_prefers_tar_gz() {
+        // Test that DefaultAssetPicker prefers .tar.gz over .zip
+
+        // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
             os: "linux".into(),
             arch: "x86_64".into(),
         });
 
         let assets = make_assets(&[
-            "app-linux-x86_64.zip",
-            "app-linux-x86_64.tar.gz",
+            "app-linux-x86_64.zip",              // Lower score
+            "app-linux-x86_64.tar.gz",           // Higher score (preferred)
         ]);
 
+        // --- Execute & Verify ---
         let picked = picker.pick(&assets).unwrap();
         assert_eq!(picked.name, "app-linux-x86_64.tar.gz");
     }
 
     #[test]
     fn test_pattern_picker_simple() {
+        // Test PatternAssetPicker with simple substring matching
+
+        // --- Setup ---
         let picker = PatternAssetPicker::new("linux");
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",
-            "app-linux-x86_64.tar.gz",
+            "app-darwin-arm64.tar.gz",           // No "linux" in name
+            "app-linux-x86_64.tar.gz",           // Contains "linux"
         ]);
 
+        // --- Execute & Verify ---
         let picked = picker.pick(&assets).unwrap();
         assert_eq!(picked.name, "app-linux-x86_64.tar.gz");
     }
 
     #[test]
     fn test_pattern_picker_wildcard() {
+        // Test PatternAssetPicker with wildcard pattern matching
+
+        // --- Setup ---
         let picker = PatternAssetPicker::new("app-*-x86_64.tar.gz");
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",
-            "app-linux-x86_64.tar.gz",
-            "app-linux-arm64.tar.gz",
+            "app-darwin-arm64.tar.gz",           // Wrong arch
+            "app-linux-x86_64.tar.gz",           // Matches pattern
+            "app-linux-arm64.tar.gz",            // Wrong arch
         ]);
 
+        // --- Execute & Verify ---
         let picked = picker.pick(&assets).unwrap();
         assert_eq!(picked.name, "app-linux-x86_64.tar.gz");
     }
 
     #[test]
     fn test_noop_picker() {
+        // Test that NoOpAssetPicker always returns None
+
+        // --- Setup ---
         let picker = NoOpAssetPicker;
         let assets = make_assets(&["app.tar.gz"]);
+
+        // --- Execute & Verify ---
         assert!(picker.pick(&assets).is_none());
     }
 
     #[test]
     fn test_score_prefers_archives_over_checksums() {
+        // Test that archive files score higher than checksum/signature files
+
+        // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
             os: "linux".into(),
             arch: "x86_64".into(),
         });
 
+        // --- Verify Scoring ---
+
+        // Archive files should score higher than checksums
         assert!(picker.score_asset("app.tar.gz") > picker.score_asset("app.tar.gz.sha256"));
+
+        // Archive files should score higher than signatures
         assert!(picker.score_asset("app.zip") > picker.score_asset("app.zip.sig"));
     }
 }

@@ -74,13 +74,16 @@ mod tests {
 
     #[test]
     fn test_platform_detect() {
+        // Test that Platform::detect() returns valid platform info
+
         let platform = Platform::detect();
 
-        // Should return non-empty strings
+        // --- Verify Non-Empty Values ---
         assert!(!platform.os.is_empty());
         assert!(!platform.arch.is_empty());
 
-        // On known platforms, verify expected values
+        // --- Verify Platform-Specific Values ---
+
         #[cfg(target_os = "macos")]
         assert_eq!(platform.os, "macos");
 
@@ -99,6 +102,8 @@ mod tests {
 
     #[test]
     fn test_default_platform_detector() {
+        // Test that DefaultPlatformDetector trait implementation works
+
         let detector = DefaultPlatformDetector;
         let platform = detector.detect();
 
@@ -108,6 +113,8 @@ mod tests {
 
     #[test]
     fn test_platform_clone_and_eq() {
+        // Test that Platform implements Clone and PartialEq correctly
+
         let p1 = Platform {
             os: "linux".into(),
             arch: "x86_64".into(),

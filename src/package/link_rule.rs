@@ -34,52 +34,76 @@ mod tests {
 
     #[test]
     fn test_link_rule_default() {
+        // Test that LinkRule::default() creates empty values
+
         let rule = LinkRule::default();
+
         assert_eq!(rule.dest, PathBuf::new());
         assert_eq!(rule.path, None);
     }
 
     #[test]
     fn test_link_rule_serialize() {
+        // Test serializing LinkRule with path to JSON
+
         let rule = LinkRule {
             dest: PathBuf::from("/usr/local/bin/tool"),
             path: Some("bin/tool".to_string()),
         };
+
         let json = serde_json::to_string(&rule).unwrap();
+
+        // JSON should contain both dest and path
         assert!(json.contains("/usr/local/bin/tool"));
         assert!(json.contains("bin/tool"));
     }
 
     #[test]
     fn test_link_rule_serialize_no_path() {
+        // Test that path field is omitted from JSON when None (skip_serializing_if)
+
         let rule = LinkRule {
             dest: PathBuf::from("/usr/local/bin/tool"),
             path: None,
         };
+
         let json = serde_json::to_string(&rule).unwrap();
+
+        // JSON should contain dest but NOT path (skip_serializing_if)
         assert!(json.contains("/usr/local/bin/tool"));
-        assert!(!json.contains("path")); // skip_serializing_if
+        assert!(!json.contains("path"));
     }
 
     #[test]
     fn test_link_rule_deserialize() {
+        // Test deserializing LinkRule with path from JSON
+
         let json = r#"{"dest": "/usr/local/bin/tool", "path": "bin/tool"}"#;
+
         let rule: LinkRule = serde_json::from_str(json).unwrap();
+
         assert_eq!(rule.dest, PathBuf::from("/usr/local/bin/tool"));
         assert_eq!(rule.path, Some("bin/tool".to_string()));
     }
 
     #[test]
     fn test_link_rule_deserialize_no_path() {
+        // Test deserializing LinkRule without path (defaults to None)
+
         let json = r#"{"dest": "/usr/local/bin/tool"}"#;
+
         let rule: LinkRule = serde_json::from_str(json).unwrap();
+
         assert_eq!(rule.dest, PathBuf::from("/usr/local/bin/tool"));
         assert_eq!(rule.path, None);
     }
 
     #[test]
     fn test_versioned_link_default() {
+        // Test that VersionedLink::default() creates empty values
+
         let link = VersionedLink::default();
+
         assert_eq!(link.version, "");
         assert_eq!(link.dest, PathBuf::new());
         assert_eq!(link.path, None);
@@ -87,12 +111,17 @@ mod tests {
 
     #[test]
     fn test_versioned_link_serialize() {
+        // Test serializing VersionedLink to JSON
+
         let link = VersionedLink {
             version: "v1.0.0".to_string(),
             dest: PathBuf::from("/usr/local/bin/tool"),
             path: Some("bin/tool".to_string()),
         };
+
         let json = serde_json::to_string(&link).unwrap();
+
+        // JSON should contain version, dest, and path
         assert!(json.contains("v1.0.0"));
         assert!(json.contains("/usr/local/bin/tool"));
         assert!(json.contains("bin/tool"));
@@ -100,8 +129,12 @@ mod tests {
 
     #[test]
     fn test_versioned_link_deserialize() {
+        // Test deserializing VersionedLink from JSON
+
         let json = r#"{"version": "v1.0.0", "dest": "/usr/local/bin/tool", "path": "bin/tool"}"#;
+
         let link: VersionedLink = serde_json::from_str(json).unwrap();
+
         assert_eq!(link.version, "v1.0.0");
         assert_eq!(link.dest, PathBuf::from("/usr/local/bin/tool"));
         assert_eq!(link.path, Some("bin/tool".to_string()));

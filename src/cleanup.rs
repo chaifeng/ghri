@@ -88,18 +88,25 @@ mod tests {
 
     #[test]
     fn test_cleanup_context_add_remove() {
+        // Test adding and removing paths from cleanup context
+
         let mut ctx = CleanupContext::new();
         let path = PathBuf::from("/tmp/test");
 
+        // --- Add Path ---
         ctx.add(path.clone());
         assert_eq!(ctx.paths.len(), 1);
 
+        // --- Remove Path ---
         ctx.remove(&path);
         assert_eq!(ctx.paths.len(), 0);
     }
 
     #[test]
     fn test_cleanup_context_cleanup_files() {
+        // Test that cleanup() removes registered files
+
+        // --- Setup: Create Temp File ---
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "test").unwrap();
@@ -107,13 +114,19 @@ mod tests {
         let mut ctx = CleanupContext::new();
         ctx.add(file_path.clone());
 
+        // --- Execute ---
         assert!(file_path.exists());
         ctx.cleanup();
+
+        // --- Verify: File Removed ---
         assert!(!file_path.exists());
     }
 
     #[test]
     fn test_cleanup_context_cleanup_dirs() {
+        // Test that cleanup() removes registered directories recursively
+
+        // --- Setup: Create Temp Directory with Files ---
         let dir = tempdir().unwrap();
         let sub_dir = dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
@@ -122,37 +135,49 @@ mod tests {
         let mut ctx = CleanupContext::new();
         ctx.add(sub_dir.clone());
 
+        // --- Execute ---
         assert!(sub_dir.exists());
         ctx.cleanup();
+
+        // --- Verify: Directory Removed ---
         assert!(!sub_dir.exists());
     }
 
     #[test]
     fn test_cleanup_guard_success() {
+        // Test that CleanupGuard.success() removes path from cleanup context
+
         let ctx = new_shared();
         let path = PathBuf::from("/tmp/test");
 
         {
+            // --- Create Guard (adds path to context) ---
             let guard = CleanupGuard::new(Arc::clone(&ctx), path.clone());
             assert_eq!(ctx.lock().unwrap().paths.len(), 1);
+
+            // --- Mark as Success (removes path from context) ---
             guard.success();
         }
 
+        // --- Verify: Path Removed from Context ---
         assert_eq!(ctx.lock().unwrap().paths.len(), 0);
     }
 
     #[test]
     fn test_cleanup_guard_drop_without_success() {
+        // Test that dropping CleanupGuard without success() keeps path in context
+
         let ctx = new_shared();
         let path = PathBuf::from("/tmp/test");
 
         {
+            // --- Create Guard (adds path to context) ---
             let _guard = CleanupGuard::new(Arc::clone(&ctx), path.clone());
             assert_eq!(ctx.lock().unwrap().paths.len(), 1);
-            // guard drops here without success()
+            // guard drops here without calling success()
         }
 
-        // Path should remain in cleanup context
+        // --- Verify: Path Remains in Context (for later cleanup) ---
         assert_eq!(ctx.lock().unwrap().paths.len(), 1);
     }
 }

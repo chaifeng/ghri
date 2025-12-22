@@ -35,9 +35,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_download_file() {
+        // Test successful file download
+
+        // --- Setup Mock Server ---
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
+        // Server returns 200 OK with content
         let mock = server
             .mock("GET", "/test.file")
             .with_status(200)
@@ -45,39 +49,53 @@ mod tests {
             .create_async()
             .await;
 
+        // --- Setup Runtime ---
         let mut runtime = MockRuntime::new();
+
+        // Create file: test.file -> returns sink (discards content)
         runtime.expect_create_file()
             .with(mockall::predicate::eq(Path::new("test.file").to_path_buf()))
             .returning(|_| Ok(Box::new(std::io::sink())));
 
+        // --- Execute ---
         let temp_path = Path::new("test.file");
         let http_client = HttpClient::new(Client::new());
 
         let result =
             download_file(&runtime, &format!("{}/test.file", url), temp_path, &http_client).await;
 
+        // --- Verify ---
         mock.assert_async().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_download_file_not_found() {
+        // Test that download fails when server returns 404
+
+        // --- Setup Mock Server ---
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
+        // Server returns 404 Not Found
         let mock = server
             .mock("GET", "/test.file")
             .with_status(404)
             .create_async()
             .await;
 
-        let runtime = MockRuntime::new(); // No expectations = strict (panic if called)
+        // --- Setup Runtime ---
+        // No expectations = strict mode (panics if any method called)
+        let runtime = MockRuntime::new();
+
+        // --- Execute ---
         let temp_path = Path::new("test.file");
         let http_client = HttpClient::new(Client::new());
 
         let result =
             download_file(&runtime, &format!("{}/test.file", url), temp_path, &http_client).await;
 
+        // --- Verify ---
         mock.assert_async().await;
         assert!(result.is_err());
     }
