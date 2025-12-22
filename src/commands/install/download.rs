@@ -52,10 +52,46 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         let mut asset_names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
         asset_names.sort();
         let assets_list = asset_names.join("\n  ");
+
+        // Check if any filter lacks wildcards and suggest using them
+        let filters_without_wildcards: Vec<&str> = filters
+            .iter()
+            .filter(|f| !f.contains('*') && !f.contains('?'))
+            .map(|s| s.as_str())
+            .collect();
+
+        let hint = if !filters_without_wildcards.is_empty() {
+            // Generate suggested filters with wildcards
+            let suggested_filters: Vec<String> = filters
+                .iter()
+                .map(|f| {
+                    if f.contains('*') || f.contains('?') {
+                        f.clone()
+                    } else {
+                        format!("*{}*", f)
+                    }
+                })
+                .collect();
+            
+            // Build suggested command from original args, replacing filter values
+            let suggested_command = build_suggested_command(&suggested_filters);
+            
+            format!(
+                "\n\nHint: Your filter(s) {:?} don't contain wildcards.\n\
+                Try using wildcards for partial matching:\n  \
+                {}",
+                filters_without_wildcards,
+                suggested_command
+            )
+        } else {
+            String::new()
+        };
+
         anyhow::bail!(
-            "No assets matched the filter patterns {:?}.\nAvailable assets:\n  {}",
+            "No assets matched the filter patterns {:?}.\nAvailable assets:\n  {}{}",
             filters,
-            assets_list
+            assets_list,
+            hint
         );
     }
 
@@ -189,6 +225,47 @@ async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor>(
         .with_context(|| format!("Failed to clean up temporary file: {:?}", temp_file_path))?;
 
     Ok(())
+}
+
+/// Build a suggested command by replacing filter values in the original command line args
+fn build_suggested_command(suggested_filters: &[String]) -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let mut result = Vec::new();
+    let mut i = 0;
+    let mut filter_index = 0;
+    
+    while i < args.len() {
+        let arg = &args[i];
+        
+        if arg == "--filter" || arg == "-f" {
+            // Skip the original filter and its value, use suggested filter instead
+            result.push(arg.clone());
+            if filter_index < suggested_filters.len() {
+                result.push(format!("\"{}\"", suggested_filters[filter_index]));
+                filter_index += 1;
+            }
+            i += 2; // Skip both --filter and its value
+        } else if arg.starts_with("--filter=") {
+            // Handle --filter=value format
+            if filter_index < suggested_filters.len() {
+                result.push(format!("--filter=\"{}\"", suggested_filters[filter_index]));
+                filter_index += 1;
+            }
+            i += 1;
+        } else if arg.starts_with("-f=") {
+            // Handle -f=value format  
+            if filter_index < suggested_filters.len() {
+                result.push(format!("-f=\"{}\"", suggested_filters[filter_index]));
+                filter_index += 1;
+            }
+            i += 1;
+        } else {
+            result.push(arg.clone());
+            i += 1;
+        }
+    }
+    
+    result.join(" ")
 }
 
 /// Check if a filename represents an archive that can be extracted
@@ -1431,6 +1508,87 @@ mod tests {
             error_msg.contains("*windows*"),
             "Error should mention the filter pattern"
         );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_installed_filter_without_wildcards_shows_hint() {
+        // Test that when a filter without wildcards matches nothing,
+        // the error message includes a hint to use wildcards
+
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup ---
+        let target = PathBuf::from("/target"); // Installation target directory
+        let repo = GitHubRepo {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let release = Release {
+            tag_name: "v1.0.0".into(),
+            tarball_url: "http://example.com/tarball.tar.gz".into(),
+            assets: vec![
+                crate::github::ReleaseAsset {
+                    name: "app-linux-x86_64.tar.gz".into(),
+                    size: 1000,
+                    browser_download_url: "http://example.com/linux-x86_64".into(),
+                },
+                crate::github::ReleaseAsset {
+                    name: "app-darwin-aarch64.tar.gz".into(),
+                    size: 1000,
+                    browser_download_url: "http://example.com/darwin-aarch64".into(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Filter WITHOUT wildcards that matches nothing
+        let filters = vec!["linux".to_string()];
+
+        // --- 1. Check Target Directory ---
+
+        // Directory does not exist: /target
+        runtime
+            .expect_exists()
+            .with(eq(target.clone()))
+            .returning(|_| false);
+
+        // --- Execute ---
+        let result = ensure_installed(
+            &runtime,
+            &target,
+            &repo,
+            &release,
+            &HttpClient::new(Client::new()),
+            &MockExtractor::new(),
+            Arc::new(Mutex::new(CleanupContext::new())),
+            &filters,
+        )
+        .await;
+
+        // --- Verify Error with Hint ---
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+
+        // Should contain the basic error message
+        assert!(
+            error_msg.contains("No assets matched the filter patterns"),
+            "Expected 'No assets matched' error but got: {}",
+            error_msg
+        );
+
+        // Should contain the hint about wildcards
+        assert!(
+            error_msg.contains("Hint:"),
+            "Expected hint about wildcards but got: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("don't contain wildcards"),
+            "Expected mention of missing wildcards but got: {}",
+            error_msg
+        );
+        // Note: The suggested command uses std::env::args() which returns test runner args
+        // in unit tests, so we only verify the hint structure here
     }
 
     // --- Tests for binary executable detection (Platform-specific) ---
