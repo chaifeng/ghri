@@ -1405,6 +1405,62 @@ test_unlink_colon_in_repo_name() {
     fi
 }
 
+test_install_with_asset_filter() {
+    log_section "Test: Install with --filter option to match specific assets"
+
+    local install_root="$TEST_ROOT/install_filter"
+    mkdir -p "$install_root"
+
+    # Install chaifeng/zidr with filter to match x86_64-linux files
+    # zidr has releases with multiple platform-specific assets
+    log_info "Installing chaifeng/zidr with --filter '*x86_64-linux*'..."
+    if "$GHRI_BIN" install chaifeng/zidr --filter '*x86_64-linux*' --root "$install_root"; then
+        log_success "Install with filter succeeded"
+    else
+        log_fail "Install with filter failed"
+        return 1
+    fi
+
+    # Verify installation structure
+    assert_dir_exists "$install_root/chaifeng/zidr" "Package directory created"
+    assert_file_exists "$install_root/chaifeng/zidr/meta.json" "meta.json created"
+    assert_symlink_exists "$install_root/chaifeng/zidr/current" "current symlink created"
+
+    # Get current version directory
+    local current_version
+    current_version=$(readlink "$install_root/chaifeng/zidr/current")
+    local version_dir="$install_root/chaifeng/zidr/$current_version"
+
+    # Verify files were downloaded
+    assert_dir_exists "$version_dir" "Version directory exists"
+
+    # Check that downloaded files match the filter pattern
+    local file_count
+    file_count=$(find "$version_dir" -type f | wc -l | tr -d ' ')
+    log_info "Downloaded $file_count file(s) in version directory"
+
+    if [[ $file_count -gt 0 ]]; then
+        log_success "Files downloaded with filter"
+        # List files for verification
+        log_info "Files in version directory:"
+        find "$version_dir" -type f -exec basename {} \; | while read -r f; do
+            log_info "  - $f"
+        done
+    else
+        log_fail "No files downloaded"
+        return 1
+    fi
+
+    # Verify that non-matching files are NOT present (e.g., macos, windows files)
+    local non_matching_count
+    non_matching_count=$(find "$version_dir" -type f \( -name "*macos*" -o -name "*darwin*" -o -name "*windows*" \) | wc -l | tr -d ' ')
+    if [[ $non_matching_count -eq 0 ]]; then
+        log_success "Non-matching files were correctly filtered out"
+    else
+        log_fail "Found $non_matching_count files that should have been filtered"
+    fi
+}
+
 test_versioned_link_creation() {
     log_section "Test: Versioned link with @version goes to versioned_links"
 
@@ -2083,6 +2139,9 @@ main() {
     test_links_command
     test_unlink_by_path
     test_unlink_colon_in_repo_name
+
+    # Asset filter tests
+    test_install_with_asset_filter
 
     # Versioned link tests
     test_versioned_link_creation

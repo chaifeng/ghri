@@ -36,8 +36,8 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         }
     }
 
-    #[tracing::instrument(skip(self, repo, version, install_root))]
-    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>) -> Result<()> {
+    #[tracing::instrument(skip(self, repo, version, install_root, filters))]
+    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path) = self
             .get_or_fetch_meta(repo, install_root.as_deref())
@@ -83,6 +83,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             &self.http_client,
             &self.extractor,
             Arc::clone(&cleanup_ctx),
+            &filters,
         )
         .await;
 
@@ -359,7 +360,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, extractor);
-        installer.install(&repo, None, None).await.unwrap();
+        installer.install(&repo, None, None, vec![]).await.unwrap();
     }
 
     #[tokio::test]
@@ -493,7 +494,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // Should fail because no stable release found
-        let result = installer.install(&repo, None, None).await;
+        let result = installer.install(&repo, None, None, vec![]).await;
         assert!(result.is_err());
         assert!(
             result
@@ -563,7 +564,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run("invalid", config).await;
+        let result = super::super::run("invalid", config, vec![]).await;
         assert!(result.is_err());
     }
 
@@ -671,7 +672,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, extractor);
 
         // Should succeed despite metadata save failure (it's just a warning)
-        let result = installer.install(&repo, None, None).await;
+        let result = installer.install(&repo, None, None, vec![]).await;
         assert!(result.is_ok());
     }
 
@@ -776,7 +777,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
-        installer.install(&repo, None, None).await.unwrap();
+        installer.install(&repo, None, None, vec![]).await.unwrap();
     }
 
     #[tokio::test]
@@ -825,7 +826,7 @@ mod tests {
         };
 
         // Install o/r using run() entry point
-        super::super::run("o/r", config).await.unwrap();
+        super::super::run("o/r", config, vec![]).await.unwrap();
     }
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs

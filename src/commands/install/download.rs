@@ -19,7 +19,8 @@ use crate::{
     release,
     http_client,
     extractor,
-    cleanup_ctx
+    cleanup_ctx,
+    filters
 ))]
 pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     runtime: &R,
@@ -29,6 +30,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     http_client: &HttpClient,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
+    filters: &[String],
 ) -> Result<()> {
     if runtime.exists(target_dir) {
         info!(
@@ -49,14 +51,40 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         ctx.add(target_dir.to_path_buf());
     }
 
-    // Choose download strategy based on assets availability
-    if release.assets.is_empty() {
+    // Filter assets if filters are provided
+    let filtered_assets = if filters.is_empty() {
+        release.assets.clone()
+    } else {
+        filter_assets(&release.assets, filters)
+    };
+
+    // Error if assets exist but none matched the filters
+    if !release.assets.is_empty() && !filters.is_empty() && filtered_assets.is_empty() {
+        anyhow::bail!(
+            "No assets matched the filter patterns {:?}. Available assets: {:?}",
+            filters,
+            release
+                .assets
+                .iter()
+                .map(|a| &a.name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Create a modified release with filtered assets
+    let filtered_release = Release {
+        assets: filtered_assets,
+        ..release.clone()
+    };
+
+    // Choose download strategy based on filtered assets availability
+    if filtered_release.assets.is_empty() {
         // No assets: download source tarball
         download_and_extract_tarball(
             runtime,
             target_dir,
             repo,
-            release,
+            &filtered_release,
             http_client,
             extractor,
             Arc::clone(&cleanup_ctx),
@@ -68,7 +96,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
             runtime,
             target_dir,
             repo,
-            release,
+            &filtered_release,
             http_client,
             extractor,
             Arc::clone(&cleanup_ctx),
@@ -83,6 +111,21 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     }
 
     Ok(())
+}
+
+/// Filter assets by glob patterns. An asset matches if ALL patterns match its name.
+fn filter_assets(assets: &[crate::github::ReleaseAsset], filters: &[String]) -> Vec<crate::github::ReleaseAsset> {
+    assets
+        .iter()
+        .filter(|asset| {
+            filters.iter().all(|pattern| {
+                glob::Pattern::new(pattern)
+                    .map(|p| p.matches(&asset.name))
+                    .unwrap_or(false)
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// Download source tarball (when no assets available)
@@ -288,6 +331,117 @@ mod tests {
     use reqwest::Client;
     use std::path::PathBuf;
 
+    #[test]
+    fn test_filter_assets_single_pattern() {
+        // Test filtering assets with a single glob pattern
+        // Pattern: "*aarch64*" should match assets containing "aarch64"
+
+        let assets = vec![
+            crate::github::ReleaseAsset {
+                name: "app-linux-x86_64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/x86_64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-linux-aarch64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/aarch64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-darwin-aarch64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/darwin-aarch64".into(),
+            },
+        ];
+
+        let filters = vec!["*aarch64*".to_string()];
+        let filtered = filter_assets(&assets, &filters);
+
+        // Should match: app-linux-aarch64.tar.gz, app-darwin-aarch64.tar.gz
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|a| a.name == "app-linux-aarch64.tar.gz"));
+        assert!(filtered.iter().any(|a| a.name == "app-darwin-aarch64.tar.gz"));
+    }
+
+    #[test]
+    fn test_filter_assets_multiple_patterns_and_logic() {
+        // Test filtering assets with multiple patterns (AND logic)
+        // Pattern: "*aarch64*" AND "*darwin*" should match only darwin-aarch64
+
+        let assets = vec![
+            crate::github::ReleaseAsset {
+                name: "app-linux-x86_64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/x86_64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-linux-aarch64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/aarch64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-darwin-aarch64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/darwin-aarch64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-darwin-x86_64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/darwin-x86_64".into(),
+            },
+        ];
+
+        let filters = vec!["*aarch64*".to_string(), "*darwin*".to_string()];
+        let filtered = filter_assets(&assets, &filters);
+
+        // Should match ONLY: app-darwin-aarch64.tar.gz (both patterns must match)
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "app-darwin-aarch64.tar.gz");
+    }
+
+    #[test]
+    fn test_filter_assets_no_match() {
+        // Test filtering when no assets match the pattern
+
+        let assets = vec![
+            crate::github::ReleaseAsset {
+                name: "app-linux-x86_64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/x86_64".into(),
+            },
+        ];
+
+        let filters = vec!["*windows*".to_string()];
+        let filtered = filter_assets(&assets, &filters);
+
+        // Should return empty vec (no match)
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_assets_empty_filters() {
+        // Test that empty filters returns all assets
+
+        let assets = vec![
+            crate::github::ReleaseAsset {
+                name: "app-linux-x86_64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/x86_64".into(),
+            },
+            crate::github::ReleaseAsset {
+                name: "app-darwin-aarch64.tar.gz".into(),
+                size: 1000,
+                browser_download_url: "http://example.com/darwin-aarch64".into(),
+            },
+        ];
+
+        let filters: Vec<String> = vec![];
+        let filtered = filter_assets(&assets, &filters);
+
+        // Should return all assets when no filters
+        assert_eq!(filtered.len(), 2);
+    }
+
     #[tokio::test]
     async fn test_ensure_installed_creates_dir_and_extracts() {
         // Test successful installation: creates directory, downloads, and extracts
@@ -360,6 +514,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await
         .unwrap();
@@ -436,6 +591,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -510,6 +666,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -596,6 +753,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -642,6 +800,7 @@ mod tests {
             &http_client,
             &MockExtractor::new(),
             cleanup_ctx,
+            &[],
         )
         .await;
         assert!(result.is_ok());
@@ -746,6 +905,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -837,6 +997,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -927,6 +1088,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -1009,6 +1171,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -1110,6 +1273,7 @@ mod tests {
             &http_client,
             &extractor,
             cleanup_ctx,
+            &[],
         )
         .await;
 
@@ -1119,6 +1283,81 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Failed to download asset")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_installed_error_when_filter_matches_nothing() {
+        // Test that when assets exist but filter patterns match nothing, an error is returned
+        // instead of falling back to downloading source tarball
+
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup ---
+        let target = PathBuf::from("/target"); // Installation target directory
+        let repo = GitHubRepo {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let release = Release {
+            tag_name: "v1.0.0".into(),
+            tarball_url: "http://example.com/tarball.tar.gz".into(),
+            assets: vec![
+                crate::github::ReleaseAsset {
+                    name: "app-linux-x86_64.tar.gz".into(),
+                    size: 1000,
+                    browser_download_url: "http://example.com/linux-x86_64".into(),
+                },
+                crate::github::ReleaseAsset {
+                    name: "app-darwin-aarch64.tar.gz".into(),
+                    size: 1000,
+                    browser_download_url: "http://example.com/darwin-aarch64".into(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Filters that match nothing in the available assets
+        let filters = vec!["*windows*".to_string(), "*arm*".to_string()];
+
+        // --- 1. Check Target Directory ---
+
+        // Directory does not exist: /target
+        runtime
+            .expect_exists()
+            .with(eq(target.clone()))
+            .returning(|_| false);
+
+        // Create directory: /target
+        runtime
+            .expect_create_dir_all()
+            .with(eq(target.clone()))
+            .returning(|_| Ok(()));
+
+        // --- Execute ---
+        let result = ensure_installed(
+            &runtime,
+            &target,
+            &repo,
+            &release,
+            &HttpClient::new(Client::new()),
+            &MockExtractor::new(),
+            Arc::new(Mutex::new(CleanupContext::new())),
+            &filters,
+        )
+        .await;
+
+        // --- Verify Error ---
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("No assets matched the filter patterns"),
+            "Expected 'No assets matched' error but got: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("*windows*"),
+            "Error should mention the filter pattern"
         );
     }
 }

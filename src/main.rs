@@ -68,6 +68,11 @@ pub struct InstallArgs {
     /// GitHub API URL (overrides defaults; also via GHRI_API_URL)
     #[arg(long = "api-url", env = "GHRI_API_URL", value_name = "URL")]
     pub api_url: Option<String>,
+
+    /// Filter assets by glob pattern (can be specified multiple times)
+    /// Example: --filter "*aarch64*" --filter "*macos*"
+    #[arg(long = "filter", short = 'f', value_name = "PATTERN")]
+    pub filters: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -139,7 +144,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Install(args) => {
-            install(runtime, &args.repo, cli.install_root, args.api_url).await?
+            install(runtime, &args.repo, cli.install_root, args.api_url, args.filters).await?
         }
         Commands::Update(_args) => ghri::commands::update(runtime, cli.install_root, None).await?,
         Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
@@ -245,6 +250,49 @@ mod tests {
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "bach-sh/bach@0.7.2");
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_install_with_single_filter() {
+        // Test: ghri install owner/repo --filter "*aarch64*"
+        let cli = Cli::try_parse_from(&["ghri", "install", "owner/repo", "--filter", "*aarch64*"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.filters, vec!["*aarch64*"]);
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_install_with_multiple_filters() {
+        // Test: ghri install owner/repo --filter "*aarch64*" --filter "*macos*"
+        let cli = Cli::try_parse_from(&[
+            "ghri", "install", "owner/repo",
+            "--filter", "*aarch64*",
+            "--filter", "*macos*"
+        ]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.filters, vec!["*aarch64*", "*macos*"]);
+            }
+            _ => panic!("Expected Install command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_install_with_short_filter() {
+        // Test: ghri install owner/repo -f "*linux*"
+        let cli = Cli::try_parse_from(&["ghri", "install", "owner/repo", "-f", "*linux*"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert_eq!(args.repo, "owner/repo");
+                assert_eq!(args.filters, vec!["*linux*"]);
             }
             _ => panic!("Expected Install command"),
         }

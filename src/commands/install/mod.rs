@@ -15,21 +15,23 @@ mod installer;
 
 pub use installer::Installer;
 
-#[tracing::instrument(skip(runtime, install_root, api_url))]
+#[tracing::instrument(skip(runtime, install_root, api_url, filters))]
 pub async fn install<R: Runtime + 'static>(
     runtime: R,
     repo_str: &str,
     install_root: Option<PathBuf>,
     api_url: Option<String>,
+    filters: Vec<String>,
 ) -> Result<()> {
     let config = Config::new(runtime, install_root, api_url)?;
-    run(repo_str, config).await
+    run(repo_str, config, filters).await
 }
 
-#[tracing::instrument(skip(config))]
+#[tracing::instrument(skip(config, filters))]
 pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     repo_str: &str,
     config: Config<R, G, E>,
+    filters: Vec<String>,
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
     let installer = Installer::new(
@@ -38,5 +40,5 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
         config.http_client,
         config.extractor,
     );
-    installer.install(&spec.repo, spec.version.as_deref(), config.install_root).await
+    installer.install(&spec.repo, spec.version.as_deref(), config.install_root, filters).await
 }
