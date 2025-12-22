@@ -1486,6 +1486,16 @@ test_install_filter_no_match_fails() {
         log_success "Install failed (expected)"
     fi
 
+    # Verify the error message lists available assets (sorted, one per line)
+    if echo "$output" | grep -qi "Available assets"; then
+        log_success "Error message lists available assets"
+        # Show the available assets listing for debugging
+        log_info "Available assets in error:"
+        echo "$output" | grep -A 100 "Available assets" | head -20
+    else
+        log_info "Error output: $output"
+    fi
+
     # Verify no package directory was created
     if [[ ! -d "$install_root/chaifeng/zidr" ]]; then
         log_success "No package directory created on filter failure"

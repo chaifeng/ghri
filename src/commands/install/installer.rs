@@ -39,7 +39,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
     #[tracing::instrument(skip(self, repo, version, install_root, filters))]
     pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>) -> Result<()> {
         println!("   resolving {}", repo);
-        let (mut meta, meta_path) = self
+        let (mut meta, meta_path, needs_save) = self
             .get_or_fetch_meta(repo, install_root.as_deref())
             .await?;
 
@@ -101,8 +101,14 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             }
         }
 
-        // Metadata handling
+        // Metadata handling - save meta only after successful install
         meta.current_version = release.tag_name.clone();
+        if needs_save {
+            // Newly fetched meta - need to create parent directory first
+            if let Some(parent) = meta_path.parent() {
+                self.runtime.create_dir_all(parent)?;
+            }
+        }
         if let Err(e) = self.save_meta(&meta_path, &meta) {
             warn!("Failed to save package metadata: {}. Continuing.", e);
         }
@@ -117,12 +123,14 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         println!("   installed {} {} {}", repo, tag, target_dir.display());
     }
 
+    /// Get or fetch meta, returning (meta, meta_path, needs_save)
+    /// needs_save is true if meta was newly fetched and needs to be saved after successful install
     #[tracing::instrument(skip(self, repo, install_root))]
     pub(crate) async fn get_or_fetch_meta(
         &self,
         repo: &GitHubRepo,
         install_root: Option<&Path>,
-    ) -> Result<(Meta, PathBuf)> {
+    ) -> Result<(Meta, PathBuf, bool)> {
         let root = match install_root {
             Some(path) => path.to_path_buf(),
             None => default_install_root(&self.runtime)?,
@@ -131,7 +139,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
         if self.runtime.exists(&meta_path) {
             match Meta::load(&self.runtime, &meta_path) {
-                Ok(meta) => return Ok((meta, meta_path)),
+                Ok(meta) => return Ok((meta, meta_path, false)),
                 Err(e) => {
                     warn!(
                         "Failed to load existing meta.json at {:?}: {}. Re-fetching.",
@@ -143,12 +151,8 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
 
         let meta = self.fetch_meta(repo, "", None).await?;
 
-        if let Some(parent) = meta_path.parent() {
-            self.runtime.create_dir_all(parent)?;
-        }
-        self.save_meta(&meta_path, &meta)?;
-
-        Ok((meta, meta_path))
+        // Don't save meta here - let the caller save it after successful install
+        Ok((meta, meta_path, true))
     }
 
     #[tracing::instrument(skip(self, repo, current_version, api_url))]
@@ -428,10 +432,11 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
-        let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+        let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
 
-        // Should have fetched fresh metadata
+        // Should have fetched fresh metadata (needs_save = true)
         assert_eq!(meta.name, "o/r");
+        assert!(needs_save, "Fresh fetch should need saving");
     }
 
     // test_find_all_packages is now in package/discovery.rs
@@ -584,32 +589,11 @@ mod tests {
 
         // --- 1. Fetch Metadata (no cached meta) ---
 
-        // File exists: meta.json -> false
+        // File exists: meta.json -> false (triggers fresh fetch)
         runtime.expect_exists().returning(|_| false);
 
-        // Create package directory
+        // Create package directory (for version directory and meta.json)
         runtime.expect_create_dir_all().returning(|_| Ok(()));
-
-        // --- Setup Write Sequence ---
-        // First write succeeds (initial fetch save), second write fails (post-install save)
-        let mut seq = mockall::Sequence::new();
-
-        // Write #1: Save fetched metadata -> SUCCESS
-        runtime
-            .expect_write()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(()));
-
-        // Write #2: Save updated metadata after install -> FAILS
-        runtime
-            .expect_write()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Err(anyhow::anyhow!("fail")));
-
-        // Rename (only happens after first successful write)
-        runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- 2. Download and Install ---
 
@@ -623,6 +607,14 @@ mod tests {
 
         // Create current symlink
         runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 3. Save Metadata After Install -> FAILS ---
+
+        // Write meta.json -> FAILS (simulates disk full, permission denied, etc.)
+        runtime
+            .expect_write()
+            .times(1)
+            .returning(|_, _| Err(anyhow::anyhow!("disk full")));
 
         // --- Setup GitHub API Mock ---
 
@@ -707,10 +699,11 @@ mod tests {
             http_client,
             MockExtractor::new(),
         );
-        let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+        let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
 
-        // Should return cached metadata
+        // Should return cached metadata (needs_save = false)
         assert_eq!(meta.name, "o/r");
+        assert!(!needs_save, "Cached meta should not need saving");
     }
 
     #[tokio::test]

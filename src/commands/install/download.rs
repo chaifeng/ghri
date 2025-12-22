@@ -40,6 +40,25 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
         return Ok(());
     }
 
+    // Filter assets if filters are provided (check BEFORE creating directory)
+    let filtered_assets = if filters.is_empty() {
+        release.assets.clone()
+    } else {
+        filter_assets(&release.assets, filters)
+    };
+
+    // Error if assets exist but none matched the filters
+    if !release.assets.is_empty() && !filters.is_empty() && filtered_assets.is_empty() {
+        let mut asset_names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        asset_names.sort();
+        let assets_list = asset_names.join("\n  ");
+        anyhow::bail!(
+            "No assets matched the filter patterns {:?}.\nAvailable assets:\n  {}",
+            filters,
+            assets_list
+        );
+    }
+
     debug!("Creating target directory: {:?}", target_dir);
     runtime
         .create_dir_all(target_dir)
@@ -49,26 +68,6 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     {
         let mut ctx = cleanup_ctx.lock().unwrap();
         ctx.add(target_dir.to_path_buf());
-    }
-
-    // Filter assets if filters are provided
-    let filtered_assets = if filters.is_empty() {
-        release.assets.clone()
-    } else {
-        filter_assets(&release.assets, filters)
-    };
-
-    // Error if assets exist but none matched the filters
-    if !release.assets.is_empty() && !filters.is_empty() && filtered_assets.is_empty() {
-        anyhow::bail!(
-            "No assets matched the filter patterns {:?}. Available assets: {:?}",
-            filters,
-            release
-                .assets
-                .iter()
-                .map(|a| &a.name)
-                .collect::<Vec<_>>()
-        );
     }
 
     // Create a modified release with filtered assets
