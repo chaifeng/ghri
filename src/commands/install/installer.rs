@@ -220,67 +220,102 @@ mod tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn test_install_happy_path() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
+        // Test successful installation of a new package from scratch
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // Meta check
+        // --- Setup Paths ---
+        let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("o/r/meta.json");             // /home/user/.ghri/o/r/meta.json
+        let meta_tmp = root.join("o/r/meta.json.tmp");          // /home/user/.ghri/o/r/meta.json.tmp
+        let package_dir = root.join("o/r");                     // /home/user/.ghri/o/r
+        let version_dir = root.join("o/r/v1");                  // /home/user/.ghri/o/r/v1
+        let current_link = root.join("o/r/current");            // /home/user/.ghri/o/r/current
+
+        // --- 1. Check for Existing Metadata ---
+
+        // File exists: /home/user/.ghri/o/r/meta.json -> false (new install)
         runtime
             .expect_exists()
-            .with(eq(PathBuf::from("/home/user/.ghri/o/r/meta.json")))
+            .with(eq(meta_path.clone()))
             .returning(|_| false);
 
-        // Save meta interactions
+        // --- 2. Fetch and Save Metadata ---
+
+        // Create directory: /home/user/.ghri/o/r
         runtime
             .expect_create_dir_all()
-            .with(eq(PathBuf::from("/home/user/.ghri/o/r")))
+            .with(eq(package_dir))
             .returning(|_| Ok(()));
+
+        // Write meta to: /home/user/.ghri/o/r/meta.json.tmp
         runtime
             .expect_write()
-            .with(
-                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")),
-                always(),
-            )
-            .returning(|_, _| Ok(()));
-        runtime
-            .expect_rename()
-            .with(
-                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json.tmp")),
-                eq(PathBuf::from("/home/user/.ghri/o/r/meta.json")),
-            )
+            .with(eq(meta_tmp.clone()), always())
             .returning(|_, _| Ok(()));
 
-        // Ensure installed interactions
+        // Rename: /home/user/.ghri/o/r/meta.json.tmp -> /home/user/.ghri/o/r/meta.json
+        runtime
+            .expect_rename()
+            .with(eq(meta_tmp.clone()), eq(meta_path.clone()))
+            .returning(|_, _| Ok(()));
+
+        // --- 3. Download and Extract Release ---
+
+        // Check version dir exists: /home/user/.ghri/o/r/v1 -> false (needs download)
         runtime
             .expect_exists()
-            .with(eq(PathBuf::from("/home/user/.ghri/o/r/v1")))
+            .with(eq(version_dir.clone()))
             .returning(|_| false);
+
+        // Create version dir: /home/user/.ghri/o/r/v1
         runtime
             .expect_create_dir_all()
-            .with(eq(PathBuf::from("/home/user/.ghri/o/r/v1")))
+            .with(eq(version_dir))
             .returning(|_| Ok(()));
+
+        // Create temp file for download, then remove after extraction
         runtime
             .expect_create_file()
             .returning(|_| Ok(Box::new(std::io::sink())));
         runtime.expect_remove_file().returning(|_| Ok(()));
 
-        // Symlink interactions
+        // --- 4. Update Current Symlink ---
+
+        // Check symlink exists: /home/user/.ghri/o/r/current -> false (new)
         runtime
             .expect_exists()
-            .with(eq(PathBuf::from("/home/user/.ghri/o/r/current")))
+            .with(eq(current_link))
             .returning(|_| false);
+
+        // Create symlink: /home/user/.ghri/o/r/current -> v1
         runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 5. Save Updated Metadata ---
+
+        // Write final meta: /home/user/.ghri/o/r/meta.json.tmp
+        runtime
+            .expect_write()
+            .with(eq(meta_tmp.clone()), always())
+            .returning(|_, _| Ok(()));
+
+        // Rename: /home/user/.ghri/o/r/meta.json.tmp -> /home/user/.ghri/o/r/meta.json
+        runtime
+            .expect_rename()
+            .with(eq(meta_tmp), eq(meta_path))
+            .returning(|_, _| Ok(()));
+
+        // --- Setup GitHub API Mock ---
 
         let mut github = MockGetReleases::new();
         github
             .expect_api_url()
             .return_const("https://api.github.com".to_string());
+
+        // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
             Ok(RepoInfo {
                 description: None,
@@ -290,6 +325,7 @@ mod tests {
             })
         });
 
+        // API returns one release v1 with tarball URL
         let download_url = format!("{}/tarball", url);
         github.expect_get_releases_at().return_once(move |_, _| {
             Ok(vec![Release {
@@ -299,17 +335,28 @@ mod tests {
             }])
         });
 
+        // --- Setup HTTP Server Mock ---
+
+        // GET /tarball returns dummy data
         let _m = server
             .mock("GET", "/tarball")
             .with_status(200)
             .with_body("data")
             .create();
 
+        // --- Setup Extractor Mock ---
+
         let mut extractor = MockExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
+        // --- Execute ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, extractor);
         installer.install(&repo, None, None).await.unwrap();
@@ -317,35 +364,49 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_or_fetch_meta_invalid_on_disk() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
+        // Test that invalid meta.json on disk triggers re-fetch from GitHub API
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         #[cfg(not(windows))]
         let meta_path = PathBuf::from("/home/user/.ghri/o/r/meta.json");
         #[cfg(windows)]
         let meta_path = PathBuf::from("C:\\Users\\user\\.ghri\\o\\r\\meta.json");
+
+        // --- 1. Check for Existing Metadata ---
+
+        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
+
+        // Read meta.json -> returns INVALID JSON (triggers re-fetch)
         runtime
             .expect_read_to_string()
             .with(eq(meta_path.clone()))
             .returning(|_| Ok("invalid json".into()));
 
-        // Should fallback to fetch and then save
+        // --- 2. Re-fetch and Save Metadata (fallback) ---
+
+        // Create package directory (for saving fetched meta)
         runtime.expect_create_dir_all().returning(|_| Ok(()));
+
+        // Write fetched meta to temp file
         runtime.expect_write().returning(|_, _| Ok(()));
+
+        // Rename temp file to meta.json
         runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Setup GitHub API Mock ---
 
         let mut github = MockGetReleases::new();
         github
             .expect_api_url()
             .return_const("https://api".to_string());
+
+        // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
             Ok(RepoInfo {
                 description: None,
@@ -354,11 +415,21 @@ mod tests {
                 updated_at: "now".into(),
             })
         });
+
+        // API returns empty releases list
         github.expect_get_releases_at().returning(|_, _| Ok(vec![]));
 
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
         let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+
+        // Should have fetched fresh metadata
         assert_eq!(meta.name, "o/r");
     }
 
@@ -370,23 +441,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_no_stable_release() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
+        // Test that install fails when only pre-release versions are available
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // Meta fetch
+        // --- 1. Fetch Metadata (no cached meta) ---
+
+        // File exists: meta.json -> false (need to fetch)
         runtime.expect_exists().returning(|_| false);
+
+        // Create package directory
         runtime.expect_create_dir_all().returning(|_| Ok(()));
+
+        // Write and rename meta.json
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Setup GitHub API Mock ---
 
         let mut github = MockGetReleases::new();
         github
             .expect_api_url()
             .return_const("https://api.github.com".to_string());
+
+        // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
             Ok(RepoInfo {
                 description: None,
@@ -395,16 +473,26 @@ mod tests {
                 updated_at: "now".into(),
             })
         });
+
+        // API returns ONLY a pre-release version (no stable release!)
         github.expect_get_releases_at().returning(|_, _| {
             Ok(vec![Release {
                 tag_name: "v1-rc".into(),
-                prerelease: true,
+                prerelease: true,  // This is a pre-release
                 ..Default::default()
             }])
         });
 
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+
+        // Should fail because no stable release found
         let result = installer.install(&repo, None, None).await;
         assert!(result.is_err());
         assert!(
@@ -423,30 +511,47 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_or_fetch_meta_fetch_fail() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
+        // Test that get_or_fetch_meta fails when GitHub API returns error
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
+
+        // --- 1. Check for Existing Metadata ---
+
+        // File exists: meta.json -> false (need to fetch)
         runtime.expect_exists().returning(|_| false);
+
+        // --- Setup GitHub API Mock (FAILS) ---
 
         let mut github = MockGetReleases::new();
         github
             .expect_api_url()
             .return_const("https://api".to_string());
+
+        // API call fails with error
         github
             .expect_get_repo_info_at()
             .returning(|_, _| Err(anyhow::anyhow!("fail")));
 
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+
+        // Should fail because API call failed
         let result = installer.get_or_fetch_meta(&repo, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_run_invalid_repo_str() {
+        // Test that run() fails with invalid repository string format
+
+        // --- Setup (no runtime expectations needed - fails before any IO) ---
+
         let config = Config {
             runtime: MockRuntime::new(),
             github: MockGetReleases::new(),
@@ -454,6 +559,10 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
+
+        // --- Execute & Verify ---
+
+        // "invalid" is not a valid "owner/repo" format
         let result = super::super::run("invalid", config).await;
         assert!(result.is_err());
     }
@@ -464,43 +573,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_metadata_failure_warning() {
-        let repo = GitHubRepo {
-            owner: "o".into(),
-            repo: "r".into(),
-        };
+        // Test that installation succeeds even when final metadata save fails
+        // (save failure is just a warning, not a fatal error)
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // Using Sequence for write
-        let mut seq = mockall::Sequence::new();
+        // --- 1. Fetch Metadata (no cached meta) ---
 
+        // File exists: meta.json -> false
         runtime.expect_exists().returning(|_| false);
+
+        // Create package directory
         runtime.expect_create_dir_all().returning(|_| Ok(()));
 
-        runtime
-            .expect_write()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Ok(())); // Fetch save
-        runtime
-            .expect_write()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_, _| Err(anyhow::anyhow!("fail"))); // Update save
+        // --- Setup Write Sequence ---
+        // First write succeeds (initial fetch save), second write fails (post-install save)
+        let mut seq = mockall::Sequence::new();
 
+        // Write #1: Save fetched metadata -> SUCCESS
+        runtime
+            .expect_write()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+
+        // Write #2: Save updated metadata after install -> FAILS
+        runtime
+            .expect_write()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Err(anyhow::anyhow!("fail")));
+
+        // Rename (only happens after first successful write)
         runtime.expect_rename().returning(|_, _| Ok(()));
 
-        // Install steps
+        // --- 2. Download and Install ---
+
+        // Create temp file for download
         runtime
             .expect_create_file()
             .returning(|_| Ok(Box::new(std::io::sink())));
+
+        // Remove temp file after extraction
         runtime.expect_remove_file().returning(|_| Ok(()));
+
+        // Create current symlink
         runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- Setup GitHub API Mock ---
 
         let mut github = MockGetReleases::new();
         github
             .expect_api_url()
             .return_const("https://api".to_string());
+
+        // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
             Ok(RepoInfo {
                 description: None,
@@ -510,11 +640,8 @@ mod tests {
             })
         });
 
-        let mut server = mockito::Server::new_async().await;
-        let url = server.url();
+        // API returns one release v1
         let tar_url = format!("{}/tar", url);
-        let _m = server.mock("GET", "/tar").with_status(200).create();
-
         github.expect_get_releases_at().return_once(move |_, _| {
             Ok(vec![Release {
                 tag_name: "v1".into(),
@@ -523,13 +650,27 @@ mod tests {
             }])
         });
 
+        // --- Setup HTTP Server Mock ---
+
+        let _m = server.mock("GET", "/tar").with_status(200).create();
+
+        // --- Setup Extractor Mock ---
+
         let mut extractor = MockExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, extractor);
+
+        // Should succeed despite metadata save failure (it's just a warning)
         let result = installer.install(&repo, None, None).await;
         assert!(result.is_ok());
     }
@@ -538,15 +679,26 @@ mod tests {
     
     #[tokio::test]
     async fn test_get_or_fetch_meta_exists_interaction() {
+        // Test that valid cached meta.json is used without fetching from API
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- 1. Load Existing Metadata (cache hit) ---
+
+        // File exists: meta.json -> true (use cache)
+        runtime.expect_exists().returning(|_| true);
+
+        // Read meta.json -> valid JSON with current_version "v1"
+        runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"https://api.github.com","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[]}"#.into()));
+
+        // --- Execute & Verify ---
+
+        // No GitHub API mock needed - should use cached meta
+
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-        runtime.expect_exists().returning(|_| true);
-        runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"https://api.github.com","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[]}"#.into()));
-
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(
             runtime,
@@ -555,18 +707,24 @@ mod tests {
             MockExtractor::new(),
         );
         let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+
+        // Should return cached metadata
         assert_eq!(meta.name, "o/r");
     }
 
     #[tokio::test]
     async fn test_install_uses_existing_meta() {
-        // Similar to exists check but inside install flow
+        // Test that install uses cached metadata and skips API fetch
         let mut runtime = MockRuntime::new();
         let github = MockGetReleases::new();
         configure_runtime_basics(&mut runtime);
 
-        // Exists
+        // --- 1. Load Existing Metadata (cache hit) ---
+
+        // File exists: meta.json -> true (use cache)
         runtime.expect_exists().returning(|_| true);
+
+        // Read meta.json -> valid JSON with v1 release
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
@@ -583,48 +741,80 @@ mod tests {
         runtime
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-        runtime.expect_is_dir().returning(|_| false); // meta.json is not dir
 
-        // Logic should skip fetch
-        // and proceed to ensure_installed (mocked by basics)
-        runtime.expect_exists().returning(|_| true); // target dir exists
+        // Check if meta.json is a directory -> false
+        runtime.expect_is_dir().returning(|_| false);
+
+        // --- 2. Check Version Already Installed ---
+
+        // Version dir exists: already installed, skip download
+        runtime.expect_exists().returning(|_| true);
+
+        // --- 3. Update Current Symlink ---
+
+        // Check if current symlink exists -> true
         runtime.expect_is_symlink().returning(|_| true);
+
+        // Read current symlink -> points to v1 (same version)
         runtime
             .expect_read_link()
             .returning(|_| Ok(PathBuf::from("v1")));
+
+        // Symlink update (may be called for refresh)
         runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 4. Save Updated Metadata ---
+
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
+        // --- Execute ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
-        installer
-            .install(
-                &GitHubRepo {
-                    owner: "o".into(),
-                    repo: "r".into(),
-                },
-                None,
-                None,
-            )
-            .await
-            .unwrap();
+        installer.install(&repo, None, None).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_run() {
+        // Test the run() entry point with cached metadata
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
-        runtime.expect_exists().returning(|_| true); // cached
+
+        // --- 1. Load Existing Metadata (cache hit) ---
+
+        // File exists: meta.json -> true
+        runtime.expect_exists().returning(|_| true);
+
+        // Read meta.json -> valid JSON with v1 release
         runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[{"version":"v1","is_prerelease":false,"tarball_url":"","assets":[]}]}"#.into()));
+
+        // Check if meta.json is a directory -> false
         runtime.expect_is_dir().returning(|_| false);
+
+        // --- 2. Check Version Already Installed ---
+
+        // Check current symlink exists -> true
         runtime.expect_is_symlink().returning(|_| true);
+
+        // Read current symlink -> points to v1
         runtime
             .expect_read_link()
             .returning(|_| Ok(PathBuf::from("v1")));
+
+        // Update symlink
         runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // --- 3. Save Updated Metadata ---
+
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let config = Config {
             runtime,
@@ -633,6 +823,8 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
+
+        // Install o/r using run() entry point
         super::super::run("o/r", config).await.unwrap();
     }
 
@@ -640,25 +832,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_atomic_safety() {
+        // Test that metadata is saved atomically (write to .tmp then rename)
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // Verify write -> rename sequence for metadata
+        // --- Setup Write Sequence ---
+        // Must write to .tmp file FIRST, then rename to final .json file
+
         let mut seq = mockall::Sequence::new();
+
+        // Step 1: Write to meta.json.tmp
         runtime
             .expect_write()
             .withf(|p, _| p.to_string_lossy().ends_with(".tmp"))
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| Ok(()));
+
+        // Step 2: Rename meta.json.tmp -> meta.json (atomic on most filesystems)
         runtime
             .expect_rename()
-            .withf(|f, t| {
-                f.to_string_lossy().ends_with(".tmp") && t.to_string_lossy().ends_with(".json")
+            .withf(|from, to| {
+                from.to_string_lossy().ends_with(".tmp") && to.to_string_lossy().ends_with(".json")
             })
             .times(1)
             .in_sequence(&mut seq)
             .returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let meta = Meta {
             name: "o/r".into(),
