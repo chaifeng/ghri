@@ -1,5 +1,5 @@
-use crate::retry::{check_retryable, with_retry};
-use anyhow::{Context, Result};
+use crate::http::HttpClient;
+use anyhow::Result;
 use async_trait::async_trait;
 use log::debug;
 use reqwest::Client;
@@ -18,7 +18,7 @@ pub trait GetReleases: Send + Sync {
 }
 
 pub struct GitHub {
-    pub client: Client,
+    pub http_client: HttpClient,
     pub api_url: String,
 }
 
@@ -26,7 +26,10 @@ impl GitHub {
     #[tracing::instrument(skip(client, api_url))]
     pub fn new(client: Client, api_url: Option<String>) -> Self {
         let api_url = api_url.unwrap_or_else(|| "https://api.github.com".to_string());
-        Self { client, api_url }
+        Self {
+            http_client: HttpClient::new(client),
+            api_url,
+        }
     }
 }
 
@@ -44,12 +47,12 @@ impl GetReleases for GitHub {
 
     #[tracing::instrument(skip(self, repo, api_url))]
     async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo> {
-        GitHub::fetch_repo_info(repo, &self.client, api_url).await
+        GitHub::fetch_repo_info(&self.http_client, repo, api_url).await
     }
 
     #[tracing::instrument(skip(self, repo, api_url))]
     async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>> {
-        GitHub::fetch_releases(repo, &self.client, api_url).await
+        GitHub::fetch_releases(&self.http_client, repo, api_url).await
     }
 
     #[tracing::instrument(skip(self))]
@@ -59,43 +62,21 @@ impl GetReleases for GitHub {
 }
 
 impl GitHub {
-    #[tracing::instrument(skip(client, api_url))]
+    #[tracing::instrument(skip(http_client, api_url))]
     pub async fn fetch_repo_info(
+        http_client: &HttpClient,
         repo: &GitHubRepo,
-        client: &Client,
         api_url: &str,
     ) -> Result<RepoInfo> {
         let url = format!("{}/repos/{}/{}", api_url, repo.owner, repo.repo);
-
         debug!("Fetching repo info from {}...", url);
-
-        with_retry("Fetching repository info", || {
-            let client = client.clone();
-            let url = url.clone();
-            async move {
-                let response = client
-                    .get(&url)
-                    .send()
-                    .await
-                    .context("Failed to send request to GitHub API")?;
-
-                let response = response.error_for_status().map_err(check_retryable)?;
-
-                let info = response
-                    .json::<RepoInfo>()
-                    .await
-                    .context("Failed to parse JSON response from GitHub API")?;
-
-                Ok(info)
-            }
-        })
-        .await
+        http_client.get_json(&url).await
     }
 
-    #[tracing::instrument(skip(client, api_url))]
+    #[tracing::instrument(skip(http_client, api_url))]
     pub async fn fetch_releases(
+        http_client: &HttpClient,
         repo: &GitHubRepo,
-        client: &Client,
         api_url: &str,
     ) -> Result<Vec<Release>> {
         let mut releases = Vec::new();
@@ -104,32 +85,11 @@ impl GitHub {
         // Limit to 10 pages (1000 releases) to be safe for now/prevent infinite loop
         while page <= 10 {
             let url = format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo);
-
             debug!("Fetching releases page {} from {}...", page, url);
 
-            let parsed: Vec<Release> = with_retry("Fetching releases", || {
-                let client = client.clone();
-                let url = url.clone();
-                let page = page;
-                async move {
-                    let response = client
-                        .get(&url)
-                        .query(&[("per_page", "100"), ("page", &page.to_string())])
-                        .send()
-                        .await
-                        .context("Failed to send request to GitHub API")?;
-
-                    let response = response.error_for_status().map_err(check_retryable)?;
-
-                    let parsed: Vec<Release> = response
-                        .json()
-                        .await
-                        .context("Failed to parse JSON response from GitHub API")?;
-
-                    Ok(parsed)
-                }
-            })
-            .await?;
+            let parsed: Vec<Release> = http_client
+                .get_json_with_query(&url, &[("per_page", "100"), ("page", &page.to_string())])
+                .await?;
 
             if parsed.is_empty() {
                 break;
@@ -149,11 +109,11 @@ impl GitHub {
     }
 
     pub async fn get_repo_info_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<RepoInfo> {
-        GitHub::fetch_repo_info(repo, &self.client, api_url).await
+        GitHub::fetch_repo_info(&self.http_client, repo, api_url).await
     }
 
     pub async fn get_releases_at(&self, repo: &GitHubRepo, api_url: &str) -> Result<Vec<Release>> {
-        GitHub::fetch_releases(repo, &self.client, api_url).await
+        GitHub::fetch_releases(&self.http_client, repo, api_url).await
     }
 }
 
@@ -177,8 +137,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let result = GitHub::fetch_repo_info(&repo, &client, &url).await;
+        let http_client = HttpClient::new(Client::new());
+        let result = GitHub::fetch_repo_info(&http_client, &repo, &url).await;
 
         mock.assert_async().await;
         assert!(result.is_err());
@@ -209,8 +169,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let repo_info = GitHub::fetch_repo_info(&repo, &client, &url).await.unwrap();
+        let http_client = HttpClient::new(Client::new());
+        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url).await.unwrap();
 
         mock.assert_async().await;
         assert_eq!(repo_info.description, Some("A test repo".to_string()));
@@ -244,8 +204,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let repo_info = GitHub::fetch_repo_info(&repo, &client, &url).await.unwrap();
+        let http_client = HttpClient::new(Client::new());
+        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url).await.unwrap();
 
         mock.assert_async().await;
         assert_eq!(repo_info.description, None);
@@ -290,8 +250,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let releases = GitHub::fetch_releases(&repo, &client, &url).await.unwrap();
+        let http_client = HttpClient::new(Client::new());
+        let releases = GitHub::fetch_releases(&http_client, &repo, &url).await.unwrap();
 
         mock.assert_async().await;
         assert_eq!(releases.len(), 2);
@@ -349,8 +309,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let releases = GitHub::fetch_releases(&repo, &client, &url).await.unwrap();
+        let http_client = HttpClient::new(Client::new());
+        let releases = GitHub::fetch_releases(&http_client, &repo, &url).await.unwrap();
 
         mock_p1.assert_async().await;
         mock_p2.assert_async().await;
@@ -377,8 +337,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new();
-        let result = GitHub::fetch_releases(&repo, &client, &url).await;
+        let http_client = HttpClient::new(Client::new());
+        let result = GitHub::fetch_releases(&http_client, &repo, &url).await;
 
         mock.assert_async().await;
         assert!(result.is_err());

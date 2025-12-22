@@ -10,13 +10,14 @@ use std::path::PathBuf;
 use crate::{
     archive::{ArchiveExtractor, Extractor},
     github::{GetReleases, GitHub},
+    http::HttpClient,
     runtime::Runtime,
 };
 
 pub struct Config<R: Runtime, G: GetReleases, E: Extractor> {
     pub runtime: R,
     pub github: G,
-    pub client: Client,
+    pub http_client: HttpClient,
     pub extractor: E,
     pub install_root: Option<PathBuf>,
 }
@@ -41,13 +42,13 @@ impl<R: Runtime> Config<R, GitHub, ArchiveExtractor> {
             .build()?;
 
         let github = GitHub::new(client.clone(), api_url);
-
+        let http_client = HttpClient::new(client);
         let extractor = ArchiveExtractor;
 
         Ok(Self {
             runtime,
             github,
-            client,
+            http_client,
             extractor,
             install_root,
         })
@@ -76,7 +77,7 @@ mod tests {
             .create();
 
         let config = Config::new(runtime, None, None).unwrap();
-        let client = &config.client;
+        let client = config.http_client.inner();
         let _ = client.get(server.url()).send().await;
 
         mock.assert();

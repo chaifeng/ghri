@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{info, warn};
-use reqwest::Client;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -8,6 +7,7 @@ use crate::{
     archive::Extractor,
     cleanup::CleanupContext,
     github::{GetReleases, GitHubRepo, Release},
+    http::HttpClient,
     package::Meta,
     runtime::Runtime,
 };
@@ -21,17 +21,17 @@ use super::external_links::update_external_links;
 pub struct Installer<R: Runtime, G: GetReleases, E: Extractor> {
     pub runtime: R,
     pub github: G,
-    pub client: Client,
+    pub http_client: HttpClient,
     pub extractor: E,
 }
 
 impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
-    #[tracing::instrument(skip(runtime, github, client, extractor))]
-    pub fn new(runtime: R, github: G, client: Client, extractor: E) -> Self {
+    #[tracing::instrument(skip(runtime, github, http_client, extractor))]
+    pub fn new(runtime: R, github: G, http_client: HttpClient, extractor: E) -> Self {
         Self {
             runtime,
             github,
-            client,
+            http_client,
             extractor,
         }
     }
@@ -80,7 +80,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             &target_dir,
             repo,
             &release,
-            &self.client,
+            &self.http_client,
             &self.extractor,
             Arc::clone(&cleanup_ctx),
         )
@@ -188,6 +188,7 @@ mod tests {
     use crate::github::{MockGetReleases, RepoInfo};
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
+    use reqwest::Client;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
@@ -309,7 +310,8 @@ mod tests {
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
-        let installer = Installer::new(runtime, github, Client::new(), extractor);
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, extractor);
         installer.install(&repo, None, None).await.unwrap();
     }
 
@@ -354,7 +356,8 @@ mod tests {
         });
         github.expect_get_releases_at().returning(|_, _| Ok(vec![]));
 
-        let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
         let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
         assert_eq!(meta.name, "o/r");
     }
@@ -400,7 +403,8 @@ mod tests {
             }])
         });
 
-        let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
         let result = installer.install(&repo, None, None).await;
         assert!(result.is_err());
         assert!(
@@ -435,7 +439,8 @@ mod tests {
             .expect_get_repo_info_at()
             .returning(|_, _| Err(anyhow::anyhow!("fail")));
 
-        let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
         let result = installer.get_or_fetch_meta(&repo, None).await;
         assert!(result.is_err());
     }
@@ -445,7 +450,7 @@ mod tests {
         let config = Config {
             runtime: MockRuntime::new(),
             github: MockGetReleases::new(),
-            client: Client::new(),
+            http_client: HttpClient::new(Client::new()),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -523,7 +528,8 @@ mod tests {
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
-        let installer = Installer::new(runtime, github, Client::new(), extractor);
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, extractor);
         let result = installer.install(&repo, None, None).await;
         assert!(result.is_ok());
     }
@@ -541,10 +547,11 @@ mod tests {
         runtime.expect_exists().returning(|_| true);
         runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"https://api.github.com","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[]}"#.into()));
 
+        let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(
             runtime,
             MockGetReleases::new(),
-            Client::new(),
+            http_client,
             MockExtractor::new(),
         );
         let (meta, _) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
@@ -589,7 +596,8 @@ mod tests {
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
-        let installer = Installer::new(runtime, github, Client::new(), MockExtractor::new());
+        let http_client = HttpClient::new(Client::new());
+        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
         installer
             .install(
                 &GitHubRepo {
@@ -621,7 +629,7 @@ mod tests {
         let config = Config {
             runtime,
             github: MockGetReleases::new(),
-            client: Client::new(),
+            http_client: HttpClient::new(Client::new()),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -656,10 +664,11 @@ mod tests {
             name: "o/r".into(),
             ..Default::default()
         };
+        let http_client = HttpClient::new(Client::new());
         Installer::new(
             runtime,
             MockGetReleases::new(),
-            Client::new(),
+            http_client,
             MockExtractor::new(),
         )
         .save_meta(&PathBuf::from("meta.json"), &meta)

@@ -1,14 +1,12 @@
 //! Retry logic for network operations with intelligent error classification.
 
-use anyhow::{anyhow, Result};
-use log::{debug, warn};
 use reqwest::StatusCode;
 
 /// Maximum number of retry attempts for network operations.
 pub const MAX_RETRIES: usize = 3;
 
 /// Delay between retry attempts in milliseconds.
-const RETRY_DELAY_MS: u64 = 1000;
+pub const RETRY_DELAY_MS: u64 = 1000;
 
 /// Errors that should not be retried.
 #[derive(Debug)]
@@ -105,61 +103,9 @@ pub fn check_retryable(error: reqwest::Error) -> anyhow::Error {
     }
 }
 
-/// Checks if an anyhow::Error is retryable based on its content.
-fn is_retryable_error(e: &anyhow::Error) -> bool {
-    // Non-retryable errors should not be retried
-    if e.downcast_ref::<NonRetryableError>().is_some() {
-        return false;
-    }
-
-    // Check if this looks like a network error we can retry
-    let error_str = e.to_string();
-    error_str.contains("connection")
-        || error_str.contains("timeout")
-        || error_str.contains("reset")
-        || error_str.contains("broken pipe")
-        || error_str.contains("dns")
-        || error_str.contains("resolve")
-}
-
-/// Executes an async operation with retry logic.
-/// Only retries on network errors and server errors (5xx).
-/// Immediately fails on client errors (4xx) with user-friendly messages.
-pub async fn with_retry<F, Fut, T>(operation_name: &str, operation: F) -> Result<T>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let mut last_error = None;
-
-    for attempt in 1..=MAX_RETRIES {
-        match operation().await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                if !is_retryable_error(&e) {
-                    debug!("{}: non-retryable error: {}", operation_name, e);
-                    return Err(e);
-                }
-
-                if attempt < MAX_RETRIES {
-                    warn!(
-                        "{}: attempt {}/{} failed ({}), retrying in {}ms...",
-                        operation_name, attempt, MAX_RETRIES, e, RETRY_DELAY_MS
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
-                }
-                last_error = Some(e);
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("{}: failed after {} attempts", operation_name, MAX_RETRIES)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_non_retryable_error_display() {
@@ -177,117 +123,11 @@ mod tests {
         assert!(err.to_string().contains("forbidden"));
     }
 
-    #[tokio::test]
-    async fn test_with_retry_success() {
-        let result = with_retry("test", || async { Ok::<_, anyhow::Error>(42) }).await;
-        assert_eq!(result.unwrap(), 42);
-    }
-
-    #[tokio::test]
-    async fn test_with_retry_immediate_failure_on_non_retryable() {
-        let start = std::time::Instant::now();
-        let result = with_retry("test", || async {
-            Err::<i32, _>(anyhow::Error::from(NonRetryableError::NotFound(
-                "test".to_string(),
-            )))
-        })
-        .await;
-
-        // Should fail immediately without retries (well under 1 second)
-        assert!(result.is_err());
-        assert!(start.elapsed() < Duration::from_millis(500));
-    }
-
-    #[tokio::test]
-    async fn test_is_retryable_error() {
-        // Non-retryable error
-        let err = anyhow::Error::from(NonRetryableError::NotFound("test".to_string()));
-        assert!(!is_retryable_error(&err));
-
-        // Network-like error (retryable)
-        let err = anyhow::anyhow!("connection reset by peer");
-        assert!(is_retryable_error(&err));
-
-        // Generic error (not retryable)
-        let err = anyhow::anyhow!("some other error");
-        assert!(!is_retryable_error(&err));
-    }
-
     #[test]
     fn test_non_retryable_error_client_error_display() {
         let err = NonRetryableError::ClientError("HTTP 400".to_string());
         assert!(err.to_string().contains("Request error"));
         assert!(err.to_string().contains("HTTP 400"));
-    }
-
-    #[test]
-    fn test_is_retryable_error_timeout() {
-        let err = anyhow::anyhow!("operation timeout occurred");
-        assert!(is_retryable_error(&err));
-    }
-
-    #[test]
-    fn test_is_retryable_error_broken_pipe() {
-        let err = anyhow::anyhow!("broken pipe error");
-        assert!(is_retryable_error(&err));
-    }
-
-    #[test]
-    fn test_is_retryable_error_dns() {
-        let err = anyhow::anyhow!("dns resolution failed");
-        assert!(is_retryable_error(&err));
-    }
-
-    #[test]
-    fn test_is_retryable_error_resolve() {
-        let err = anyhow::anyhow!("could not resolve host");
-        assert!(is_retryable_error(&err));
-    }
-
-    #[tokio::test]
-    async fn test_with_retry_retries_on_network_error() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-
-        let result = with_retry("test", || {
-            let attempts = Arc::clone(&attempts_clone);
-            async move {
-                let count = attempts.fetch_add(1, Ordering::SeqCst);
-                if count < 2 {
-                    Err::<i32, _>(anyhow::anyhow!("connection reset"))
-                } else {
-                    Ok(42)
-                }
-            }
-        })
-        .await;
-
-        assert_eq!(result.unwrap(), 42);
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    }
-
-    #[tokio::test]
-    async fn test_with_retry_exhausts_retries() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let attempts_clone = Arc::clone(&attempts);
-
-        let result = with_retry("test", || {
-            let attempts = Arc::clone(&attempts_clone);
-            async move {
-                attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<i32, _>(anyhow::anyhow!("connection timeout"))
-            }
-        })
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), MAX_RETRIES);
     }
 
     #[tokio::test]
@@ -300,7 +140,10 @@ mod tests {
         let err = response.error_for_status().unwrap_err();
 
         let result = classify_error(&err);
-        assert!(matches!(result, Err(NonRetryableError::AuthenticationFailed(_))));
+        assert!(matches!(
+            result,
+            Err(NonRetryableError::AuthenticationFailed(_))
+        ));
     }
 
     #[tokio::test]
@@ -326,7 +169,10 @@ mod tests {
         let err = response.error_for_status().unwrap_err();
 
         let result = classify_error(&err);
-        assert!(matches!(result, Err(NonRetryableError::RateLimitExceeded(_))));
+        assert!(matches!(
+            result,
+            Err(NonRetryableError::RateLimitExceeded(_))
+        ));
     }
 
     #[tokio::test]

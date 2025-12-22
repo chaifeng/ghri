@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
-use reqwest::Client;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -9,16 +8,17 @@ use crate::{
     cleanup::CleanupContext,
     download::download_file,
     github::{GitHubRepo, Release},
+    http::HttpClient,
     runtime::Runtime,
 };
 
-#[tracing::instrument(skip(runtime, target_dir, repo, release, client, extractor, cleanup_ctx))]
+#[tracing::instrument(skip(runtime, target_dir, repo, release, http_client, extractor, cleanup_ctx))]
 pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
     release: &Release,
-    client: &Client,
+    http_client: &HttpClient,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
@@ -45,7 +45,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
     println!(" downloading {} {}", &repo, release.tag_name);
-    if let Err(e) = download_file(runtime, &release.tarball_url, &temp_file_path, client).await {
+    if let Err(e) = download_file(runtime, &release.tarball_url, &temp_file_path, http_client).await {
         // Clean up target directory on download failure
         debug!("Download failed, cleaning up target directory: {:?}", target_dir);
         let _ = runtime.remove_dir_all(target_dir);
@@ -91,6 +91,7 @@ mod tests {
     use crate::archive::MockExtractor;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
+    use reqwest::Client;
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -133,12 +134,13 @@ mod tests {
         };
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let http_client = HttpClient::new(Client::new());
         ensure_installed(
             &runtime,
             &target,
             &repo,
             &release_with_url,
-            &Client::new(),
+            &http_client,
             &extractor,
             cleanup_ctx,
         )
@@ -189,12 +191,13 @@ mod tests {
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let http_client = HttpClient::new(Client::new());
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &Client::new(),
+            &http_client,
             &extractor,
             cleanup_ctx,
         )
@@ -249,12 +252,13 @@ mod tests {
         let extractor = MockExtractor::new();
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let http_client = HttpClient::new(Client::new());
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &Client::new(),
+            &http_client,
             &extractor,
             cleanup_ctx,
         )
@@ -313,12 +317,13 @@ mod tests {
             .returning(|_| Ok(()));
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let http_client = HttpClient::new(Client::new());
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &Client::new(),
+            &http_client,
             &extractor,
             cleanup_ctx,
         )
@@ -338,6 +343,7 @@ mod tests {
             .returning(|_| true);
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let http_client = HttpClient::new(Client::new());
         let result = ensure_installed(
             &runtime,
             &target,
@@ -346,7 +352,7 @@ mod tests {
                 repo: "r".into(),
             },
             &Release::default(),
-            &Client::new(),
+            &http_client,
             &MockExtractor::new(),
             cleanup_ctx,
         )

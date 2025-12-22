@@ -35,7 +35,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     let installer = Installer::new(
         config.runtime,
         config.github,
-        config.client,
+        config.http_client,
         config.extractor,
     );
     installer.install(&spec.repo, spec.version.as_deref(), config.install_root).await

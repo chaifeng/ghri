@@ -39,7 +39,7 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     let installer = Installer::new(
         config.runtime,
         config.github,
-        config.client,
+        config.http_client,
         config.extractor,
     );
 
@@ -144,6 +144,7 @@ mod tests {
     use super::*;
     use crate::archive::MockExtractor;
     use crate::github::{MockGetReleases, Release, RepoInfo};
+    use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use reqwest::Client;
@@ -267,7 +268,7 @@ mod tests {
         let config = Config {
             runtime,
             github,
-            client: Client::new(),
+            http_client: HttpClient::new(Client::new()),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -297,7 +298,7 @@ mod tests {
         let config = Config {
             runtime,
             github: MockGetReleases::new(),
-            client: Client::new(),
+            http_client: HttpClient::new(Client::new()),
             extractor: MockExtractor::new(),
             install_root: None,
         };
