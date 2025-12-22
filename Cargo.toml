@@ -14,9 +14,8 @@ futures-util = "0.3.31"
 glob = "0.3"
 goblin = "0.10.4"
 log = "0.4.29"
-openssl = { version = "0.10.75", features = ["vendored"] }
 pathdiff = "0.2.3"
-reqwest = { version = "0.12.26", features = ["json"] }
+reqwest = { version = "0.12.26", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tar = "0.4.44"
