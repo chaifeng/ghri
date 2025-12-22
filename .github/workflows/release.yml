@@ -85,14 +85,20 @@ jobs:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
-      - name: Build
+      - name: Build (cross)
+        if: matrix.use_cross
         shell: bash
-        run: |
-          if [ "${{ matrix.use_cross }}" == "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native Unix)
+        if: "!matrix.use_cross && matrix.os != 'windows-latest'"
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifacts (Unix)
         if: matrix.os != 'windows-latest'
