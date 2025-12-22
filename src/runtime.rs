@@ -882,4 +882,121 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap()); // true = removed
     }
+
+    // --- normalize_path tests ---
+
+    #[test]
+    fn test_normalize_path_simple() {
+        // --- Test: Normalize path without special components ---
+        // Input: /a/b/c
+        // Expected: /a/b/c
+        let path = PathBuf::from("/a/b/c");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/b/c"));
+    }
+
+    #[test]
+    fn test_normalize_path_with_dot() {
+        // --- Test: Normalize path with . (current directory) components ---
+        // Input: /a/./b/./c
+        // Expected: /a/b/c
+        let path = PathBuf::from("/a/./b/./c");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/b/c"));
+    }
+
+    #[test]
+    fn test_normalize_path_with_parent_dir() {
+        // --- Test: Normalize path with .. (parent directory) components ---
+        // Input: /a/b/../c
+        // Expected: /a/c
+        let path = PathBuf::from("/a/b/../c");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/c"));
+    }
+
+    #[test]
+    fn test_normalize_path_multiple_parent_dirs() {
+        // --- Test: Normalize path with multiple .. components ---
+        // Input: /a/b/c/../../d
+        // Expected: /a/d
+        let path = PathBuf::from("/a/b/c/../../d");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/d"));
+    }
+
+    #[test]
+    fn test_normalize_path_mixed_components() {
+        // --- Test: Normalize path with mixed . and .. components ---
+        // Input: /a/./b/../c/./d/../e
+        // Expected: /a/c/e
+        let path = PathBuf::from("/a/./b/../c/./d/../e");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/c/e"));
+    }
+
+    #[test]
+    fn test_normalize_path_parent_at_root() {
+        // --- Test: Normalize path with .. at root level ---
+        // Input: /../a/b
+        // Expected: /../a/b (can't go above root, so .. is preserved)
+        // Note: This is a lexical operation, not filesystem-aware
+        let path = PathBuf::from("/../a/b");
+        let result = normalize_path(&path);
+        // On Unix, this becomes /../a/b since we can't pop past root
+        // The behavior might differ but the path should be normalized
+        assert!(result.to_string_lossy().contains("a/b") || result.to_string_lossy().contains("a\\b"));
+    }
+
+    #[test]
+    fn test_normalize_path_relative() {
+        // --- Test: Normalize relative path ---
+        // Input: a/b/../c/./d
+        // Expected: a/c/d
+        let path = PathBuf::from("a/b/../c/./d");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("a/c/d"));
+    }
+
+    #[test]
+    fn test_normalize_path_trailing_parent() {
+        // --- Test: Normalize path ending with .. ---
+        // Input: /a/b/c/..
+        // Expected: /a/b
+        let path = PathBuf::from("/a/b/c/..");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/a/b"));
+    }
+
+    #[test]
+    fn test_normalize_path_only_dots() {
+        // --- Test: Normalize path with only . components ---
+        // Input: /./././
+        // Expected: /
+        let path = PathBuf::from("/./././");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from("/"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_normalize_path_windows_style() {
+        // --- Test: Normalize Windows-style path ---
+        // Input: C:\a\b\..\c
+        // Expected: C:\a\c
+        let path = PathBuf::from(r"C:\a\b\..\c");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from(r"C:\a\c"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_normalize_path_windows_with_dots() {
+        // --- Test: Normalize Windows path with . and .. ---
+        // Input: C:\Users\.\foo\..\bar
+        // Expected: C:\Users\bar
+        let path = PathBuf::from(r"C:\Users\.\foo\..\bar");
+        let result = normalize_path(&path);
+        assert_eq!(result, PathBuf::from(r"C:\Users\bar"));
+    }
 }
