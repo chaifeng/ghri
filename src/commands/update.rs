@@ -177,15 +177,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_function() {
+        // Test that update() function works with empty install root
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
-        runtime.expect_exists().returning(|_| false); // root empty
+
+        // --- Setup ---
+
+        // Install root doesn't exist -> no packages to update
+        runtime.expect_exists().returning(|_| false);
+
+        // --- Execute ---
 
         update(runtime, None, None).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_update_happy_path() {
+        // Test updating packages: fetches new metadata and detects available updates
+
         let mut runtime = MockRuntime::new();
         #[cfg(not(windows))]
         let root = PathBuf::from("/home/user/.ghri");
@@ -193,26 +203,38 @@ mod tests {
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
         configure_runtime_basics(&mut runtime);
 
-        // Find one package
+        // --- 1. Find Installed Packages ---
+
+        // Directory exists: ~/.ghri -> true
         runtime
             .expect_exists()
             .with(eq(root.clone()))
             .returning(|_| true);
+
+        // Read dir ~/.ghri -> [o] (one owner)
         runtime
             .expect_read_dir()
             .with(eq(root.clone()))
             .returning(|p| Ok(vec![p.join("o")]));
-        runtime.expect_is_dir().returning(|_| true); // owner/repo are dirs
+
+        // Is dir checks for owner/repo traversal
+        runtime.expect_is_dir().returning(|_| true);
+
+        // Read dir ~/.ghri/o -> [r] (one repo)
         runtime
             .expect_read_dir()
             .with(eq(root.join("o")))
             .returning(|p| Ok(vec![p.join("r")]));
+
+        // File exists: ~/.ghri/o/r/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(root.join("o/r/meta.json")))
             .returning(|_| true);
 
-        // Load meta
+        // --- 2. Load Current Metadata ---
+
+        // Read meta.json -> current version v1
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v1".into(),
@@ -231,9 +253,12 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Update check calls fetch_meta -> github
+        // --- 3. Fetch New Metadata from GitHub ---
+
         let mut github = MockGetReleases::new();
         github.expect_api_url().return_const("api".to_string());
+
+        // Get repo info
         github.expect_get_repo_info_at().returning(|_, _| {
             Ok(RepoInfo {
                 updated_at: "new".into(),
@@ -245,25 +270,30 @@ mod tests {
                 }
             })
         });
-        // Return a new version v2
+
+        // Get releases -> v2 is available (newer than installed v1)
         github.expect_get_releases_at().returning(|_, _| {
             Ok(vec![
                 Release {
-                    tag_name: "v2".into(),
+                    tag_name: "v2".into(),                         // New version!
                     published_at: Some("2024".into()),
                     ..Default::default()
                 },
                 Release {
-                    tag_name: "v1".into(),
+                    tag_name: "v1".into(),                         // Currently installed
                     published_at: Some("2023".into()),
                     ..Default::default()
                 },
             ])
         });
 
-        // save_meta called twice (one for update metadata)
+        // --- 4. Save Updated Metadata ---
+
+        // Write and rename meta.json
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
 
         let config = Config {
             runtime,
@@ -277,6 +307,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_no_packages() {
+        // Test that update shows "No packages installed" when directory is empty
+
         let mut runtime = MockRuntime::new();
         #[cfg(not(windows))]
         let root = PathBuf::from("/home/user/.ghri");
@@ -284,16 +316,21 @@ mod tests {
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
         configure_runtime_basics(&mut runtime);
 
-        // update calls default_install_root (mocked by basics) -> /home/user/.ghri
-        // then find_all_packages checks exists and read_dir
+        // --- Setup ---
+
+        // Directory exists: ~/.ghri -> true
         runtime
             .expect_exists()
             .with(eq(root.clone()))
             .returning(|_| true);
+
+        // Read dir ~/.ghri -> empty (no packages)
         runtime
             .expect_read_dir()
             .with(eq(root.clone()))
             .returning(|_| Ok(vec![]));
+
+        // --- Execute ---
 
         let config = Config {
             runtime,

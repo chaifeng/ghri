@@ -182,9 +182,18 @@ mod tests {
 
     #[test]
     fn test_link_status_display() {
+        // Test the Display trait for LinkStatus enum
+
+        // --- Ok status displays empty string ---
         assert_eq!(format!("{}", LinkStatus::Ok), "");
+
+        // --- Missing status ---
         assert_eq!(format!("{}", LinkStatus::Missing), " [missing]");
+
+        // --- Not a symlink status ---
         assert_eq!(format!("{}", LinkStatus::NotSymlink), " [not a symlink]");
+
+        // --- Wrong target status includes the actual target path ---
         assert_eq!(
             format!("{}", LinkStatus::WrongTarget(PathBuf::from("/other/path"))),
             " [wrong target: /other/path]"
@@ -193,18 +202,29 @@ mod tests {
 
     #[test]
     fn test_check_link_status_missing() {
+        // Test that check_link_status returns Missing when symlink doesn't exist
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let link_dest = PathBuf::from("/usr/local/bin/tool");
         let expected_prefix = PathBuf::from("/root/o/r/current");
 
+        // --- Check Link Status ---
+
+        // File exists: /usr/local/bin/tool -> false (doesn't exist)
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| false);
+
+        // Is symlink: /usr/local/bin/tool -> false
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let status = check_link_status(&runtime, &link_dest, &expected_prefix);
         assert_eq!(status, LinkStatus::Missing);
@@ -212,20 +232,29 @@ mod tests {
 
     #[test]
     fn test_check_link_status_not_symlink() {
+        // Test that check_link_status returns NotSymlink when path is a regular file
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let link_dest = PathBuf::from("/usr/local/bin/tool");
         let expected_prefix = PathBuf::from("/root/o/r/current");
 
-        // First check: exists returns true
+        // --- Check Link Status ---
+
+        // File exists: /usr/local/bin/tool -> true (exists)
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
-        // First is_symlink check in the first condition
+
+        // Is symlink: /usr/local/bin/tool -> false (it's a regular file!)
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let status = check_link_status(&runtime, &link_dest, &expected_prefix);
         assert_eq!(status, LinkStatus::NotSymlink);
@@ -233,22 +262,35 @@ mod tests {
 
     #[test]
     fn test_check_link_status_read_link_error() {
+        // Test that check_link_status returns Missing when read_link fails
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let link_dest = PathBuf::from("/usr/local/bin/tool");
         let expected_prefix = PathBuf::from("/root/o/r/current");
 
+        // --- Check Link Status ---
+
+        // File exists: /usr/local/bin/tool -> true
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
+
+        // Is symlink: /usr/local/bin/tool -> true
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
+
+        // Read link: /usr/local/bin/tool -> ERROR (unreadable)
         runtime
             .expect_read_link()
             .with(eq(link_dest.clone()))
             .returning(|_| Err(anyhow::anyhow!("not found")));
+
+        // --- Execute & Verify ---
 
         let status = check_link_status(&runtime, &link_dest, &expected_prefix);
         assert_eq!(status, LinkStatus::Missing);
@@ -256,34 +298,59 @@ mod tests {
 
     #[test]
     fn test_print_links_empty() {
+        // Test that print_links does nothing when links array is empty
+
         let runtime = MockRuntime::new();
+
+        // --- Setup ---
         let links: Vec<LinkRule> = vec![];
         let expected_prefix = PathBuf::from("/root/o/r/current");
 
-        // Should return without printing anything
+        // --- Execute ---
+
+        // Should return immediately without printing anything
         print_links(&runtime, &links, &expected_prefix, Some("Header"));
     }
 
     #[test]
     fn test_print_versioned_links_empty() {
+        // Test that print_versioned_links does nothing when links array is empty
+
         let runtime = MockRuntime::new();
+
+        // --- Setup ---
         let links: Vec<VersionedLink> = vec![];
         let package_dir = PathBuf::from("/root/o/r");
 
-        // Should return without printing anything
+        // --- Execute ---
+
+        // Should return immediately without printing anything
         print_versioned_links(&runtime, &links, &package_dir, Some("Header"));
     }
 
     #[test]
     fn test_links_package_not_installed() {
+        // Test that links command fails when package is not installed
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
         runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+
+        // --- 2. Check Package Exists ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> false (not installed!)
         runtime
             .expect_exists()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let result = links(runtime, "owner/repo", None);
         assert!(result.is_err());
@@ -292,21 +359,34 @@ mod tests {
 
     #[test]
     fn test_links_no_link_rules() {
+        // Test that links command shows "No link rules" message when package has no links
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
         runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+
+        // --- 2. Check Package Exists ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
+        // --- 3. Load Metadata ---
+
+        // Read meta.json -> package with NO link rules
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1.0.0".into(),
-            links: vec![],
-            versioned_links: vec![],
+            links: vec![],              // No links!
+            versioned_links: vec![],    // No versioned links!
             ..Default::default()
         };
         let meta_json = serde_json::to_string(&meta).unwrap();
@@ -315,20 +395,31 @@ mod tests {
             .with(eq(meta_path))
             .returning(move |_| Ok(meta_json.clone()));
 
+        // --- Execute ---
+
         let result = links(runtime, "owner/repo", None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_links_with_custom_install_root() {
-        let mut runtime = MockRuntime::new();
-        let install_root = PathBuf::from("/custom/root");
-        let meta_path = install_root.join("owner/repo/meta.json");
+        // Test that links command uses custom install root when provided
 
+        let mut runtime = MockRuntime::new();
+
+        // --- Setup Paths ---
+        let install_root = PathBuf::from("/custom/root");
+        let meta_path = install_root.join("owner/repo/meta.json");  // /custom/root/owner/repo/meta.json
+
+        // --- 1. Check Package Exists ---
+
+        // File exists: /custom/root/owner/repo/meta.json -> false (not installed)
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let result = links(runtime, "owner/repo", Some(install_root));
         assert!(result.is_err());

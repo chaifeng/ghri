@@ -89,6 +89,12 @@ mod tests {
 
     #[test]
     fn test_get_target_dir() {
+        // Test that get_target_dir returns correct path: {install_root}/{owner}/{repo}/{version}
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -97,10 +103,12 @@ mod tests {
             tag_name: "v1".into(),
             ..Default::default()
         };
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
+        // --- Execute ---
         let target_dir = get_target_dir(&runtime, &repo, &release, None).unwrap();
+
+        // --- Verify ---
+        // With default install root (~/.ghri), path should be: ~/.ghri/o/r/v1
         #[cfg(not(windows))]
         assert_eq!(target_dir, PathBuf::from("/home/user/.ghri/o/r/v1"));
         #[cfg(windows)]
@@ -112,6 +120,9 @@ mod tests {
 
     #[test]
     fn test_get_target_dir_with_custom_root() {
+        // Test that get_target_dir uses custom install root when provided
+
+        // --- Setup ---
         let repo = GitHubRepo {
             owner: "o".into(),
             repo: "r".into(),
@@ -120,30 +131,56 @@ mod tests {
             tag_name: "v1".into(),
             ..Default::default()
         };
-        let runtime = MockRuntime::new(); // Not used
+        let runtime = MockRuntime::new(); // No expectations needed - custom root bypasses defaults
 
+        // --- Execute ---
         let target_dir =
             get_target_dir(&runtime, &repo, &release, Some(PathBuf::from("/custom"))).unwrap();
 
+        // --- Verify ---
+        // With custom install root /custom, path should be: /custom/o/r/v1
         assert_eq!(target_dir, PathBuf::from("/custom/o/r/v1"));
     }
 
     #[test]
     fn test_default_install_root_no_home() {
+        // Test that default_install_root fails when home directory is not available
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup ---
+
+        // Not privileged user
         runtime.expect_is_privileged().returning(|| false);
+
+        // Home directory not available -> None
         runtime.expect_home_dir().returning(|| None);
 
+        // --- Execute & Verify ---
+
+        // Should fail because home directory is required for non-privileged user
         let result = default_install_root(&runtime);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_default_install_root_privileged() {
+        // Test that privileged user gets system install root instead of home directory
+
         let mut runtime = MockRuntime::new();
+
+        // --- Setup ---
+
+        // Privileged user (e.g., root)
         runtime.expect_is_privileged().returning(|| true);
 
+        // --- Execute ---
+
         let root = default_install_root(&runtime).unwrap();
+
+        // --- Verify ---
+
+        // Privileged users get system-wide install directory
         #[cfg(target_os = "macos")]
         assert_eq!(root, PathBuf::from("/opt/ghri"));
         #[cfg(all(unix, not(target_os = "macos")))]

@@ -59,27 +59,55 @@ impl<R: Runtime> Config<R, GitHub, ArchiveExtractor> {
 mod tests {
     use super::*;
     use crate::runtime::MockRuntime;
-    use mockito::Server;
+    use mockito::{Matcher, Server};
 
-    // when GITHUB_TOKEN is set, Config::new should use it for authentication
-    #[tokio::test]
-    async fn test_config_new_with_github_token() {
-        let token = "test_token";
+    /// Helper function to verify Authorization header behavior
+    /// - `token`: Some(token) to test with GITHUB_TOKEN set, None to test without
+    async fn verify_authorization_header(token: Option<&str>) {
+        // --- Setup MockRuntime ---
+
         let mut runtime = MockRuntime::new();
-        runtime.expect_env_var()
+        let token_clone = token.map(|t| t.to_string());
+
+        runtime
+            .expect_env_var()
             .with(mockall::predicate::eq("GITHUB_TOKEN"))
-            .returning(move |_| Ok(token.to_string()));
+            .returning(move |_| token_clone.clone().ok_or(std::env::VarError::NotPresent));
+
+        // --- Create Mock Server ---
 
         let mut server = Server::new_async().await;
+
+        let expected_header = match token {
+            Some(t) => Matcher::Exact(format!("Bearer {}", t)),
+            None => Matcher::Missing,
+        };
+
         let mock = server
             .mock("GET", "/")
-            .match_header("Authorization", format!("Bearer {}", token).as_str())
+            .match_header("Authorization", expected_header)
             .create();
+
+        // --- Execute ---
 
         let config = Config::new(runtime, None, None).unwrap();
         let client = config.http_client.inner();
         let _ = client.get(server.url()).send().await;
 
+        // --- Verify ---
+
         mock.assert();
+    }
+
+    #[tokio::test]
+    async fn test_config_new_with_github_token() {
+        // Test that GITHUB_TOKEN is used for authentication when set
+        verify_authorization_header(Some("test_token")).await;
+    }
+
+    #[tokio::test]
+    async fn test_config_new_without_github_token() {
+        // Test that no Authorization header is sent when GITHUB_TOKEN is not set
+        verify_authorization_header(None).await;
     }
 }

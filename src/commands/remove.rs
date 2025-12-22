@@ -252,28 +252,35 @@ mod tests {
 
     #[test]
     fn test_remove_package() {
+        // Test removing an entire package (directory and all links)
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
+        let owner_dir = root.join("owner");                      // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo");                // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json");           // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> true
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Meta exists
+        // --- 2. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Load meta with one link
+        // Read meta.json -> package with one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -287,19 +294,25 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Remove symlink if target is under package directory
+        // --- 3. Remove External Symlinks ---
+
+        // Remove symlink /usr/local/bin/tool if it points to package directory
         runtime
             .expect_remove_symlink_if_target_under()
             .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
             .returning(|_, _, _| Ok(true));
 
-        // Remove package directory
+        // --- 4. Remove Package Directory ---
+
+        // Remove /home/user/.ghri/owner/repo
         runtime
             .expect_remove_dir_all()
             .with(eq(package_dir.clone()))
             .returning(|_| Ok(()));
 
-        // Check if owner directory is empty
+        // --- 5. Cleanup Empty Owner Directory ---
+
+        // Check if /home/user/.ghri/owner is empty -> yes
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -307,11 +320,15 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![]));  // Empty
+            .returning(|_| Ok(vec![]));  // Empty!
+
+        // Remove empty owner directory /home/user/.ghri/owner
         runtime
             .expect_remove_dir()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
+
+        // --- Execute ---
 
         let result = remove(runtime, "owner/repo", false, Some(root));
         assert!(result.is_ok());
@@ -319,30 +336,37 @@ mod tests {
 
     #[test]
     fn test_remove_specific_version() {
+        // Test removing a specific version (not the current version)
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let version_dir = package_dir.join("v1");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
+        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
+        let version_dir = package_dir.join("v1");                 // /home/user/.ghri/owner/repo/v1
+        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> true
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Meta exists
+        // --- 2. Load Metadata ---
+
+        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Load meta
+        // Read meta.json -> current version is v2 (not v1 being removed)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v2".into(),  // Different from version being removed
@@ -356,13 +380,17 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Version dir exists
+        // --- 3. Check Version Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo/v1 -> true
         runtime
             .expect_exists()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
-        // Check current symlink - points to v2, not v1
+        // --- 4. Check if v1 is Current Version ---
+
+        // Read current symlink: -> v2 (not v1, so safe to remove)
         runtime
             .expect_is_symlink()
             .with(eq(current_link.clone()))
@@ -372,7 +400,9 @@ mod tests {
             .with(eq(current_link.clone()))
             .returning(|_| Ok(PathBuf::from("v2")));
 
-        // Link check - doesn't point to v1
+        // --- 5. Check Link Target ---
+
+        // Link /usr/local/bin/tool points to v2, not v1
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
@@ -382,13 +412,17 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(move |_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")));
 
-        // Remove version directory
+        // --- 6. Remove Version Directory ---
+
+        // Remove /home/user/.ghri/owner/repo/v1
         runtime
             .expect_remove_dir_all()
             .with(eq(version_dir.clone()))
             .returning(|_| Ok(()));
 
-        // Check if owner directory is empty
+        // --- 7. Cleanup Check ---
+
+        // Check owner directory still has content (not empty)
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -398,34 +432,43 @@ mod tests {
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(vec![PathBuf::from("repo")]));  // Not empty
 
+        // --- Execute ---
+
         let result = remove(runtime, "owner/repo@v1", false, Some(root));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_remove_current_version_requires_force() {
+        // Test that removing current version requires --force flag
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
-        let version_dir = package_dir.join("v1");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
+        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
+        let version_dir = package_dir.join("v1");                 // /home/user/.ghri/owner/repo/v1
+        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
 
-        // Package exists
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> true
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Meta exists
+        // --- 2. Load Metadata ---
+
+        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Load meta
+        // Read meta.json -> current version is v1 (same as being removed!)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -435,13 +478,17 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Version dir exists
+        // --- 3. Check Version Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo/v1 -> true
         runtime
             .expect_exists()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
-        // Current symlink points to v1
+        // --- 4. Check if v1 is Current Version ---
+
+        // Current symlink points to v1 (same as being removed!)
         runtime
             .expect_is_symlink()
             .with(eq(current_link.clone()))
@@ -451,7 +498,9 @@ mod tests {
             .with(eq(current_link.clone()))
             .returning(|_| Ok(PathBuf::from("v1")));
 
-        // Should fail without --force
+        // --- Execute & Verify ---
+
+        // Should fail without --force since v1 is the current version
         let result = remove(runtime, "owner/repo@v1", false, Some(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--force"));
@@ -459,17 +508,24 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent_package_fails() {
+        // Test that remove fails when package is not installed
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
+        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
 
-        // Package does not exist
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> false (not installed!)
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| false);
+
+        // --- Execute & Verify ---
 
         let result = remove(runtime, "owner/repo", false, Some(root));
         assert!(result.is_err());
@@ -479,28 +535,34 @@ mod tests {
     #[test]
     fn test_remove_package_link_points_to_wrong_location() {
         // Test that links pointing outside the package directory are not removed
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
+        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> true
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Meta exists
+        // --- 2. Load Metadata ---
+
+        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Load meta with one link
+        // Read meta.json -> package with one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -514,19 +576,24 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Link points to different package, should return Ok(false) - skipped
+        // --- 3. Try to Remove Link (Points to Different Package) ---
+
+        // Link /usr/local/bin/tool points to different package -> Ok(false) (skipped)
         runtime
             .expect_remove_symlink_if_target_under()
             .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false));
+            .returning(|_, _, _| Ok(false));  // Skipped - wrong target
 
-        // Remove package directory
+        // --- 4. Remove Package Directory ---
+
+        // Remove /home/user/.ghri/owner/repo
         runtime
             .expect_remove_dir_all()
             .with(eq(package_dir.clone()))
             .returning(|_| Ok(()));
 
-        // Check if owner directory is empty
+        // --- 5. Cleanup Empty Owner Directory ---
+
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -539,6 +606,8 @@ mod tests {
             .expect_remove_dir()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
+
+        // --- Execute ---
 
         let result = remove(runtime, "owner/repo", false, Some(root));
         assert!(result.is_ok());
@@ -546,29 +615,35 @@ mod tests {
 
     #[test]
     fn test_remove_package_link_not_symlink() {
-        // Test that regular files are not removed
+        // Test that regular files (not symlinks) are not removed
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
+        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Check Package Exists ---
+
+        // Directory exists: /home/user/.ghri/owner/repo -> true
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Meta exists
+        // --- 2. Load Metadata ---
+
+        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Load meta with one link
+        // Read meta.json -> package with one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -582,19 +657,24 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Link path is not a symlink, should return Ok(false) - skipped
+        // --- 3. Try to Remove Link (Not a Symlink) ---
+
+        // /usr/local/bin/tool is not a symlink -> Ok(false) (skipped)
         runtime
             .expect_remove_symlink_if_target_under()
             .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false));
+            .returning(|_, _, _| Ok(false));  // Skipped - not a symlink
 
-        // Remove package directory
+        // --- 4. Remove Package Directory ---
+
+        // Remove /home/user/.ghri/owner/repo
         runtime
             .expect_remove_dir_all()
             .with(eq(package_dir.clone()))
             .returning(|_| Ok(()));
 
-        // Check if owner directory is empty
+        // --- 5. Cleanup Empty Owner Directory ---
+
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -607,6 +687,8 @@ mod tests {
             .expect_remove_dir()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
+
+        // --- Execute ---
 
         let result = remove(runtime, "owner/repo", false, Some(root));
         assert!(result.is_ok());

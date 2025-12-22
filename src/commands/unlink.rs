@@ -205,19 +205,25 @@ mod tests {
 
     #[test]
     fn test_unlink_removes_single_rule() {
+        // Test that unlink removes a single symlink and its rule from meta.json
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta with one link rule
+        // Read meta.json: has one link rule pointing to /usr/local/bin/tool
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -231,47 +237,61 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Symlink exists
+        // --- 2. Check Symlink Status ---
+
+        // File exists: /usr/local/bin/tool -> true
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
+        // Is symlink: /usr/local/bin/tool -> true
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Remove symlink
+        // --- 3. Remove Symlink ---
+
+        // Remove symlink: /usr/local/bin/tool
         runtime
             .expect_remove_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(()));
 
-        // Save meta
+        // --- 4. Save Updated Metadata ---
+
+        // Write and rename meta.json (rule removed)
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
+        // --- Execute ---
         let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_unlink_all_rules() {
+        // Test that unlink --all removes all symlinks and rules
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
         let link1 = PathBuf::from("/usr/local/bin/tool1");
         let link2 = PathBuf::from("/usr/local/bin/tool2");
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta with two link rules
+        // Read meta.json: has two link rules
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -285,7 +305,8 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Both symlinks exist
+        // --- 2. Remove First Symlink: /usr/local/bin/tool1 ---
+
         runtime
             .expect_exists()
             .with(eq(link1.clone()))
@@ -298,6 +319,8 @@ mod tests {
             .expect_remove_symlink()
             .with(eq(link1.clone()))
             .returning(|_| Ok(()));
+
+        // --- 3. Remove Second Symlink: /usr/local/bin/tool2 ---
 
         runtime
             .expect_exists()
@@ -312,29 +335,39 @@ mod tests {
             .with(eq(link2.clone()))
             .returning(|_| Ok(()));
 
-        // Save meta
+        // --- 4. Save Updated Metadata ---
+
+        // Write and rename meta.json (all rules removed)
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
+        // --- Execute ---
+        // Use --all flag (dest=None, all=true)
         let result = unlink(runtime, "owner/repo", None, true, Some(root));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_unlink_nonexistent_symlink_removes_rule() {
+        // Test that unlink removes the rule even if the symlink file doesn't exist
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta
+        // Read meta.json: has one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -348,41 +381,55 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Symlink does not exist
+        // --- 2. Check Symlink Status ---
+
+        // File exists: /usr/local/bin/tool -> false (symlink already deleted!)
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| false);
 
+        // Is symlink: /usr/local/bin/tool -> false
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| false);
 
-        // Save meta (rule should still be removed)
+        // (No remove_symlink call since file doesn't exist)
+
+        // --- 3. Save Updated Metadata ---
+
+        // Write and rename meta.json (rule still removed)
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
+        // --- Execute ---
         let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_unlink_no_matching_rule_fails() {
+        // Test that unlink fails when the specified destination doesn't match any rule
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
         let existing_link = PathBuf::from("/usr/local/bin/tool");
         let nonexistent_link = PathBuf::from("/other/path/different-tool");
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta with different link
+        // Read meta.json: has one rule for /usr/local/bin/tool (different from requested)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -396,24 +443,33 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
+        // --- Execute & Verify ---
+
+        // Request unlink for /other/path/different-tool which doesn't exist in rules
         let result = unlink(runtime, "owner/repo", Some(nonexistent_link), false, Some(root));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_unlink_requires_dest_or_all() {
+        // Test that unlink fails when neither destination nor --all is specified
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta
+        // Read meta.json: has one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -427,36 +483,47 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // Neither dest nor all specified
+        // --- Execute & Verify ---
+
+        // Neither dest nor --all specified -> should fail
         let result = unlink(runtime, "owner/repo", None, false, Some(root));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_unlink_empty_links() {
+        // Test that unlink with --all succeeds gracefully when there are no link rules
+
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
 
-        // Package exists
+        // --- 1. Load Metadata ---
+
+        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
-            .with(eq(root.join("owner/repo/meta.json")))
+            .with(eq(meta_path))
             .returning(|_| true);
 
-        // Load meta with no links
+        // Read meta.json: has NO link rules (empty)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
-            links: vec![],
+            links: vec![],  // Empty!
             ..Default::default()
         };
         runtime
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
+        // --- Execute & Verify ---
+
+        // Should succeed with message "No link rules" (no error)
         let result = unlink(runtime, "owner/repo", None, true, Some(root));
-        assert!(result.is_ok()); // Should succeed with message "No link rules"
+        assert!(result.is_ok());
     }
 }
