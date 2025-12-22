@@ -354,4 +354,317 @@ mod tests {
         let result = show(runtime, "owner/repo", Some(root));
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_show_with_releases() {
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta with releases
+        use crate::package::MetaRelease;
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            releases: vec![
+                MetaRelease {
+                    version: "v1.1.0".into(),
+                    published_at: Some("2023-02-01T00:00:00Z".into()),
+                    ..Default::default()
+                },
+                MetaRelease {
+                    version: "v1.0.0".into(),
+                    published_at: Some("2023-01-01T00:00:00Z".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Current symlink exists
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v1.0.0")));
+
+        // Read directory for versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(move |_| {
+                Ok(vec![
+                    PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/current"),
+                ])
+            });
+
+        // Check if entries are directories
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .returning(|_| false);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/current")))
+            .returning(|_| false);
+
+        let result = show(runtime, "owner/repo", Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_no_current_symlink() {
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Current symlink does NOT exist
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| false);
+
+        // Read directory for versions - empty
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(move |_| {
+                Ok(vec![
+                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
+                ])
+            });
+
+        // Check if entry is directory
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .returning(|_| false);
+
+        let result = show(runtime, "owner/repo", Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_multiple_versions() {
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v2.0.0".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Current symlink exists
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        // Read directory for versions - multiple versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(move |_| {
+                Ok(vec![
+                    PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/current"),
+                ])
+            });
+
+        // Check if entries are directories
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .returning(|_| false);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/current")))
+            .returning(|_| false);
+
+        let result = show(runtime, "owner/repo", Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_with_versioned_links() {
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+        let link_dest = PathBuf::from("/usr/local/bin/tool-v1");
+
+        // Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // Meta exists
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Load meta with versioned links
+        use crate::package::VersionedLink;
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v2.0.0".into(),
+            versioned_links: vec![VersionedLink {
+                version: "v1.0.0".into(),
+                dest: link_dest.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // Current symlink exists
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        // Read directory for versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(move |_| {
+                Ok(vec![
+                    PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
+                ])
+            });
+
+        // Check if entries are directories
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .returning(|_| false);
+
+        // Check versioned link status
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0/tool")));
+
+        let result = show(runtime, "owner/repo", Some(root));
+        assert!(result.is_ok());
+    }
 }

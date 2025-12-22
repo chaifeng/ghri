@@ -173,3 +173,165 @@ pub fn links<R: Runtime>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::MockRuntime;
+    use mockall::predicate::*;
+
+    #[test]
+    fn test_link_status_display() {
+        assert_eq!(format!("{}", LinkStatus::Ok), "");
+        assert_eq!(format!("{}", LinkStatus::Missing), " [missing]");
+        assert_eq!(format!("{}", LinkStatus::NotSymlink), " [not a symlink]");
+        assert_eq!(
+            format!("{}", LinkStatus::WrongTarget(PathBuf::from("/other/path"))),
+            " [wrong target: /other/path]"
+        );
+    }
+
+    #[test]
+    fn test_check_link_status_missing() {
+        let mut runtime = MockRuntime::new();
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let expected_prefix = PathBuf::from("/root/o/r/current");
+
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| false);
+
+        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
+        assert_eq!(status, LinkStatus::Missing);
+    }
+
+    #[test]
+    fn test_check_link_status_not_symlink() {
+        let mut runtime = MockRuntime::new();
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let expected_prefix = PathBuf::from("/root/o/r/current");
+
+        // First check: exists returns true
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        // First is_symlink check in the first condition
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| false);
+
+        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
+        assert_eq!(status, LinkStatus::NotSymlink);
+    }
+
+    #[test]
+    fn test_check_link_status_read_link_error() {
+        let mut runtime = MockRuntime::new();
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let expected_prefix = PathBuf::from("/root/o/r/current");
+
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Err(anyhow::anyhow!("not found")));
+
+        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
+        assert_eq!(status, LinkStatus::Missing);
+    }
+
+    #[test]
+    fn test_print_links_empty() {
+        let runtime = MockRuntime::new();
+        let links: Vec<LinkRule> = vec![];
+        let expected_prefix = PathBuf::from("/root/o/r/current");
+
+        // Should return without printing anything
+        print_links(&runtime, &links, &expected_prefix, Some("Header"));
+    }
+
+    #[test]
+    fn test_print_versioned_links_empty() {
+        let runtime = MockRuntime::new();
+        let links: Vec<VersionedLink> = vec![];
+        let package_dir = PathBuf::from("/root/o/r");
+
+        // Should return without printing anything
+        print_versioned_links(&runtime, &links, &package_dir, Some("Header"));
+    }
+
+    #[test]
+    fn test_links_package_not_installed() {
+        let mut runtime = MockRuntime::new();
+
+        runtime.expect_is_privileged().returning(|| false);
+        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
+            .returning(|_| false);
+
+        let result = links(runtime, "owner/repo", None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not installed"));
+    }
+
+    #[test]
+    fn test_links_no_link_rules() {
+        let mut runtime = MockRuntime::new();
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        runtime.expect_is_privileged().returning(|| false);
+        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            links: vec![],
+            versioned_links: vec![],
+            ..Default::default()
+        };
+        let meta_json = serde_json::to_string(&meta).unwrap();
+        runtime
+            .expect_read_to_string()
+            .with(eq(meta_path))
+            .returning(move |_| Ok(meta_json.clone()));
+
+        let result = links(runtime, "owner/repo", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_links_with_custom_install_root() {
+        let mut runtime = MockRuntime::new();
+        let install_root = PathBuf::from("/custom/root");
+        let meta_path = install_root.join("owner/repo/meta.json");
+
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| false);
+
+        let result = links(runtime, "owner/repo", Some(install_root));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not installed"));
+    }
+}
