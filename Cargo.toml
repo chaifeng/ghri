@@ -1,6 +1,6 @@
 [package]
 name = "ghri"
-version = "0.1.0"
+version = "0.0.0-dev" # Actual version is determined by git tags at build time
 edition = "2024"
 
 [dependencies]

@@ -7,36 +7,39 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
 
-    let cargo_version = env!("CARGO_PKG_VERSION");
-
     let output = Command::new("git")
         .args(["describe", "--tags", "--always", "--dirty"])
         .output();
-    let now = SystemTime::now();
-    let secs = now
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs();
-    let git_desc = match output {
+
+    let version = match output {
         Ok(o) if o.status.success() => {
             let git_output = String::from_utf8(o.stdout)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let git_version = git_output
-                .strip_prefix(cargo_version)
-                .unwrap_or(&git_output)
-                .to_string();
-            match git_version {
-                git_version if git_version.ends_with("-dirty") => {
-                    format!("-{}-{}", git_version, secs)
-                }
-                git_version if git_version.is_empty() => "".to_string(),
-                _ => format!("-{}", git_version),
+
+            // Strip 'v' prefix if present (e.g., "v1.0.0" -> "1.0.0")
+            let version = git_output.strip_prefix('v').unwrap_or(&git_output);
+
+            if version.ends_with("-dirty") || version.is_empty() {
+                // Dirty working tree or no output: append timestamp
+                format!("{}-{}", version, timestamp())
+            } else {
+                version.to_string()
             }
         }
-        _ => format!("-unknown-{}", secs),
+        _ => {
+            // Git command failed: use timestamp as version
+            format!("0.0.0-unknown-{}", timestamp())
+        }
     };
 
-    println!("cargo:rustc-env=GHRI_VERSION={}{}", cargo_version, git_desc);
+    println!("cargo:rustc-env=GHRI_VERSION={}", version);
+}
+
+fn timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs()
 }
