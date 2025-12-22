@@ -63,6 +63,20 @@ pub fn is_path_under(path: &Path, dir: &Path) -> bool {
 ///
 /// Returns `None` if a relative path cannot be computed (e.g., different drive letters on Windows).
 pub fn relative_symlink_path(from_link: &Path, to_target: &Path) -> Option<PathBuf> {
+    // On Windows, check if paths are on different drives
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        let from_prefix = from_link.components().next();
+        let to_prefix = to_target.components().next();
+        match (from_prefix, to_prefix) {
+            (Some(Component::Prefix(a)), Some(Component::Prefix(b))) if a != b => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+
     // Get the directory containing the symlink
     let from_dir = from_link.parent()?;
     pathdiff::diff_paths(to_target, from_dir)
