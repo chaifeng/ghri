@@ -297,9 +297,9 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Read link: /usr/local/bin/tool -> points to package
+        // Resolve link: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/current/bin/tool
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/current/bin/tool")));
 
@@ -767,9 +767,9 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Read link: -> points to v1.0.0 directory
+        // Resolve link: /usr/local/bin/tool-v1 -> /home/user/.ghri/owner/repo/v1.0.0/tool
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0/tool")));
 

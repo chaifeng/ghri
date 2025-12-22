@@ -117,13 +117,7 @@ pub fn link<R: Runtime>(
     if runtime.exists(&final_dest) || runtime.is_symlink(&final_dest) {
         if runtime.is_symlink(&final_dest) {
             // Check if the existing symlink points to a version in this package
-            if let Ok(existing_target) = runtime.read_link(&final_dest) {
-                let existing_target = if existing_target.is_relative() {
-                    final_dest.parent().unwrap_or(Path::new(".")).join(&existing_target)
-                } else {
-                    existing_target
-                };
-
+            if let Ok(existing_target) = runtime.resolve_link(&final_dest) {
                 // Check if existing target is within the package directory
                 if existing_target.starts_with(&package_dir) {
                     debug!(
@@ -926,10 +920,10 @@ mod tests {
             .with(eq(dest.clone()))
             .returning(|_| true);
 
-        // Read symlink /usr/local/bin/tool -> /home/user/.ghri/other/package/v1/tool
+        // Resolve symlink /usr/local/bin/tool -> /home/user/.ghri/other/package/v1/tool
         // (Points to a DIFFERENT package!)
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(dest.clone()))
             .returning(move |_| Ok(other_package_path.clone()));
 
@@ -1220,10 +1214,10 @@ mod tests {
             .with(eq(dest.clone()))
             .returning(|_| true);
 
-        // Read symlink /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1/tool
+        // Resolve symlink /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1/tool
         // (Points to OLD version v1, which is part of same package - OK to update)
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(dest.clone()))
             .returning(move |_| Ok(v1_tool_path.clone()));
 

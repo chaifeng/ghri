@@ -48,15 +48,8 @@ fn check_link_status<R: Runtime>(
         return LinkStatus::NotSymlink;
     }
 
-    match runtime.read_link(link_dest) {
-        Ok(target) => {
-            // Resolve relative paths
-            let resolved = if target.is_relative() {
-                link_dest.parent().unwrap_or(Path::new(".")).join(&target)
-            } else {
-                target.clone()
-            };
-
+    match runtime.resolve_link(link_dest) {
+        Ok(resolved) => {
             // Canonicalize for accurate comparison
             let canonicalized = std::fs::canonicalize(&resolved).unwrap_or(resolved);
             let canonicalized_prefix = std::fs::canonicalize(expected_prefix)
@@ -284,9 +277,9 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Read link: /usr/local/bin/tool -> ERROR (unreadable)
+        // Resolve link: /usr/local/bin/tool -> ERROR (unreadable)
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(|_| Err(anyhow::anyhow!("not found")));
 

@@ -109,13 +109,7 @@ fn remove_version<R: Runtime>(
         for rule in &meta.links {
             // For regular links, only remove if pointing to this specific version
             if runtime.is_symlink(&rule.dest) {
-                if let Ok(target) = runtime.read_link(&rule.dest) {
-                    let resolved_target = if target.is_relative() {
-                        rule.dest.parent().unwrap_or(Path::new(".")).join(&target)
-                    } else {
-                        target
-                    };
-                    
+                if let Ok(resolved_target) = runtime.resolve_link(&rule.dest) {
                     // Check if link points to this version
                     if resolved_target.starts_with(&version_dir) {
                         let _ = runtime.remove_symlink_if_target_under(
@@ -402,13 +396,13 @@ mod tests {
 
         // --- 5. Check Link Target ---
 
-        // Link /usr/local/bin/tool points to v2, not v1
+        // Resolve link /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v2/tool (points to v2, not v1)
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
         runtime
-            .expect_read_link()
+            .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(move |_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")));
 
