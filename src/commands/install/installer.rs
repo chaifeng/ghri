@@ -848,7 +848,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run("invalid", config, vec![], false, true).await;
+        let result = super::super::run("invalid", config, vec![], false, true, false).await;
         assert!(result.is_err());
     }
 
@@ -1103,7 +1103,7 @@ mod tests {
         };
 
         // Install o/r using run() entry point
-        super::super::run("o/r", config, vec![], false, true)
+        super::super::run("o/r", config, vec![], false, true, false)
             .await
             .unwrap();
     }
