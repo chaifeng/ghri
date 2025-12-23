@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    archive::Extractor,
+    archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
     github::{GitHubRepo, Release, ReleaseAsset},
@@ -65,7 +65,7 @@ pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<Downlo
     original_args
 ))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor, D: Downloader>(
+pub(crate) async fn ensure_installed<R: Runtime + 'static, E: ArchiveExtractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
@@ -211,7 +211,7 @@ fn filter_assets(
 
 /// Download source tarball (when no assets available)
 /// Since it's a single file that is an archive, extract it
-async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor, D: Downloader>(
+async fn download_and_extract_tarball<R: Runtime + 'static, E: ArchiveExtractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
@@ -376,7 +376,7 @@ fn set_executable_if_binary<R: Runtime>(_runtime: &R, _path: &Path) -> Result<()
 /// Download all release assets (when assets are available)
 /// If only one file is downloaded and it's an archive, extract it.
 /// If multiple files are downloaded, keep them as-is without extraction.
-async fn download_all_assets<R: Runtime + 'static, E: Extractor, D: Downloader>(
+async fn download_all_assets<R: Runtime + 'static, E: ArchiveExtractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
@@ -501,7 +501,7 @@ async fn download_all_assets<R: Runtime + 'static, E: Extractor, D: Downloader>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::MockExtractor;
+    use crate::archive::MockArchiveExtractor;
     use crate::download::HttpDownloader;
     use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
@@ -758,7 +758,7 @@ mod tests {
 
         // --- 4. Extract Archive ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
@@ -848,7 +848,7 @@ mod tests {
 
         // --- 5. Extract Archive (succeeds) ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
@@ -930,7 +930,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let extractor = MockExtractor::new();
+        let extractor = MockArchiveExtractor::new();
 
         // --- Execute & Verify ---
 
@@ -1006,7 +1006,7 @@ mod tests {
 
         // --- 4. Extract Archive FAILS ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Err(anyhow::anyhow!("extraction failed")));
@@ -1084,7 +1084,7 @@ mod tests {
             },
             &Release::default(),
             &downloader,
-            &MockExtractor::new(),
+            &MockArchiveExtractor::new(),
             cleanup_ctx,
             &[],
             &[],
@@ -1171,7 +1171,7 @@ mod tests {
         // --- 4. Copy All Assets (NO extraction for multiple files) ---
 
         // Extractor should NOT be called - multiple files means no extraction
-        let extractor = MockExtractor::new();
+        let extractor = MockArchiveExtractor::new();
 
         // Both files are copied directly to target directory
         // Copy: /tmp/r-v1-app-linux-x86_64.tar.gz -> /target/app-linux-x86_64.tar.gz
@@ -1277,7 +1277,7 @@ mod tests {
 
         // --- 4. Extract Single Archive Asset ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         // Single archive should be extracted
         extractor
             .expect_extract_with_cleanup()
@@ -1374,7 +1374,7 @@ mod tests {
         // --- 4. Copy Single Non-Archive Asset (NO extraction) ---
 
         // Extractor should NOT be called - it's not an archive
-        let extractor = MockExtractor::new();
+        let extractor = MockArchiveExtractor::new();
 
         // Copy: /tmp/r-v1-app-linux-x86_64 -> /target/app-linux-x86_64
         runtime.expect_copy().times(1).returning(|_, _| Ok(100));
@@ -1471,7 +1471,7 @@ mod tests {
 
         // --- 4. Extract Tarball ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .times(1)
@@ -1585,7 +1585,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let extractor = MockExtractor::new();
+        let extractor = MockArchiveExtractor::new();
 
         // --- Execute & Verify ---
 
@@ -1671,7 +1671,7 @@ mod tests {
             &repo,
             &release,
             &HttpDownloader::new(HttpClient::new(Client::new())),
-            &MockExtractor::new(),
+            &MockArchiveExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,
             &[],
@@ -1744,7 +1744,7 @@ mod tests {
             &repo,
             &release,
             &HttpDownloader::new(HttpClient::new(Client::new())),
-            &MockExtractor::new(),
+            &MockArchiveExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,
             &[

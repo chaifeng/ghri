@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use log::warn;
 use std::path::Path;
 
-use crate::archive::Extractor;
+use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
@@ -24,7 +24,7 @@ pub async fn update<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, repos))]
-async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
     services: Services<G, D, E>,
@@ -88,7 +88,7 @@ fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
 }
 
 #[tracing::instrument(skip(config, installer, repo, current_version, target_dir))]
-async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
@@ -136,7 +136,7 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Do
 }
 
 #[tracing::instrument(skip(config, installer, repo, current_version, api_url))]
-async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
@@ -158,7 +158,7 @@ async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::MockExtractor;
+    use crate::archive::MockArchiveExtractor;
     use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, Release, RepoInfo};
     use crate::runtime::MockRuntime;
@@ -329,7 +329,7 @@ mod tests {
         let services = Services {
             github,
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         run_update(&config, runtime, services, vec![])
             .await
@@ -366,7 +366,7 @@ mod tests {
         let services = Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         let result = run_update(&config, runtime, services, vec![]).await;
         assert!(result.is_ok());
@@ -496,7 +496,7 @@ mod tests {
         let services = Services {
             github,
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         // Only update owner1/repo1, skip owner2/repo2
         let result = run_update(&config, runtime, services, vec!["owner1/repo1".to_string()]).await;

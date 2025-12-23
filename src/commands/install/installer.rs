@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    archive::Extractor,
+    archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
     github::{GetReleases, GitHubRepo, Release},
@@ -19,14 +19,16 @@ use crate::commands::symlink::update_current_symlink;
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
 use super::external_links::update_external_links;
 
-pub struct Installer<R: Runtime, G: GetReleases, E: Extractor, D: Downloader> {
+pub struct Installer<R: Runtime, G: GetReleases, E: ArchiveExtractor, D: Downloader> {
     pub runtime: R,
     pub github: G,
     pub downloader: D,
     pub extractor: E,
 }
 
-impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installer<R, G, E, D> {
+impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
+    Installer<R, G, E, D>
+{
     #[tracing::instrument(skip(runtime, github, downloader, extractor))]
     pub fn new(runtime: R, github: G, downloader: D, extractor: E) -> Self {
         Self {
@@ -363,7 +365,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::MockExtractor;
+    use crate::archive::MockArchiveExtractor;
     use crate::commands::config::Config;
     use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, RepoInfo};
@@ -527,7 +529,7 @@ mod tests {
 
         // --- Setup Extractor Mock ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
@@ -611,7 +613,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
         let (meta, _, needs_save) = installer.get_or_fetch_meta(&config, &repo).await.unwrap();
 
         // Should have fetched fresh metadata (needs_save = true)
@@ -679,7 +681,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
 
         // Should fail because no stable release found
         let result = installer
@@ -739,7 +741,7 @@ mod tests {
             runtime,
             MockGetReleases::new(),
             downloader,
-            MockExtractor::new(),
+            MockArchiveExtractor::new(),
         );
 
         // Try to install version "v999.0.0" which doesn't exist
@@ -837,7 +839,7 @@ mod tests {
 
         // --- Setup Extractor Mock ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
@@ -900,7 +902,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
 
         // Should fail because API call failed
         let result = installer.get_or_fetch_meta(&config, &repo).await;
@@ -918,7 +920,7 @@ mod tests {
         let services = super::super::super::services::Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
 
         // --- Execute & Verify ---
@@ -1013,7 +1015,7 @@ mod tests {
 
         // --- Setup Extractor Mock ---
 
-        let mut extractor = MockExtractor::new();
+        let mut extractor = MockArchiveExtractor::new();
         extractor
             .expect_extract_with_cleanup()
             .returning(|_: &MockRuntime, _, _, _| Ok(()));
@@ -1067,7 +1069,7 @@ mod tests {
             runtime,
             MockGetReleases::new(),
             downloader,
-            MockExtractor::new(),
+            MockArchiveExtractor::new(),
         );
         let (meta, _, needs_save) = installer.get_or_fetch_meta(&config, &repo).await.unwrap();
 
@@ -1142,7 +1144,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
         installer
             .install(&config, &repo, None, &default_install_options())
             .await
@@ -1192,7 +1194,7 @@ mod tests {
         let services = super::super::super::services::Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
 
         // Install o/r using run() entry point
@@ -1254,7 +1256,7 @@ mod tests {
             runtime,
             MockGetReleases::new(),
             downloader,
-            MockExtractor::new(),
+            MockArchiveExtractor::new(),
         )
         .save_meta(&PathBuf::from("meta.json"), &meta)
         .unwrap();
@@ -1342,7 +1344,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
 
         // User provides NEW filter, should override saved "*old-filter*"
         let options = InstallOptions {
@@ -1433,7 +1435,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
@@ -1514,7 +1516,7 @@ mod tests {
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
+        let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer

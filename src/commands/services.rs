@@ -12,7 +12,7 @@ use reqwest::{
 };
 
 use crate::{
-    archive::{ArchiveExtractor, Extractor},
+    archive::{ArchiveExtractor, ArchiveExtractorImpl},
     download::{Downloader, HttpDownloader},
     github::{GetReleases, GitHub},
     http::HttpClient,
@@ -52,19 +52,19 @@ pub fn build_downloader(config: &Config) -> Result<HttpDownloader> {
 }
 
 /// Build an archive extractor (stateless, no configuration needed)
-pub fn build_extractor() -> ArchiveExtractor {
-    ArchiveExtractor
+pub fn build_extractor() -> ArchiveExtractorImpl {
+    ArchiveExtractorImpl::new()
 }
 
 /// Container for all service dependencies needed by commands.
 /// This is used to pass dependencies to internal functions that need them.
-pub struct Services<G: GetReleases, D: Downloader, E: Extractor> {
+pub struct Services<G: GetReleases, D: Downloader, E: ArchiveExtractor> {
     pub github: G,
     pub downloader: D,
     pub extractor: E,
 }
 
-impl Services<GitHub, HttpDownloader, ArchiveExtractor> {
+impl Services<GitHub, HttpDownloader, ArchiveExtractorImpl> {
     /// Build all services from configuration
     pub fn from_config(config: &Config) -> Result<Self> {
         Ok(Self {

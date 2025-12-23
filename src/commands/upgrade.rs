@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::archive::Extractor;
+use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
@@ -24,7 +24,7 @@ pub async fn upgrade<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, repos, options))]
-async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
     services: Services<G, D, E>,
@@ -126,7 +126,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::MockExtractor;
+    use crate::archive::MockArchiveExtractor;
     use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, Release};
     use crate::runtime::MockRuntime;
@@ -201,7 +201,7 @@ mod tests {
         let services = Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         let result = run_upgrade(
             &config,
@@ -290,7 +290,7 @@ mod tests {
         let services = Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         let result = run_upgrade(
             &config,
@@ -405,7 +405,7 @@ mod tests {
         let services = Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
-            extractor: MockExtractor::new(),
+            extractor: MockArchiveExtractor::new(),
         };
         // Only upgrade owner1/repo1, skip owner2/repo2
         let result = run_upgrade(

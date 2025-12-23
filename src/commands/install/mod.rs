@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    archive::Extractor,
+    archive::ArchiveExtractor,
     download::Downloader,
     github::{GetReleases, RepoSpec},
     runtime::Runtime,
@@ -35,7 +35,7 @@ pub async fn install<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, options))]
-pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+pub async fn run<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
     services: Services<G, D, E>,
