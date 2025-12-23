@@ -192,6 +192,9 @@ ghri link <OWNER/REPO[@VERSION][:PATH]> <DEST>
 - **Without version** (`owner/repo:file`) - Link follows the `current` symlink. When you install a new version, the link auto-updates to the new version.
 - **With version** (`owner/repo@v1.0.0:file`) - Link points to that specific version. It stays unchanged when you install new versions.
 
+**Link Uniqueness:**
+Each destination path can only have one link type. If you create a versioned link to a destination that already has a default link, the default link record is removed (and vice versa).
+
 **Examples:**
 
 ```bash

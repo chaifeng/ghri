@@ -158,12 +158,16 @@ pub fn link<R: Runtime>(
     // Add or update link rule in meta.json
     // If a version was explicitly specified, save to versioned_links (not updated on install/update)
     // Otherwise save to links (updated on install/update)
+    // Ensure uniqueness: when adding to one list, remove from the other list
     if spec.version.is_some() {
         let new_link = VersionedLink {
             version: version.clone(),
             dest: final_dest.clone(),
             path: spec.path.clone(),
         };
+
+        // Remove any existing entry with same dest from links (default version links)
+        meta.links.retain(|l| l.dest != final_dest);
 
         // Check if a versioned link with the same dest already exists
         if let Some(existing) = meta.versioned_links.iter_mut().find(|l| l.dest == final_dest) {
@@ -179,6 +183,9 @@ pub fn link<R: Runtime>(
             dest: final_dest.clone(),
             path: spec.path.clone(),
         };
+
+        // Remove any existing entry with same dest from versioned_links
+        meta.versioned_links.retain(|l| l.dest != final_dest);
 
         // Check if a rule with the same dest already exists
         if let Some(existing) = meta.links.iter_mut().find(|l| l.dest == final_dest) {
@@ -1251,6 +1258,235 @@ mod tests {
 
         // --- Execute ---
         let result = link(runtime, "owner/repo@v2", dest, Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_versioned_removes_from_default_links() {
+        // Test that creating a versioned link removes any existing entry from default links
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let v1_dir = package_dir.join("v1");
+        let v2_dir = package_dir.join("v2");
+        let v2_tool_path = v2_dir.join("tool");
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let dest_parent = PathBuf::from("/usr/local/bin");
+
+        // --- 1. Load Metadata ---
+
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Meta has an existing DEFAULT link (in meta.links) to this dest
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            links: vec![LinkRule {
+                dest: dest.clone(),
+                path: None,
+            }],
+            versioned_links: vec![],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. Validate Source Version ---
+
+        runtime
+            .expect_exists()
+            .with(eq(v2_dir.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_read_dir()
+            .with(eq(v2_dir))
+            .returning(move |_| Ok(vec![v2_tool_path.clone()]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")))
+            .returning(|_| false);
+
+        // --- 3. Analyze Destination ---
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_dir()
+            .with(eq(dest.clone()))
+            .returning(|_| false);
+
+        runtime
+            .expect_exists()
+            .with(eq(dest_parent))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+
+        // Existing symlink points to v1 (same package)
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest.clone()))
+            .returning(move |_| Ok(v1_dir.join("tool")));
+
+        // --- 4. Update Link ---
+
+        runtime
+            .expect_remove_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| Ok(()));
+
+        runtime
+            .expect_symlink()
+            .returning(|_, _| Ok(()));
+
+        // --- 5. Save Metadata ---
+        // The written meta should have:
+        // - Empty links (default link removed)
+        // - versioned_links with v2 entry
+        runtime.expect_write().withf(|_, data| {
+            let json_str = std::str::from_utf8(data).unwrap();
+            let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
+            // Default links should be empty (removed when versioned link was created)
+            saved_meta.links.is_empty() &&
+            // Should have one versioned link
+            saved_meta.versioned_links.len() == 1 &&
+            saved_meta.versioned_links[0].version == "v2"
+        }).returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+        let result = link(runtime, "owner/repo@v2", dest, Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_default_removes_from_versioned_links() {
+        // Test that creating a default link removes any existing entry from versioned_links
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let v1_dir = package_dir.join("v1");
+        let v1_tool_path = v1_dir.join("tool");
+        let v2_dir = package_dir.join("v2");
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let dest_parent = PathBuf::from("/usr/local/bin");
+
+        // --- 1. Load Metadata ---
+
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Meta has an existing VERSIONED link to this dest
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            links: vec![],
+            versioned_links: vec![VersionedLink {
+                version: "v2".into(),
+                dest: dest.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. Validate Source Version ---
+
+        runtime
+            .expect_exists()
+            .with(eq(v1_dir.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_read_dir()
+            .with(eq(v1_dir.clone()))
+            .returning(move |_| Ok(vec![v1_tool_path.clone()]));
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .returning(|_| false);
+
+        // --- 3. Analyze Destination ---
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_dir()
+            .with(eq(dest.clone()))
+            .returning(|_| false);
+
+        runtime
+            .expect_exists()
+            .with(eq(dest_parent))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+
+        // Existing symlink points to v2 (same package)
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest.clone()))
+            .returning(move |_| Ok(v2_dir.join("tool")));
+
+        // --- 4. Update Link ---
+
+        runtime
+            .expect_remove_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| Ok(()));
+
+        runtime
+            .expect_symlink()
+            .returning(|_, _| Ok(()));
+
+        // --- 5. Save Metadata ---
+        // The written meta should have:
+        // - links with one entry (default link)
+        // - Empty versioned_links (versioned link removed)
+        runtime.expect_write().withf(|_, data| {
+            let json_str = std::str::from_utf8(data).unwrap();
+            let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
+            // Should have one default link
+            saved_meta.links.len() == 1 &&
+            // Versioned links should be empty (removed when default link was created)
+            saved_meta.versioned_links.is_empty()
+        }).returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+        // No version specified -> creates default link
+        let result = link(runtime, "owner/repo", dest, Some(root));
         assert!(result.is_ok());
     }
 }
