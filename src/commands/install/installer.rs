@@ -37,7 +37,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         }
     }
 
-    #[tracing::instrument(skip(self, config, repo, version, filters))]
+    #[tracing::instrument(skip(self, config, repo, version, filters, original_args))]
     pub async fn install(
         &self,
         config: &Config,
@@ -46,6 +46,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         filters: Vec<String>,
         pre: bool,
         yes: bool,
+        original_args: &[String],
     ) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path, needs_save) = self.get_or_fetch_meta(config, repo).await?;
@@ -142,6 +143,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
             &self.extractor,
             Arc::clone(&cleanup_ctx),
             &effective_filters,
+            original_args,
         )
         .await;
 
@@ -533,7 +535,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, extractor);
         installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await
             .unwrap();
     }
@@ -674,7 +676,7 @@ mod tests {
 
         // Should fail because no stable release found
         let result = installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await;
         assert!(result.is_err());
         assert!(
@@ -735,7 +737,7 @@ mod tests {
 
         // Try to install version "v999.0.0" which doesn't exist
         let result = installer
-            .install(&config, &repo, Some("v999.0.0"), vec![], false, true)
+            .install(&config, &repo, Some("v999.0.0"), vec![], false, true, &[])
             .await;
 
         // Should fail because requested version not found
@@ -845,7 +847,7 @@ mod tests {
 
         // With pre=true, should succeed and install the pre-release
         let result = installer
-            .install(&config, &repo, None, vec![], true, true)
+            .install(&config, &repo, None, vec![], true, true, &[])
             .await;
         assert!(result.is_ok());
     }
@@ -1019,7 +1021,7 @@ mod tests {
 
         // Should succeed despite metadata save failure (it's just a warning)
         let result = installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await;
         assert!(result.is_ok());
     }
@@ -1133,7 +1135,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
         installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await
             .unwrap();
     }
@@ -1342,6 +1344,7 @@ mod tests {
                 vec!["*new-user-filter*".to_string()],
                 false,
                 true,
+                &[],
             )
             .await
             .unwrap();
@@ -1429,7 +1432,7 @@ mod tests {
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await
             .unwrap();
     }
@@ -1510,7 +1513,7 @@ mod tests {
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer
-            .install(&config, &repo, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true, &[])
             .await
             .unwrap();
     }

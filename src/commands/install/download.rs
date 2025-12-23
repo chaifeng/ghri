@@ -61,7 +61,8 @@ pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<Downlo
     downloader,
     extractor,
     cleanup_ctx,
-    filters
+    filters,
+    original_args
 ))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor, D: Downloader>(
@@ -73,6 +74,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor, D: Down
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
     filters: &[String],
+    original_args: &[String],
 ) -> Result<()> {
     if runtime.exists(target_dir) {
         info!(
@@ -116,7 +118,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor, D: Down
                 .collect();
 
             // Build suggested command from original args, replacing filter values
-            let suggested_command = build_suggested_command(&suggested_filters);
+            let suggested_command = build_suggested_command(original_args, &suggested_filters);
 
             format!(
                 "\n\nHint: Your filter(s) {:?} don't contain wildcards.\n\
@@ -274,14 +276,13 @@ async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor, D: Dow
 }
 
 /// Build a suggested command by replacing filter values in the original command line args
-fn build_suggested_command(suggested_filters: &[String]) -> String {
-    let args: Vec<String> = std::env::args().collect();
+fn build_suggested_command(original_args: &[String], suggested_filters: &[String]) -> String {
     let mut result = Vec::new();
     let mut i = 0;
     let mut filter_index = 0;
 
-    while i < args.len() {
-        let arg = &args[i];
+    while i < original_args.len() {
+        let arg = &original_args[i];
 
         if arg == "--filter" || arg == "-f" {
             // Skip the original filter and its value, use suggested filter instead
@@ -625,6 +626,89 @@ mod tests {
         assert_eq!(filtered.len(), 2);
     }
 
+    #[test]
+    fn test_build_suggested_command_with_filter_option() {
+        // Test that build_suggested_command correctly replaces filter values
+        let original_args = vec![
+            "ghri".to_string(),
+            "install".to_string(),
+            "owner/repo".to_string(),
+            "--filter".to_string(),
+            "linux".to_string(),
+        ];
+        let suggested_filters = vec!["*linux*".to_string()];
+
+        let result = build_suggested_command(&original_args, &suggested_filters);
+
+        assert_eq!(result, "ghri install owner/repo --filter \"*linux*\"");
+    }
+
+    #[test]
+    fn test_build_suggested_command_with_short_filter_option() {
+        // Test with -f short option
+        let original_args = vec![
+            "ghri".to_string(),
+            "install".to_string(),
+            "owner/repo".to_string(),
+            "-f".to_string(),
+            "darwin".to_string(),
+        ];
+        let suggested_filters = vec!["*darwin*".to_string()];
+
+        let result = build_suggested_command(&original_args, &suggested_filters);
+
+        assert_eq!(result, "ghri install owner/repo -f \"*darwin*\"");
+    }
+
+    #[test]
+    fn test_build_suggested_command_with_equals_format() {
+        // Test with --filter=value format
+        let original_args = vec![
+            "ghri".to_string(),
+            "install".to_string(),
+            "owner/repo".to_string(),
+            "--filter=linux".to_string(),
+        ];
+        let suggested_filters = vec!["*linux*".to_string()];
+
+        let result = build_suggested_command(&original_args, &suggested_filters);
+
+        assert_eq!(result, "ghri install owner/repo --filter=\"*linux*\"");
+    }
+
+    #[test]
+    fn test_build_suggested_command_with_multiple_filters() {
+        // Test with multiple filter options
+        let original_args = vec![
+            "ghri".to_string(),
+            "install".to_string(),
+            "owner/repo".to_string(),
+            "--filter".to_string(),
+            "linux".to_string(),
+            "-f".to_string(),
+            "x86_64".to_string(),
+        ];
+        let suggested_filters = vec!["*linux*".to_string(), "*x86_64*".to_string()];
+
+        let result = build_suggested_command(&original_args, &suggested_filters);
+
+        assert_eq!(
+            result,
+            "ghri install owner/repo --filter \"*linux*\" -f \"*x86_64*\""
+        );
+    }
+
+    #[test]
+    fn test_build_suggested_command_empty_args() {
+        // Test with empty original args
+        let original_args: Vec<String> = vec![];
+        let suggested_filters = vec!["*linux*".to_string()];
+
+        let result = build_suggested_command(&original_args, &suggested_filters);
+
+        assert_eq!(result, "");
+    }
+
     #[tokio::test]
     async fn test_ensure_installed_creates_dir_and_extracts() {
         // Test successful installation: creates directory, downloads, and extracts
@@ -700,6 +784,7 @@ mod tests {
             &downloader,
             &extractor,
             cleanup_ctx,
+            &[],
             &[],
         )
         .await
@@ -781,6 +866,7 @@ mod tests {
             &extractor,
             cleanup_ctx,
             &[],
+            &[],
         )
         .await;
 
@@ -858,6 +944,7 @@ mod tests {
             &downloader,
             &extractor,
             cleanup_ctx,
+            &[],
             &[],
         )
         .await;
@@ -949,6 +1036,7 @@ mod tests {
             &extractor,
             cleanup_ctx,
             &[],
+            &[],
         )
         .await;
 
@@ -998,6 +1086,7 @@ mod tests {
             &downloader,
             &MockExtractor::new(),
             cleanup_ctx,
+            &[],
             &[],
         )
         .await;
@@ -1117,6 +1206,7 @@ mod tests {
             &extractor,
             cleanup_ctx,
             &[],
+            &[],
         )
         .await;
 
@@ -1211,6 +1301,7 @@ mod tests {
             &downloader,
             &extractor,
             cleanup_ctx,
+            &[],
             &[],
         )
         .await;
@@ -1316,6 +1407,7 @@ mod tests {
             &extractor,
             cleanup_ctx,
             &[],
+            &[],
         )
         .await;
 
@@ -1401,6 +1493,7 @@ mod tests {
             &downloader,
             &extractor,
             cleanup_ctx,
+            &[],
             &[],
         )
         .await;
@@ -1507,6 +1600,7 @@ mod tests {
             &extractor,
             cleanup_ctx,
             &[],
+            &[],
         )
         .await;
 
@@ -1580,6 +1674,7 @@ mod tests {
             &MockExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,
+            &[],
         )
         .await;
 
@@ -1652,6 +1747,13 @@ mod tests {
             &MockExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,
+            &[
+                "ghri".to_string(),
+                "install".to_string(),
+                "owner/repo".to_string(),
+                "--filter".to_string(),
+                "linux".to_string(),
+            ],
         )
         .await;
 
@@ -1677,8 +1779,12 @@ mod tests {
             "Expected mention of missing wildcards but got: {}",
             error_msg
         );
-        // Note: The suggested command uses std::env::args() which returns test runner args
-        // in unit tests, so we only verify the hint structure here
+        // Verify the suggested command is built correctly from original_args
+        assert!(
+            error_msg.contains("ghri install owner/repo --filter \"*linux*\""),
+            "Expected suggested command with wildcards but got: {}",
+            error_msg
+        );
     }
 
     // --- Tests for binary executable detection (Platform-specific) ---

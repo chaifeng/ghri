@@ -212,6 +212,7 @@ async fn main() -> Result<()> {
                     pre: args.pre,
                     yes: args.yes,
                     prune: args.prune,
+                    original_args: std::env::args().collect(),
                 },
             )
             .await?

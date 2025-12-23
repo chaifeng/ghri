@@ -97,6 +97,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
                 vec![], // Empty filters - installer will use saved filters from meta
                 options.pre,
                 options.yes,
+                &[], // No original args needed for upgrade
             )
             .await
         {

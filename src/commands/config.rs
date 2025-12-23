@@ -119,6 +119,8 @@ pub struct InstallOptions {
     pub yes: bool,
     /// Prune old versions after installation
     pub prune: bool,
+    /// Original command line arguments (for building suggested commands in error messages)
+    pub original_args: Vec<String>,
 }
 
 /// Options for the upgrade command (behavior parameters)

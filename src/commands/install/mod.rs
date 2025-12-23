@@ -58,6 +58,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Download
             options.filters,
             options.pre,
             options.yes,
+            &options.original_args,
         )
         .await?;
 
