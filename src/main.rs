@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use ghri::commands::install;
 use std::path::PathBuf;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 /// ghri - GitHub Release Installer
 ///
@@ -160,14 +160,31 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Install(args) => {
-            install(runtime, &args.repo, cli.install_root, args.api_url, args.filters, args.pre, args.yes).await?
+            install(
+                runtime,
+                &args.repo,
+                cli.install_root,
+                args.api_url,
+                args.filters,
+                args.pre,
+                args.yes,
+            )
+            .await?
         }
-        Commands::Update(args) => ghri::commands::update(runtime, cli.install_root, None, args.repos).await?,
+        Commands::Update(args) => {
+            ghri::commands::update(runtime, cli.install_root, None, args.repos).await?
+        }
         Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
-        Commands::Link(args) => ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?,
-        Commands::Unlink(args) => ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
+        Commands::Link(args) => {
+            ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?
+        }
+        Commands::Unlink(args) => {
+            ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?
+        }
         Commands::Links(args) => ghri::commands::links(runtime, &args.repo, cli.install_root)?,
-        Commands::Remove(args) => ghri::commands::remove(runtime, &args.repo, args.force, args.yes, cli.install_root)?,
+        Commands::Remove(args) => {
+            ghri::commands::remove(runtime, &args.repo, args.force, args.yes, cli.install_root)?
+        }
         Commands::Show(args) => ghri::commands::show(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())
@@ -274,7 +291,8 @@ mod tests {
     #[test]
     fn test_cli_install_with_single_filter() {
         // Test: ghri install owner/repo --filter "*aarch64*"
-        let cli = Cli::try_parse_from(&["ghri", "install", "owner/repo", "--filter", "*aarch64*"]).unwrap();
+        let cli = Cli::try_parse_from(&["ghri", "install", "owner/repo", "--filter", "*aarch64*"])
+            .unwrap();
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
@@ -288,10 +306,15 @@ mod tests {
     fn test_cli_install_with_multiple_filters() {
         // Test: ghri install owner/repo --filter "*aarch64*" --filter "*macos*"
         let cli = Cli::try_parse_from(&[
-            "ghri", "install", "owner/repo",
-            "--filter", "*aarch64*",
-            "--filter", "*macos*"
-        ]).unwrap();
+            "ghri",
+            "install",
+            "owner/repo",
+            "--filter",
+            "*aarch64*",
+            "--filter",
+            "*macos*",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
@@ -316,7 +339,8 @@ mod tests {
 
     #[test]
     fn test_cli_link_parsing() {
-        let cli = Cli::try_parse_from(&["ghri", "link", "owner/repo", "/usr/local/bin/tool"]).unwrap();
+        let cli =
+            Cli::try_parse_from(&["ghri", "link", "owner/repo", "/usr/local/bin/tool"]).unwrap();
         match cli.command {
             Commands::Link(args) => {
                 assert_eq!(args.repo, "owner/repo");
@@ -328,7 +352,8 @@ mod tests {
 
     #[test]
     fn test_cli_link_with_root() {
-        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp", "link", "owner/repo", "/dest"]).unwrap();
+        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp", "link", "owner/repo", "/dest"])
+            .unwrap();
         match cli.command {
             Commands::Link(args) => {
                 assert_eq!(args.repo, "owner/repo");
@@ -352,7 +377,8 @@ mod tests {
 
     #[test]
     fn test_cli_unlink_with_dest() {
-        let cli = Cli::try_parse_from(&["ghri", "unlink", "owner/repo", "/usr/local/bin/tool"]).unwrap();
+        let cli =
+            Cli::try_parse_from(&["ghri", "unlink", "owner/repo", "/usr/local/bin/tool"]).unwrap();
         match cli.command {
             Commands::Unlink(args) => {
                 assert_eq!(args.repo, "owner/repo");
@@ -449,7 +475,8 @@ mod tests {
 
     #[test]
     fn test_cli_show_with_root() {
-        let cli = Cli::try_parse_from(&["ghri", "--root", "/tmp/test", "show", "owner/repo"]).unwrap();
+        let cli =
+            Cli::try_parse_from(&["ghri", "--root", "/tmp/test", "show", "owner/repo"]).unwrap();
         assert_eq!(cli.install_root, Some(PathBuf::from("/tmp/test")));
         match cli.command {
             Commands::Show(args) => {

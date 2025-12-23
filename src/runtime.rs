@@ -337,8 +337,8 @@ impl Runtime for RealRuntime {
                 };
 
                 // Canonicalize if target exists to resolve .. and symlinks
-                let canonicalized_target = fs::canonicalize(&resolved_target)
-                    .unwrap_or_else(|_| resolved_target.clone());
+                let canonicalized_target =
+                    fs::canonicalize(&resolved_target).unwrap_or_else(|_| resolved_target.clone());
 
                 debug!(
                     "Link {:?} points to {:?} (resolved: {:?}, canonicalized: {:?})",
@@ -346,8 +346,8 @@ impl Runtime for RealRuntime {
                 );
 
                 // Canonicalize prefix as well for accurate comparison
-                let canonicalized_prefix = fs::canonicalize(target_prefix)
-                    .unwrap_or_else(|_| target_prefix.to_path_buf());
+                let canonicalized_prefix =
+                    fs::canonicalize(target_prefix).unwrap_or_else(|_| target_prefix.to_path_buf());
 
                 // Check if the target is under the prefix using safe path comparison
                 if !is_path_under(&canonicalized_target, &canonicalized_prefix) {
@@ -989,7 +989,9 @@ mod tests {
         let result = normalize_path(&path);
         // On Unix, this becomes /../a/b since we can't pop past root
         // The behavior might differ but the path should be normalized
-        assert!(result.to_string_lossy().contains("a/b") || result.to_string_lossy().contains("a\\b"));
+        assert!(
+            result.to_string_lossy().contains("a/b") || result.to_string_lossy().contains("a\\b")
+        );
     }
 
     #[test]
@@ -1228,7 +1230,10 @@ mod tests {
         let link = Path::new("/usr/local/bin/tool");
         let target = Path::new("/opt/ghri/owner/repo/v1/tool");
         let result = relative_symlink_path(link, target);
-        assert_eq!(result, Some(PathBuf::from("../../../opt/ghri/owner/repo/v1/tool")));
+        assert_eq!(
+            result,
+            Some(PathBuf::from("../../../opt/ghri/owner/repo/v1/tool"))
+        );
     }
 
     #[test]
@@ -1255,7 +1260,12 @@ mod tests {
         let link = Path::new("/tmp/xxx/external_link_relative_bin/bach");
         let target = Path::new("/tmp/xxx/external_link_relative/bach-sh/bach/0.7.2");
         let result = relative_symlink_path(link, target);
-        assert_eq!(result, Some(PathBuf::from("../external_link_relative/bach-sh/bach/0.7.2")));
+        assert_eq!(
+            result,
+            Some(PathBuf::from(
+                "../external_link_relative/bach-sh/bach/0.7.2"
+            ))
+        );
     }
 
     #[cfg(windows)]
@@ -1268,7 +1278,10 @@ mod tests {
         let link = Path::new(r"C:\Users\foo\bin\tool.exe");
         let target = Path::new(r"C:\Users\foo\ghri\owner\repo\v1\tool.exe");
         let result = relative_symlink_path(link, target);
-        assert_eq!(result, Some(PathBuf::from(r"..\ghri\owner\repo\v1\tool.exe")));
+        assert_eq!(
+            result,
+            Some(PathBuf::from(r"..\ghri\owner\repo\v1\tool.exe"))
+        );
     }
 
     #[cfg(windows)]

@@ -2,22 +2,14 @@ use anyhow::Result;
 use log::debug;
 use std::path::PathBuf;
 
-use crate::{
-    github::RepoSpec,
-    package::Meta,
-    runtime::Runtime,
-};
+use crate::{github::RepoSpec, package::Meta, runtime::Runtime};
 
 use super::paths::default_install_root;
 use super::{print_links, print_versioned_links};
 
 /// Show detailed information about a package
 #[tracing::instrument(skip(runtime, install_root))]
-pub fn show<R: Runtime>(
-    runtime: R,
-    repo_str: &str,
-    install_root: Option<PathBuf>,
-) -> Result<()> {
+pub fn show<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
     debug!("Showing info for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
     let root = match install_root {
@@ -31,10 +23,7 @@ pub fn show<R: Runtime>(
     debug!("Package directory: {:?}", package_dir);
 
     if !runtime.exists(&package_dir) {
-        anyhow::bail!(
-            "Package {} is not installed.",
-            spec.repo
-        );
+        anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     // Load meta
@@ -52,7 +41,8 @@ pub fn show<R: Runtime>(
     let current_link = package_dir.join("current");
     if runtime.is_symlink(&current_link) {
         if let Ok(target) = runtime.read_link(&current_link) {
-            let current_version = target.file_name()
+            let current_version = target
+                .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
             println!("Current version: {}", current_version);
@@ -82,7 +72,9 @@ pub fn show<R: Runtime>(
     versions.sort();
 
     let current_version = if runtime.is_symlink(&current_link) {
-        runtime.read_link(&current_link).ok()
+        runtime
+            .read_link(&current_link)
+            .ok()
             .and_then(|t| t.file_name().and_then(|s| s.to_str()).map(String::from))
     } else {
         None
@@ -149,7 +141,12 @@ pub fn show<R: Runtime>(
         // Versioned links (historical)
         if !meta.versioned_links.is_empty() {
             println!();
-            print_versioned_links(&runtime, &meta.versioned_links, &package_dir, Some("Versioned links (historical):"));
+            print_versioned_links(
+                &runtime,
+                &meta.versioned_links,
+                &package_dir,
+                Some("Versioned links (historical):"),
+            );
         }
     }
 
@@ -198,9 +195,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Check Package Exists ---
@@ -301,7 +298,11 @@ mod tests {
         runtime
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
-            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/current/bin/tool")));
+            .returning(|_| {
+                Ok(PathBuf::from(
+                    "/home/user/.ghri/owner/repo/current/bin/tool",
+                ))
+            });
 
         // --- Execute ---
 
@@ -318,7 +319,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
 
         // --- 1. Check Package Exists ---
 
@@ -344,9 +345,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
 
         // --- 1. Check Package Exists ---
 
@@ -384,11 +385,7 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(package_dir.clone()))
-            .returning(move |_| {
-                Ok(vec![
-                    PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0"),
-                ])
-            });
+            .returning(move |_| Ok(vec![PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")]));
 
         // Is dir: /home/user/.ghri/owner/repo/v1.0.0 -> true
         runtime
@@ -411,9 +408,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
 
         // --- 1. Check Package Exists ---
 
@@ -438,12 +435,12 @@ mod tests {
             current_version: "v1.0.0".into(),
             releases: vec![
                 MetaRelease {
-                    version: "v1.1.0".into(),                      // Newer version available
+                    version: "v1.1.0".into(), // Newer version available
                     published_at: Some("2023-02-01T00:00:00Z".into()),
                     ..Default::default()
                 },
                 MetaRelease {
-                    version: "v1.0.0".into(),                      // Current installed version
+                    version: "v1.0.0".into(), // Current installed version
                     published_at: Some("2023-01-01T00:00:00Z".into()),
                     ..Default::default()
                 },
@@ -511,9 +508,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
 
         // --- 1. Check Package Exists ---
 
@@ -555,11 +552,7 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(package_dir.clone()))
-            .returning(move |_| {
-                Ok(vec![
-                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
-                ])
-            });
+            .returning(move |_| Ok(vec![PathBuf::from("/home/user/.ghri/owner/repo/meta.json")]));
 
         // Is dir: meta.json -> false
         runtime
@@ -582,9 +575,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
 
         // --- 1. Check Package Exists ---
 
@@ -645,11 +638,11 @@ mod tests {
         runtime
             .expect_is_dir()
             .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")))
-            .returning(|_| true);  // v1.0.0 is a version directory
+            .returning(|_| true); // v1.0.0 is a version directory
         runtime
             .expect_is_dir()
             .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0")))
-            .returning(|_| true);  // v2.0.0 is a version directory
+            .returning(|_| true); // v2.0.0 is a version directory
         runtime
             .expect_is_dir()
             .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/meta.json")))
@@ -674,10 +667,10 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
-        let link_dest = PathBuf::from("/usr/local/bin/tool-v1");  // Versioned link destination
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
+        let link_dest = PathBuf::from("/usr/local/bin/tool-v1"); // Versioned link destination
 
         // --- 1. Check Package Exists ---
 
@@ -699,9 +692,9 @@ mod tests {
         use crate::package::VersionedLink;
         let meta = Meta {
             name: "owner/repo".into(),
-            current_version: "v2.0.0".into(),                     // Current is v2
+            current_version: "v2.0.0".into(), // Current is v2
             versioned_links: vec![VersionedLink {
-                version: "v1.0.0".into(),                         // Historical link to v1
+                version: "v1.0.0".into(), // Historical link to v1
                 dest: link_dest.clone(),
                 path: None,
             }],

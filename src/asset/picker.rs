@@ -51,15 +51,11 @@ impl DefaultAssetPicker {
                     || name_lower.contains("amd64")
                     || name_lower.contains("x64")
             }
-            "aarch64" | "arm64" => {
-                name_lower.contains("aarch64")
-                    || name_lower.contains("arm64")
-            }
+            "aarch64" | "arm64" => name_lower.contains("aarch64") || name_lower.contains("arm64"),
             "i686" | "x86" => {
                 name_lower.contains("i686")
                     || name_lower.contains("i386")
-                    || name_lower.contains("x86")
-                    && !name_lower.contains("x86_64")
+                    || name_lower.contains("x86") && !name_lower.contains("x86_64")
             }
             _ => true, // Allow if arch is unknown
         }
@@ -117,9 +113,7 @@ impl AssetPicker for DefaultAssetPicker {
         }
 
         // Sort by score (descending)
-        candidates.sort_by(|a, b| {
-            self.score_asset(&b.name).cmp(&self.score_asset(&a.name))
-        });
+        candidates.sort_by(|a, b| self.score_asset(&b.name).cmp(&self.score_asset(&a.name)));
 
         candidates.into_iter().next()
     }
@@ -220,10 +214,10 @@ mod tests {
         });
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",           // macOS ARM - not matching
-            "app-linux-x86_64.tar.gz",           // Linux x86_64 - should match
-            "app-windows-x64.zip",               // Windows - not matching
-            "app-linux-x86_64.tar.gz.sha256",    // Checksum file - should be penalized
+            "app-darwin-arm64.tar.gz",        // macOS ARM - not matching
+            "app-linux-x86_64.tar.gz",        // Linux x86_64 - should match
+            "app-windows-x64.zip",            // Windows - not matching
+            "app-linux-x86_64.tar.gz.sha256", // Checksum file - should be penalized
         ]);
 
         // --- Execute & Verify ---
@@ -242,9 +236,9 @@ mod tests {
         });
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",           // macOS ARM - should match
-            "app-darwin-x86_64.tar.gz",          // macOS x86 - wrong arch
-            "app-linux-x86_64.tar.gz",           // Linux - wrong OS
+            "app-darwin-arm64.tar.gz",  // macOS ARM - should match
+            "app-darwin-x86_64.tar.gz", // macOS x86 - wrong arch
+            "app-linux-x86_64.tar.gz",  // Linux - wrong OS
         ]);
 
         // --- Execute & Verify ---
@@ -258,14 +252,11 @@ mod tests {
 
         // --- Setup ---
         let picker = DefaultAssetPicker::with_platform(super::super::Platform {
-            os: "freebsd".into(),                 // Unsupported OS
+            os: "freebsd".into(), // Unsupported OS
             arch: "x86_64".into(),
         });
 
-        let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",
-            "app-linux-x86_64.tar.gz",
-        ]);
+        let assets = make_assets(&["app-darwin-arm64.tar.gz", "app-linux-x86_64.tar.gz"]);
 
         // --- Execute & Verify ---
         assert!(picker.pick(&assets).is_none());
@@ -282,8 +273,8 @@ mod tests {
         });
 
         let assets = make_assets(&[
-            "app-linux-x86_64.zip",              // Lower score
-            "app-linux-x86_64.tar.gz",           // Higher score (preferred)
+            "app-linux-x86_64.zip",    // Lower score
+            "app-linux-x86_64.tar.gz", // Higher score (preferred)
         ]);
 
         // --- Execute & Verify ---
@@ -299,8 +290,8 @@ mod tests {
         let picker = PatternAssetPicker::new("linux");
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",           // No "linux" in name
-            "app-linux-x86_64.tar.gz",           // Contains "linux"
+            "app-darwin-arm64.tar.gz", // No "linux" in name
+            "app-linux-x86_64.tar.gz", // Contains "linux"
         ]);
 
         // --- Execute & Verify ---
@@ -316,9 +307,9 @@ mod tests {
         let picker = PatternAssetPicker::new("app-*-x86_64.tar.gz");
 
         let assets = make_assets(&[
-            "app-darwin-arm64.tar.gz",           // Wrong arch
-            "app-linux-x86_64.tar.gz",           // Matches pattern
-            "app-linux-arm64.tar.gz",            // Wrong arch
+            "app-darwin-arm64.tar.gz", // Wrong arch
+            "app-linux-x86_64.tar.gz", // Matches pattern
+            "app-linux-arm64.tar.gz",  // Wrong arch
         ]);
 
         // --- Execute & Verify ---

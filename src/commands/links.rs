@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::RepoSpec,
     package::{LinkRule, Meta, VersionedLink},
-    runtime::{is_path_under, Runtime},
+    runtime::{Runtime, is_path_under},
 };
 
 use super::paths::default_install_root;
@@ -107,17 +107,16 @@ pub(crate) fn print_versioned_links<R: Runtime>(
         let version_dir = package_dir.join(&link.version);
         let status = check_link_status(runtime, &link.dest, &version_dir);
         let source = link.path.as_deref().unwrap_or("(default)");
-        println!("  @{} {} -> {:?}{}", link.version, source, link.dest, status);
+        println!(
+            "  @{} {} -> {:?}{}",
+            link.version, source, link.dest, status
+        );
     }
 }
 
 /// Show link rules for a package
 #[tracing::instrument(skip(runtime, install_root))]
-pub fn links<R: Runtime>(
-    runtime: R,
-    repo_str: &str,
-    install_root: Option<PathBuf>,
-) -> Result<()> {
+pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
     debug!("Showing link rules for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
     let root = match install_root {
@@ -132,14 +131,15 @@ pub fn links<R: Runtime>(
 
     if !runtime.exists(&meta_path) {
         debug!("Meta file not found");
-        anyhow::bail!(
-            "Package {} is not installed.",
-            spec.repo
-        );
+        anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     let meta = Meta::load(&runtime, &meta_path)?;
-    debug!("Found {} link rules, {} versioned links", meta.links.len(), meta.versioned_links.len());
+    debug!(
+        "Found {} link rules, {} versioned links",
+        meta.links.len(),
+        meta.versioned_links.len()
+    );
 
     if meta.links.is_empty() && meta.versioned_links.is_empty() {
         println!("No link rules for {}.", spec.repo);
@@ -147,12 +147,20 @@ pub fn links<R: Runtime>(
     }
 
     let current_dir = package_dir.join("current");
-    let header = format!("Link rules for {} (current: {}):", spec.repo, meta.current_version);
+    let header = format!(
+        "Link rules for {} (current: {}):",
+        spec.repo, meta.current_version
+    );
     print_links(&runtime, &meta.links, &current_dir, Some(&header));
 
     if !meta.versioned_links.is_empty() {
         println!();
-        print_versioned_links(&runtime, &meta.versioned_links, &package_dir, Some("Versioned links (historical):"));
+        print_versioned_links(
+            &runtime,
+            &meta.versioned_links,
+            &package_dir,
+            Some("Versioned links (historical):"),
+        );
     }
 
     Ok(())
@@ -324,7 +332,9 @@ mod tests {
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Check Package Exists ---
 
@@ -353,7 +363,9 @@ mod tests {
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Check Package Exists ---
 
@@ -369,8 +381,8 @@ mod tests {
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1.0.0".into(),
-            links: vec![],              // No links!
-            versioned_links: vec![],    // No versioned links!
+            links: vec![],           // No links!
+            versioned_links: vec![], // No versioned links!
             ..Default::default()
         };
         let meta_json = serde_json::to_string(&meta).unwrap();
@@ -393,7 +405,7 @@ mod tests {
 
         // --- Setup Paths ---
         let install_root = PathBuf::from("/custom/root");
-        let meta_path = install_root.join("owner/repo/meta.json");  // /custom/root/owner/repo/meta.json
+        let meta_path = install_root.join("owner/repo/meta.json"); // /custom/root/owner/repo/meta.json
 
         // --- 1. Check Package Exists ---
 

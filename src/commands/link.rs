@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::LinkSpec,
     package::{LinkRule, Meta, VersionedLink},
-    runtime::{is_path_under, relative_symlink_path, Runtime},
+    runtime::{Runtime, is_path_under, relative_symlink_path},
 };
 
 use super::paths::default_install_root;
@@ -152,7 +152,8 @@ pub fn link<R: Runtime>(
 
     // Create the symlink using relative path for shorter, portable links
     // Example: /usr/local/bin/tool -> ../ghri/owner/repo/v1/tool
-    let symlink_target = relative_symlink_path(&final_dest, &link_target).unwrap_or(link_target.clone());
+    let symlink_target =
+        relative_symlink_path(&final_dest, &link_target).unwrap_or(link_target.clone());
     runtime.symlink(&symlink_target, &final_dest)?;
 
     // Add or update link rule in meta.json
@@ -170,7 +171,11 @@ pub fn link<R: Runtime>(
         meta.links.retain(|l| l.dest != final_dest);
 
         // Check if a versioned link with the same dest already exists
-        if let Some(existing) = meta.versioned_links.iter_mut().find(|l| l.dest == final_dest) {
+        if let Some(existing) = meta
+            .versioned_links
+            .iter_mut()
+            .find(|l| l.dest == final_dest)
+        {
             // Update existing versioned link
             existing.version = new_link.version;
             existing.path = new_link.path;
@@ -206,16 +211,16 @@ pub fn link<R: Runtime>(
     runtime.write(&tmp_path, json.as_bytes())?;
     runtime.rename(&tmp_path, &meta_path)?;
 
-    println!(
-        "Linked {} {} -> {:?}",
-        spec.repo, version, final_dest
-    );
+    println!("Linked {} {} -> {:?}", spec.repo, version, final_dest);
 
     Ok(())
 }
 
 /// Determine what to link to: if version dir has only one file, link to that file
-pub(crate) fn determine_link_target<R: Runtime>(runtime: &R, version_dir: &Path) -> Result<PathBuf> {
+pub(crate) fn determine_link_target<R: Runtime>(
+    runtime: &R,
+    version_dir: &Path,
+) -> Result<PathBuf> {
     let entries = runtime.read_dir(version_dir)?;
 
     if entries.len() == 1 {
@@ -306,10 +311,12 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
-            .returning(|_| Ok(vec![
-                PathBuf::from("/root/o/r/v1/tool"),
-                PathBuf::from("/root/o/r/v1/README.md"),
-            ]));
+            .returning(|_| {
+                Ok(vec![
+                    PathBuf::from("/root/o/r/v1/tool"),
+                    PathBuf::from("/root/o/r/v1/README.md"),
+                ])
+            });
 
         // --- Execute & Verify ---
         // When version dir has multiple files, should return the version dir itself
@@ -354,11 +361,11 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool");               // /home/user/.ghri/owner/repo/v1/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
         let dest_dir = PathBuf::from("/usr/local/bin");
-        let final_link = dest_dir.join("tool");                 // /usr/local/bin/tool
+        let final_link = dest_dir.join("tool"); // /usr/local/bin/tool
 
         // --- 1. Load Metadata ---
 
@@ -454,9 +461,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let v2_dir = root.join("owner/repo/v2");                // /home/user/.ghri/owner/repo/v2
-        let v2_tool_path = v2_dir.join("tool");                 // /home/user/.ghri/owner/repo/v2/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let v2_dir = root.join("owner/repo/v2"); // /home/user/.ghri/owner/repo/v2
+        let v2_tool_path = v2_dir.join("tool"); // /home/user/.ghri/owner/repo/v2/tool
         let dest = PathBuf::from("/usr/local/bin/tool");
         let dest_parent = PathBuf::from("/usr/local/bin");
 
@@ -548,8 +555,8 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let v2_dir = root.join("owner/repo/v2");                // /home/user/.ghri/owner/repo/v2
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let v2_dir = root.join("owner/repo/v2"); // /home/user/.ghri/owner/repo/v2
         let dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Load Metadata ---
@@ -593,8 +600,8 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let current_link = root.join("owner/repo/current");     // /home/user/.ghri/owner/repo/current
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = root.join("owner/repo/current"); // /home/user/.ghri/owner/repo/current
         let dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Load Metadata ---
@@ -619,13 +626,20 @@ mod tests {
         runtime
             .expect_read_link()
             .with(eq(current_link))
-            .returning(|_| Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into()));
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
 
         // --- Execute & Verify ---
         // Should fail because no current version and none specified
         let result = link(runtime, "owner/repo", dest, Some(root));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No current version"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No current version")
+        );
     }
 
     #[test]
@@ -636,9 +650,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/tool");       // /home/user/.ghri/owner/repo/v1/bin/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let explicit_path = version_dir.join("bin/tool"); // /home/user/.ghri/owner/repo/v1/bin/tool
         let dest = PathBuf::from("/usr/local/bin/mytool");
         let dest_parent = PathBuf::from("/usr/local/bin");
 
@@ -700,7 +714,9 @@ mod tests {
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/bin/tool")),
+                eq(PathBuf::from(
+                    "../../../home/user/.ghri/owner/repo/v1/bin/tool",
+                )),
                 eq(dest.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -724,9 +740,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/notfound");   // /home/user/.ghri/owner/repo/v1/bin/notfound
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let explicit_path = version_dir.join("bin/notfound"); // /home/user/.ghri/owner/repo/v1/bin/notfound
         let dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Load Metadata ---
@@ -776,9 +792,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool");               // /home/user/.ghri/owner/repo/v1/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
         let dest = PathBuf::from("/usr/local/bin/tool");
         let dest_parent = PathBuf::from("/usr/local/bin");
 
@@ -861,9 +877,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool");               // /home/user/.ghri/owner/repo/v1/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
         let dest = PathBuf::from("/usr/local/bin/tool");
         let dest_parent = PathBuf::from("/usr/local/bin");
         let other_package_path = PathBuf::from("/home/user/.ghri/other/package/v1/tool");
@@ -943,7 +959,12 @@ mod tests {
         // Should fail because symlink points to different package
         let result = link(runtime, "owner/repo", dest, Some(root));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not part of package"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not part of package")
+        );
     }
 
     #[test]
@@ -954,11 +975,11 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/tool");       // /home/user/.ghri/owner/repo/v1/bin/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let explicit_path = version_dir.join("bin/tool"); // /home/user/.ghri/owner/repo/v1/bin/tool
         let dest_dir = PathBuf::from("/usr/local/bin");
-        let final_link = dest_dir.join("tool");                 // /usr/local/bin/tool (filename from explicit path)
+        let final_link = dest_dir.join("tool"); // /usr/local/bin/tool (filename from explicit path)
 
         // --- 1. Load Metadata ---
 
@@ -1024,7 +1045,9 @@ mod tests {
         runtime
             .expect_symlink()
             .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/bin/tool")),
+                eq(PathBuf::from(
+                    "../../../home/user/.ghri/owner/repo/v1/bin/tool",
+                )),
                 eq(final_link.clone()),
             )
             .returning(|_, _| Ok(()));
@@ -1048,9 +1071,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1");           // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool");               // /home/user/.ghri/owner/repo/v1/tool
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
+        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
         let dest = PathBuf::from("/opt/mytools/bin/tool");
         let dest_parent = PathBuf::from("/opt/mytools/bin");
 
@@ -1150,10 +1173,10 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");      // /home/user/.ghri/owner/repo/meta.json
-        let v1_tool_path = root.join("owner/repo/v1/tool");     // /home/user/.ghri/owner/repo/v1/tool (old)
-        let v2_dir = root.join("owner/repo/v2");                // /home/user/.ghri/owner/repo/v2
-        let v2_tool_path = v2_dir.join("tool");                 // /home/user/.ghri/owner/repo/v2/tool (new)
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let v1_tool_path = root.join("owner/repo/v1/tool"); // /home/user/.ghri/owner/repo/v1/tool (old)
+        let v2_dir = root.join("owner/repo/v2"); // /home/user/.ghri/owner/repo/v2
+        let v2_tool_path = v2_dir.join("tool"); // /home/user/.ghri/owner/repo/v2/tool (new)
         let dest = PathBuf::from("/usr/local/bin/tool");
         let dest_parent = PathBuf::from("/usr/local/bin");
 
@@ -1351,23 +1374,24 @@ mod tests {
             .with(eq(dest.clone()))
             .returning(|_| Ok(()));
 
-        runtime
-            .expect_symlink()
-            .returning(|_, _| Ok(()));
+        runtime.expect_symlink().returning(|_, _| Ok(()));
 
         // --- 5. Save Metadata ---
         // The written meta should have:
         // - Empty links (default link removed)
         // - versioned_links with v2 entry
-        runtime.expect_write().withf(|_, data| {
-            let json_str = std::str::from_utf8(data).unwrap();
-            let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
-            // Default links should be empty (removed when versioned link was created)
-            saved_meta.links.is_empty() &&
+        runtime
+            .expect_write()
+            .withf(|_, data| {
+                let json_str = std::str::from_utf8(data).unwrap();
+                let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
+                // Default links should be empty (removed when versioned link was created)
+                saved_meta.links.is_empty() &&
             // Should have one versioned link
             saved_meta.versioned_links.len() == 1 &&
             saved_meta.versioned_links[0].version == "v2"
-        }).returning(|_, _| Ok(()));
+            })
+            .returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
@@ -1466,22 +1490,23 @@ mod tests {
             .with(eq(dest.clone()))
             .returning(|_| Ok(()));
 
-        runtime
-            .expect_symlink()
-            .returning(|_, _| Ok(()));
+        runtime.expect_symlink().returning(|_, _| Ok(()));
 
         // --- 5. Save Metadata ---
         // The written meta should have:
         // - links with one entry (default link)
         // - Empty versioned_links (versioned link removed)
-        runtime.expect_write().withf(|_, data| {
-            let json_str = std::str::from_utf8(data).unwrap();
-            let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
-            // Should have one default link
-            saved_meta.links.len() == 1 &&
+        runtime
+            .expect_write()
+            .withf(|_, data| {
+                let json_str = std::str::from_utf8(data).unwrap();
+                let saved_meta: Meta = serde_json::from_str(json_str).unwrap();
+                // Should have one default link
+                saved_meta.links.len() == 1 &&
             // Versioned links should be empty (removed when default link was created)
             saved_meta.versioned_links.is_empty()
-        }).returning(|_, _| Ok(()));
+            })
+            .returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---

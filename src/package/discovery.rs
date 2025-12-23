@@ -45,9 +45,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/root");
-        let owner_dir = root.join("owner");                       // /root/owner
-        let repo_dir = owner_dir.join("repo");                    // /root/owner/repo
-        let meta_path = repo_dir.join("meta.json");               // /root/owner/repo/meta.json
+        let owner_dir = root.join("owner"); // /root/owner
+        let repo_dir = owner_dir.join("repo"); // /root/owner/repo
+        let meta_path = repo_dir.join("meta.json"); // /root/owner/repo/meta.json
 
         // --- 1. Check Root Exists ---
 

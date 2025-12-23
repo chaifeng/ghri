@@ -92,8 +92,7 @@ impl ArchiveExtractor {
             let entry_type = entry.header().entry_type();
 
             // Skip PAX global/extended headers - these are metadata entries, not actual files
-            if entry_type == tar::EntryType::XGlobalHeader
-                || entry_type == tar::EntryType::XHeader
+            if entry_type == tar::EntryType::XGlobalHeader || entry_type == tar::EntryType::XHeader
             {
                 debug!("Skipping PAX header entry");
                 continue;
@@ -124,7 +123,10 @@ impl ArchiveExtractor {
                         runtime.create_dir_all(parent)?;
                     }
                     if let Err(e) = runtime.symlink(link_name.as_ref(), &full_path) {
-                        debug!("Failed to create symlink {:?} -> {:?}: {}", full_path, link_name, e);
+                        debug!(
+                            "Failed to create symlink {:?} -> {:?}: {}",
+                            full_path, link_name, e
+                        );
                     }
                 }
             }
@@ -366,7 +368,12 @@ mod tests {
         let entries: Vec<_> = fs::read_dir(&extract_path)?
             .filter_map(|e| e.ok())
             .collect();
-        assert_eq!(entries.len(), 1, "Expected only file1.txt, but found: {:?}", entries);
+        assert_eq!(
+            entries.len(),
+            1,
+            "Expected only file1.txt, but found: {:?}",
+            entries
+        );
 
         Ok(())
     }
@@ -456,7 +463,10 @@ mod tests {
 
         // After successful extraction, cleanup context should be empty
         let ctx = cleanup_ctx.lock().unwrap();
-        assert!(ctx.paths.is_empty(), "Cleanup context should be empty after successful extraction");
+        assert!(
+            ctx.paths.is_empty(),
+            "Cleanup context should be empty after successful extraction"
+        );
 
         let extracted_file = extract_path.join("file1.txt");
         assert!(extracted_file.exists());
@@ -616,6 +626,11 @@ mod tests {
 
         let result = ArchiveExtractor.extract(&RealRuntime, &archive_path, &extract_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to open archive"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to open archive")
+        );
     }
 }

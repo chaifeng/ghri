@@ -170,7 +170,9 @@ mod tests {
             .await;
 
         let http_client = HttpClient::new(Client::new());
-        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url).await.unwrap();
+        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url)
+            .await
+            .unwrap();
 
         mock.assert_async().await;
         assert_eq!(repo_info.description, Some("A test repo".to_string()));
@@ -205,7 +207,9 @@ mod tests {
             .await;
 
         let http_client = HttpClient::new(Client::new());
-        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url).await.unwrap();
+        let repo_info = GitHub::fetch_repo_info(&http_client, &repo, &url)
+            .await
+            .unwrap();
 
         mock.assert_async().await;
         assert_eq!(repo_info.description, None);
@@ -251,7 +255,9 @@ mod tests {
             .await;
 
         let http_client = HttpClient::new(Client::new());
-        let releases = GitHub::fetch_releases(&http_client, &repo, &url).await.unwrap();
+        let releases = GitHub::fetch_releases(&http_client, &repo, &url)
+            .await
+            .unwrap();
 
         mock.assert_async().await;
         assert_eq!(releases.len(), 2);
@@ -310,7 +316,9 @@ mod tests {
             .await;
 
         let http_client = HttpClient::new(Client::new());
-        let releases = GitHub::fetch_releases(&http_client, &repo, &url).await.unwrap();
+        let releases = GitHub::fetch_releases(&http_client, &repo, &url)
+            .await
+            .unwrap();
 
         mock_p1.assert_async().await;
         mock_p2.assert_async().await;

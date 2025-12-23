@@ -44,5 +44,14 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
         config.http_client,
         config.extractor,
     );
-    installer.install(&spec.repo, spec.version.as_deref(), config.install_root, filters, pre, yes).await
+    installer
+        .install(
+            &spec.repo,
+            spec.version.as_deref(),
+            config.install_root,
+            filters,
+            pre,
+            yes,
+        )
+        .await
 }

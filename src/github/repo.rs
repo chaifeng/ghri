@@ -55,7 +55,9 @@ impl FromStr for RepoSpec {
             let (repo, ver) = s.split_at(at_pos);
             let ver = &ver[1..]; // Skip the @
             if ver.is_empty() {
-                return Err(anyhow!("Invalid format: version after @ cannot be empty. Expected 'owner/repo@version'."));
+                return Err(anyhow!(
+                    "Invalid format: version after @ cannot be empty. Expected 'owner/repo@version'."
+                ));
             }
             (repo, Some(ver.to_string()))
         } else {
@@ -125,7 +127,11 @@ impl FromStr for LinkSpec {
         };
 
         let repo = repo_part.parse::<GitHubRepo>()?;
-        Ok(LinkSpec { repo, version, path })
+        Ok(LinkSpec {
+            repo,
+            version,
+            path,
+        })
     }
 }
 

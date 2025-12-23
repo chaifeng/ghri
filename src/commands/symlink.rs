@@ -74,8 +74,8 @@ mod tests {
         let mut runtime = MockRuntime::new();
 
         // --- Setup Paths ---
-        let target_dir = PathBuf::from("/root/o/r/v1");           // Version directory
-        let current_link = PathBuf::from("/root/o/r/current");    // Symlink to create
+        let target_dir = PathBuf::from("/root/o/r/v1"); // Version directory
+        let current_link = PathBuf::from("/root/o/r/current"); // Symlink to create
 
         // --- 1. Check if Symlink Exists ---
 
@@ -104,8 +104,8 @@ mod tests {
         let mut runtime = MockRuntime::new();
 
         // --- Setup Paths ---
-        let target_dir = PathBuf::from("/root/o/r/v2");           // New version directory
-        let current_link = PathBuf::from("/root/o/r/current");    // Symlink to update
+        let target_dir = PathBuf::from("/root/o/r/v2"); // New version directory
+        let current_link = PathBuf::from("/root/o/r/current"); // Symlink to update
 
         // --- 1. Check if Symlink Exists ---
 

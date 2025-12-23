@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::{
     github::LinkSpec,
     package::{LinkRule, Meta},
-    runtime::{is_path_under, Runtime},
+    runtime::{Runtime, is_path_under},
 };
 
 use super::paths::default_install_root;
@@ -34,10 +34,7 @@ pub fn unlink<R: Runtime>(
 
     if !runtime.exists(&meta_path) {
         debug!("Meta file not found");
-        anyhow::bail!(
-            "Package {} is not installed.",
-            spec.repo
-        );
+        anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     let mut meta = Meta::load(&runtime, &meta_path)?;
@@ -55,7 +52,9 @@ pub fn unlink<R: Runtime>(
     } else if let Some(ref dest_path) = dest {
         debug!("Looking for rule with dest {:?}", dest_path);
         // Find rules matching the destination
-        let matching: Vec<_> = meta.links.iter()
+        let matching: Vec<_> = meta
+            .links
+            .iter()
             .filter(|r| r.dest == *dest_path)
             .cloned()
             .collect();
@@ -63,10 +62,9 @@ pub fn unlink<R: Runtime>(
             // Try to find by partial match (filename)
             let dest_filename = dest_path.file_name().and_then(|s| s.to_str());
             debug!("No exact match, trying filename match: {:?}", dest_filename);
-            meta.links.iter()
-                .filter(|r| {
-                    r.dest.file_name().and_then(|s| s.to_str()) == dest_filename
-                })
+            meta.links
+                .iter()
+                .filter(|r| r.dest.file_name().and_then(|s| s.to_str()) == dest_filename)
                 .cloned()
                 .collect()
         } else {
@@ -75,7 +73,8 @@ pub fn unlink<R: Runtime>(
     } else if let Some(ref path) = spec.path {
         // Filter by path in the link rule (e.g., "bach-sh/bach:bach.sh")
         debug!("Looking for rule with path {:?}", path);
-        meta.links.iter()
+        meta.links
+            .iter()
             .filter(|r| r.path.as_ref() == Some(path))
             .cloned()
             .collect()
@@ -84,7 +83,8 @@ pub fn unlink<R: Runtime>(
         anyhow::bail!(
             "Please specify a destination path or use --all to remove all links.\n\
              Current link rules:\n{}",
-            meta.links.iter()
+            meta.links
+                .iter()
                 .map(|r| format!("  {:?}", r.dest))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -93,7 +93,8 @@ pub fn unlink<R: Runtime>(
 
     if rules_to_remove.is_empty() {
         debug!("No matching rules found");
-        let search_target = dest.as_ref()
+        let search_target = dest
+            .as_ref()
             .map(|d| format!("{:?}", d))
             .or_else(|| spec.path.as_ref().map(|p| format!("path '{}'", p)))
             .unwrap_or_else(|| "unknown".to_string());
@@ -101,7 +102,8 @@ pub fn unlink<R: Runtime>(
             "No link rule found matching {}.\n\
              Current link rules:\n{}",
             search_target,
-            meta.links.iter()
+            meta.links
+                .iter()
                 .map(|r| {
                     if let Some(ref p) = r.path {
                         format!("  {} -> {:?}", p, r.dest)
@@ -189,8 +191,14 @@ pub fn unlink<R: Runtime>(
                     }
                 }
             } else {
-                warn!("Path {:?} exists but is not a symlink, skipping removal", rule.dest);
-                eprintln!("Warning: {:?} is not a symlink, skipping removal", rule.dest);
+                warn!(
+                    "Path {:?} exists but is not a symlink, skipping removal",
+                    rule.dest
+                );
+                eprintln!(
+                    "Warning: {:?} is not a symlink, skipping removal",
+                    rule.dest
+                );
                 error_count += 1;
             }
         } else {
@@ -201,7 +209,10 @@ pub fn unlink<R: Runtime>(
 
         // Remove the rule from meta
         meta.links.retain(|r| r.dest != rule.dest);
-        debug!("Removed rule from meta, {} rules remaining", meta.links.len());
+        debug!(
+            "Removed rule from meta, {} rules remaining",
+            meta.links.len()
+        );
     }
 
     // Save updated meta
@@ -216,7 +227,11 @@ pub fn unlink<R: Runtime>(
         "Unlinked {} rule(s) from {}{}",
         removed_count,
         spec.repo,
-        if error_count > 0 { format!(" ({} error(s))", error_count) } else { String::new() }
+        if error_count > 0 {
+            format!(" ({} error(s))", error_count)
+        } else {
+            String::new()
+        }
     );
 
     Ok(())
@@ -263,7 +278,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Load Metadata ---
@@ -340,7 +355,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link1 = PathBuf::from("/usr/local/bin/tool1");
         let link2 = PathBuf::from("/usr/local/bin/tool2");
 
@@ -357,8 +372,14 @@ mod tests {
             name: "owner/repo".into(),
             current_version: "v1".into(),
             links: vec![
-                LinkRule { dest: link1.clone(), path: None },
-                LinkRule { dest: link2.clone(), path: Some("tool2".into()) },
+                LinkRule {
+                    dest: link1.clone(),
+                    path: None,
+                },
+                LinkRule {
+                    dest: link2.clone(),
+                    path: Some("tool2".into()),
+                },
             ],
             ..Default::default()
         };
@@ -433,7 +454,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Load Metadata ---
@@ -494,7 +515,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let existing_link = PathBuf::from("/usr/local/bin/tool");
         let nonexistent_link = PathBuf::from("/other/path/different-tool");
 
@@ -523,7 +544,13 @@ mod tests {
         // --- Execute & Verify ---
 
         // Request unlink for /other/path/different-tool which doesn't exist in rules
-        let result = unlink(runtime, "owner/repo", Some(nonexistent_link), false, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            Some(nonexistent_link),
+            false,
+            Some(root),
+        );
         assert!(result.is_err());
     }
 
@@ -536,7 +563,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
 
         // --- 1. Load Metadata ---
 
@@ -576,7 +603,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json");       // /home/user/.ghri/owner/repo/meta.json
+        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
 
         // --- 1. Load Metadata ---
 
@@ -590,7 +617,7 @@ mod tests {
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
-            links: vec![],  // Empty!
+            links: vec![], // Empty!
             ..Default::default()
         };
         runtime

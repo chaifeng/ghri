@@ -126,11 +126,9 @@ impl Meta {
     pub fn get_latest_release(&self) -> Option<&MetaRelease> {
         self.releases
             .iter()
-            .max_by(|a, b| {
-                match (&a.published_at, &b.published_at) {
-                    (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                    _ => a.version.cmp(&b.version),
-                }
+            .max_by(|a, b| match (&a.published_at, &b.published_at) {
+                (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
+                _ => a.version.cmp(&b.version),
             })
     }
 
@@ -139,10 +137,10 @@ impl Meta {
     pub fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
         let content = runtime.read_to_string(path)?;
         let mut meta: Meta = serde_json::from_str(&content)?;
-        
+
         // Apply semantic defaults for missing fields
         meta.apply_defaults(runtime, path);
-        
+
         Ok(meta)
     }
 
@@ -186,9 +184,7 @@ impl Meta {
                 "https://github.com".to_string()
             } else {
                 // For GitHub Enterprise, try to derive web URL from API URL
-                self.api_url
-                    .replace("/api/v3", "")
-                    .replace("api.", "")
+                self.api_url.replace("/api/v3", "").replace("api.", "")
             };
             self.homepage = Some(format!("{}/{}/{}", web_url, owner, repo));
         }
@@ -403,17 +399,17 @@ mod tests {
         let releases = vec![
             Release {
                 tag_name: "v1.0.0".into(),
-                published_at: Some("2023-01-01T00:00:00Z".into()),  // Oldest
+                published_at: Some("2023-01-01T00:00:00Z".into()), // Oldest
                 ..Default::default()
             },
             Release {
                 tag_name: "v2.0.0".into(),
-                published_at: Some("2023-02-01T00:00:00Z".into()),  // Newest
+                published_at: Some("2023-02-01T00:00:00Z".into()), // Newest
                 ..Default::default()
             },
             Release {
                 tag_name: "v0.9.0".into(),
-                published_at: Some("2022-12-01T00:00:00Z".into()),  // Middle
+                published_at: Some("2022-12-01T00:00:00Z".into()), // Middle
                 ..Default::default()
             },
         ];
@@ -425,9 +421,9 @@ mod tests {
         // --- Verify ---
 
         // Releases should be sorted by published_at descending (newest first)
-        assert_eq!(meta.releases[0].version, "v2.0.0");  // 2023-02-01 (newest)
-        assert_eq!(meta.releases[1].version, "v1.0.0");  // 2023-01-01
-        assert_eq!(meta.releases[2].version, "v0.9.0");  // 2022-12-01 (oldest)
+        assert_eq!(meta.releases[0].version, "v2.0.0"); // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].version, "v1.0.0"); // 2023-01-01
+        assert_eq!(meta.releases[2].version, "v0.9.0"); // 2022-12-01 (oldest)
     }
 
     #[test]
@@ -442,12 +438,14 @@ mod tests {
             api_url: "api".into(),
             updated_at: "t1".into(),
             current_version: "v1".into(),
-            releases: vec![Release {
-                tag_name: "v1".into(),
-                published_at: Some("2023-01-01".into()),  // Older
-                ..Default::default()
-            }
-            .into()],
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    published_at: Some("2023-01-01".into()), // Older
+                    ..Default::default()
+                }
+                .into(),
+            ],
             ..Default::default()
         };
 
@@ -457,12 +455,14 @@ mod tests {
             api_url: "api".into(),
             updated_at: "t2".into(),
             current_version: "v1".into(),
-            releases: vec![Release {
-                tag_name: "v2".into(),
-                published_at: Some("2023-02-01".into()),  // Newer
-                ..Default::default()
-            }
-            .into()],
+            releases: vec![
+                Release {
+                    tag_name: "v2".into(),
+                    published_at: Some("2023-02-01".into()), // Newer
+                    ..Default::default()
+                }
+                .into(),
+            ],
             ..Default::default()
         };
 
@@ -473,8 +473,8 @@ mod tests {
         // --- Verify ---
 
         // After merge, releases should be sorted (newest first)
-        assert_eq!(meta.releases[0].version, "v2");  // 2023-02-01 (newest)
-        assert_eq!(meta.releases[1].version, "v1");  // 2023-01-01 (oldest)
+        assert_eq!(meta.releases[0].version, "v2"); // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].version, "v1"); // 2023-01-01 (oldest)
     }
 
     #[test]
@@ -487,7 +487,7 @@ mod tests {
         let mut releases = vec![
             MetaRelease {
                 version: "v1".into(),
-                published_at: None,  // No date - will be sorted by version
+                published_at: None, // No date - will be sorted by version
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
@@ -495,7 +495,7 @@ mod tests {
             },
             MetaRelease {
                 version: "v2".into(),
-                published_at: None,  // No date - will be sorted by version
+                published_at: None, // No date - will be sorted by version
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
@@ -503,7 +503,7 @@ mod tests {
             },
             MetaRelease {
                 version: "v1.5".into(),
-                published_at: Some("2023".into()),  // Has date - comes first
+                published_at: Some("2023".into()), // Has date - comes first
                 title: None,
                 is_prerelease: false,
                 tarball_url: "".into(),
@@ -546,7 +546,7 @@ mod tests {
         // Add prerelease v2-rc (newer, but prerelease)
         meta.releases.push(MetaRelease {
             version: "v2-rc".into(),
-            is_prerelease: true,  // This is a prerelease!
+            is_prerelease: true, // This is a prerelease!
             published_at: Some("2024".into()),
             ..Default::default()
         });
@@ -569,7 +569,7 @@ mod tests {
 
         let meta = Meta {
             name: "n".into(),
-            releases: vec![],  // No releases
+            releases: vec![], // No releases
             ..Default::default()
         };
 
@@ -593,7 +593,7 @@ mod tests {
         // Add only a prerelease version
         meta.releases.push(MetaRelease {
             version: "v1-rc".into(),
-            is_prerelease: true,  // Only prerelease available
+            is_prerelease: true, // Only prerelease available
             ..Default::default()
         });
 
@@ -721,7 +721,7 @@ mod tests {
 
         let other = Meta {
             name: "o/r".into(),
-            description: Some("new description".into()),  // Changed description
+            description: Some("new description".into()), // Changed description
             updated_at: "new".into(),
             ..Default::default()
         };
@@ -799,9 +799,7 @@ mod tests {
         runtime
             .expect_read_to_string()
             .with(eq(meta_path.clone()))
-            .returning(|_| {
-                Ok(r#"{"name": "owner/repo"}"#.into())
-            });
+            .returning(|_| Ok(r#"{"name": "owner/repo"}"#.into()));
 
         // --- Try to Read Current Symlink (for current_version default) ---
 
@@ -821,8 +819,14 @@ mod tests {
         // api_url should default to GitHub API
         assert_eq!(meta.api_url, "https://api.github.com");
         // URLs should be derived from name and api_url
-        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
-        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(
+            meta.repo_info_url,
+            "https://api.github.com/repos/owner/repo"
+        );
+        assert_eq!(
+            meta.releases_url,
+            "https://api.github.com/repos/owner/repo/releases"
+        );
         // homepage should default to GitHub page
         assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
         // Optional fields stay empty
@@ -857,7 +861,8 @@ mod tests {
                     "releases": [
                         {"version": "v1.0.0"}
                     ]
-                }"#.into())
+                }"#
+                .into())
             });
 
         // No symlink read needed since current_version is provided
@@ -876,9 +881,9 @@ mod tests {
         assert!(meta.releases.len() == 1);
         let release = &meta.releases[0];
         assert_eq!(release.version, "v1.0.0");
-        assert_eq!(release.tarball_url, "");  // Defaulted to empty
-        assert!(!release.is_prerelease);       // Defaulted to false
-        assert!(release.assets.is_empty());    // Defaulted to empty
+        assert_eq!(release.tarball_url, ""); // Defaulted to empty
+        assert!(!release.is_prerelease); // Defaulted to false
+        assert!(release.assets.is_empty()); // Defaulted to empty
     }
 
     #[test]
@@ -897,11 +902,11 @@ mod tests {
         // --- Verify Defaults Applied ---
 
         assert_eq!(release.version, "v2.0.0");
-        assert_eq!(release.title, None);            // Default: None
-        assert_eq!(release.published_at, None);     // Default: None
-        assert!(!release.is_prerelease);            // Default: false
-        assert_eq!(release.tarball_url, "");        // Default: empty string
-        assert!(release.assets.is_empty());         // Default: empty vec
+        assert_eq!(release.title, None); // Default: None
+        assert_eq!(release.published_at, None); // Default: None
+        assert!(!release.is_prerelease); // Default: false
+        assert_eq!(release.tarball_url, ""); // Default: empty string
+        assert!(release.assets.is_empty()); // Default: empty vec
     }
 
     #[test]
@@ -920,8 +925,8 @@ mod tests {
         // --- Verify Defaults Applied ---
 
         assert_eq!(asset.name, "app-linux-x64.tar.gz");
-        assert_eq!(asset.size, 0);              // Default: 0
-        assert_eq!(asset.download_url, "");     // Default: empty string
+        assert_eq!(asset.size, 0); // Default: 0
+        assert_eq!(asset.download_url, ""); // Default: empty string
     }
 
     #[test]
@@ -947,7 +952,8 @@ mod tests {
                     "some_future_field": "some_value",
                     "another_new_field": 12345,
                     "releases": []
-                }"#.into())
+                }"#
+                .into())
             });
 
         // --- Execute ---
@@ -977,9 +983,7 @@ mod tests {
         runtime
             .expect_read_to_string()
             .with(eq(meta_path.clone()))
-            .returning(|_| {
-                Ok(r#"{"name": "owner/repo"}"#.into())
-            });
+            .returning(|_| Ok(r#"{"name": "owner/repo"}"#.into()));
 
         // --- Read Current Symlink ---
 
@@ -1012,11 +1016,9 @@ mod tests {
         // --- Read meta.json ---
 
         // Read meta.json -> no homepage field
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{"name": "test-owner/test-repo", "current_version": "v1"}"#.into())
-            });
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{"name": "test-owner/test-repo", "current_version": "v1"}"#.into())
+        });
 
         // --- Execute ---
 
@@ -1025,7 +1027,10 @@ mod tests {
         // --- Verify ---
 
         // Homepage should default to GitHub URL based on name
-        assert_eq!(meta.homepage, Some("https://github.com/test-owner/test-repo".into()));
+        assert_eq!(
+            meta.homepage,
+            Some("https://github.com/test-owner/test-repo".into())
+        );
     }
 
     #[test]
@@ -1040,15 +1045,14 @@ mod tests {
         // --- Read meta.json ---
 
         // Read meta.json -> has explicit homepage
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{
                     "name": "owner/repo",
                     "homepage": "https://custom-homepage.com",
                     "current_version": "v1"
-                }"#.into())
-            });
+                }"#
+            .into())
+        });
 
         // --- Execute ---
 
@@ -1088,7 +1092,7 @@ mod tests {
         // --- Setup ---
 
         let meta = Meta {
-            name: "invalid-name".into(),  // No "/" separator
+            name: "invalid-name".into(), // No "/" separator
             ..Default::default()
         };
 
@@ -1115,18 +1119,17 @@ mod tests {
         // --- Read meta.json ---
 
         // Read meta.json -> fields with explicit null values
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{
                     "name": "owner/repo",
                     "api_url": null,
                     "repo_info_url": null,
                     "releases_url": null,
                     "homepage": null,
                     "current_version": "v1"
-                }"#.into())
-            });
+                }"#
+            .into())
+        });
 
         // --- Execute ---
 
@@ -1137,8 +1140,14 @@ mod tests {
         assert_eq!(meta.name, "owner/repo");
         // Null should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
-        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
-        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(
+            meta.repo_info_url,
+            "https://api.github.com/repos/owner/repo"
+        );
+        assert_eq!(
+            meta.releases_url,
+            "https://api.github.com/repos/owner/repo/releases"
+        );
         assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
     }
 
@@ -1154,18 +1163,17 @@ mod tests {
         // --- Read meta.json ---
 
         // Read meta.json -> fields with empty string values
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{
                     "name": "owner/repo",
                     "api_url": "",
                     "repo_info_url": "",
                     "releases_url": "",
                     "homepage": "",
                     "current_version": "v1"
-                }"#.into())
-            });
+                }"#
+            .into())
+        });
 
         // --- Execute ---
 
@@ -1175,8 +1183,14 @@ mod tests {
 
         // Empty strings should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
-        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
-        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(
+            meta.repo_info_url,
+            "https://api.github.com/repos/owner/repo"
+        );
+        assert_eq!(
+            meta.releases_url,
+            "https://api.github.com/repos/owner/repo/releases"
+        );
         assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
     }
 
@@ -1192,18 +1206,17 @@ mod tests {
         // --- Read meta.json ---
 
         // Read meta.json -> fields with whitespace-only values
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{
                     "name": "owner/repo",
                     "api_url": "   ",
                     "repo_info_url": "  \t  ",
                     "releases_url": "\n",
                     "homepage": "   ",
                     "current_version": "v1"
-                }"#.into())
-            });
+                }"#
+            .into())
+        });
 
         // --- Execute ---
 
@@ -1213,8 +1226,14 @@ mod tests {
 
         // Whitespace-only strings should be treated as missing, defaults applied
         assert_eq!(meta.api_url, "https://api.github.com");
-        assert_eq!(meta.repo_info_url, "https://api.github.com/repos/owner/repo");
-        assert_eq!(meta.releases_url, "https://api.github.com/repos/owner/repo/releases");
+        assert_eq!(
+            meta.repo_info_url,
+            "https://api.github.com/repos/owner/repo"
+        );
+        assert_eq!(
+            meta.releases_url,
+            "https://api.github.com/repos/owner/repo/releases"
+        );
         assert_eq!(meta.homepage, Some("https://github.com/owner/repo".into()));
     }
 
@@ -1231,14 +1250,13 @@ mod tests {
         // --- Read meta.json ---
 
         // Read /root/owner/repo/meta.json -> current_version is whitespace
-        runtime
-            .expect_read_to_string()
-            .returning(|_| {
-                Ok(r#"{
+        runtime.expect_read_to_string().returning(|_| {
+            Ok(r#"{
                     "name": "owner/repo",
                     "current_version": "   "
-                }"#.into())
-            });
+                }"#
+            .into())
+        });
 
         // --- Read Current Symlink ---
 
@@ -1264,12 +1282,12 @@ mod tests {
         // Test the is_empty_or_blank() helper function
 
         // --- Empty/Blank Cases (should return true) ---
-        assert!(Meta::is_empty_or_blank(""));           // Empty string
-        assert!(Meta::is_empty_or_blank("   "));        // Spaces only
-        assert!(Meta::is_empty_or_blank("\t\n"));       // Tab and newline
+        assert!(Meta::is_empty_or_blank("")); // Empty string
+        assert!(Meta::is_empty_or_blank("   ")); // Spaces only
+        assert!(Meta::is_empty_or_blank("\t\n")); // Tab and newline
 
         // --- Non-Empty Cases (should return false) ---
-        assert!(!Meta::is_empty_or_blank("value"));    // Normal value
+        assert!(!Meta::is_empty_or_blank("value")); // Normal value
         assert!(!Meta::is_empty_or_blank("  value  ")); // Value with surrounding whitespace
     }
 
@@ -1278,12 +1296,12 @@ mod tests {
         // Test the is_option_empty_or_blank() helper function
 
         // --- Empty/Blank Cases (should return true) ---
-        assert!(Meta::is_option_empty_or_blank(&None));                    // None
-        assert!(Meta::is_option_empty_or_blank(&Some("".into())));         // Some("")
-        assert!(Meta::is_option_empty_or_blank(&Some("   ".into())));      // Some("   ")
+        assert!(Meta::is_option_empty_or_blank(&None)); // None
+        assert!(Meta::is_option_empty_or_blank(&Some("".into()))); // Some("")
+        assert!(Meta::is_option_empty_or_blank(&Some("   ".into()))); // Some("   ")
 
         // --- Non-Empty Cases (should return false) ---
-        assert!(!Meta::is_option_empty_or_blank(&Some("value".into())));   // Some("value")
+        assert!(!Meta::is_option_empty_or_blank(&Some("value".into()))); // Some("value")
     }
 
     #[test]
@@ -1322,7 +1340,7 @@ mod tests {
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1.0.0".into(),
-            filters: vec![],  // Empty filters
+            filters: vec![], // Empty filters
             ..Default::default()
         };
 
@@ -1356,7 +1374,8 @@ mod tests {
                 Ok(r#"{
                     "name": "owner/repo",
                     "current_version": "v1.0.0"
-                }"#.into())
+                }"#
+                .into())
             });
 
         // --- Execute ---
@@ -1389,7 +1408,8 @@ mod tests {
                     "name": "owner/repo",
                     "current_version": "v1.0.0",
                     "filters": ["*linux*", "*x86_64*"]
-                }"#.into())
+                }"#
+                .into())
             });
 
         // --- Execute ---

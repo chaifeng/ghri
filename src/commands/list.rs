@@ -64,7 +64,9 @@ mod tests {
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Find All Packages ---
 
@@ -94,14 +96,16 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");                      // /home/user/.ghri/owner
-        let repo_dir = owner_dir.join("repo");                   // /home/user/.ghri/owner/repo
-        let meta_path = repo_dir.join("meta.json");              // /home/user/.ghri/owner/repo/meta.json
+        let owner_dir = root.join("owner"); // /home/user/.ghri/owner
+        let repo_dir = owner_dir.join("repo"); // /home/user/.ghri/owner/repo
+        let meta_path = repo_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
 
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Find All Packages ---
 
@@ -205,7 +209,9 @@ mod tests {
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Find All Packages ---
 
@@ -287,7 +293,9 @@ mod tests {
         // --- 1. Get Default Install Root ---
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime.expect_home_dir().returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
 
         // --- 2. Find All Packages ---
 

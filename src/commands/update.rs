@@ -288,12 +288,12 @@ mod tests {
         github.expect_get_releases_at().returning(|_, _| {
             Ok(vec![
                 Release {
-                    tag_name: "v2".into(),                         // New version!
+                    tag_name: "v2".into(), // New version!
                     published_at: Some("2024".into()),
                     ..Default::default()
                 },
                 Release {
-                    tag_name: "v1".into(),                         // Currently installed
+                    tag_name: "v1".into(), // Currently installed
                     published_at: Some("2023".into()),
                     ..Default::default()
                 },
@@ -414,10 +414,13 @@ mod tests {
             current_version: "v1".into(),
             updated_at: "old".into(),
             api_url: "api".into(),
-            releases: vec![Release {
-                tag_name: "v1".into(),
-                ..Default::default()
-            }.into()],
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
             ..Default::default()
         };
         let meta2 = Meta {
@@ -425,10 +428,13 @@ mod tests {
             current_version: "v1".into(),
             updated_at: "old".into(),
             api_url: "api".into(),
-            releases: vec![Release {
-                tag_name: "v1".into(),
-                ..Default::default()
-            }.into()],
+            releases: vec![
+                Release {
+                    tag_name: "v1".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ],
             ..Default::default()
         };
         let meta1_json = serde_json::to_string(&meta1).unwrap();
@@ -449,25 +455,21 @@ mod tests {
         github.expect_api_url().return_const("api".to_string());
 
         // Only owner1/repo1 should be updated, so expect exactly one call
-        github.expect_get_repo_info_at()
-            .times(1)
-            .returning(|_, _| {
-                Ok(RepoInfo {
-                    updated_at: "new".into(),
-                    description: None,
-                    homepage: None,
-                    license: None,
-                })
-            });
+        github.expect_get_repo_info_at().times(1).returning(|_, _| {
+            Ok(RepoInfo {
+                updated_at: "new".into(),
+                description: None,
+                homepage: None,
+                license: None,
+            })
+        });
 
-        github.expect_get_releases_at()
-            .times(1)
-            .returning(|_, _| {
-                Ok(vec![Release {
-                    tag_name: "v1".into(),
-                    ..Default::default()
-                }])
-            });
+        github.expect_get_releases_at().times(1).returning(|_, _| {
+            Ok(vec![Release {
+                tag_name: "v1".into(),
+                ..Default::default()
+            }])
+        });
 
         // --- 4. Save Updated Metadata ---
 

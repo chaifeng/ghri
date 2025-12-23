@@ -100,7 +100,8 @@ fn test_end_to_end_install() {
     let install_root = root_dir.path();
 
     let mut cmd = Command::new(cargo::cargo_bin!("ghri"));
-    cmd.arg("install").arg("-y")
+    cmd.arg("install")
+        .arg("-y")
         .arg("owner/repo")
         .arg("--root")
         .arg(install_root)
@@ -127,10 +128,7 @@ fn test_end_to_end_install() {
 
     // Test list command shows the installed package
     let mut list_cmd = Command::new(cargo::cargo_bin!("ghri"));
-    list_cmd
-        .arg("list")
-        .arg("--root")
-        .arg(install_root);
+    list_cmd.arg("list").arg("--root").arg(install_root);
 
     list_cmd
         .assert()
@@ -168,7 +166,8 @@ fn test_link_single_file_to_path() {
         .create();
 
     // Create archive with single executable file
-    let tar_gz_bytes = create_tar_gz_with_executable(&[("test-tool-v1/tool", "#!/bin/bash\necho hello", 0o755)]);
+    let tar_gz_bytes =
+        create_tar_gz_with_executable(&[("test-tool-v1/tool", "#!/bin/bash\necho hello", 0o755)]);
     let _mock_download = server
         .mock("GET", "/download/v1.0.0.tar.gz")
         .with_status(200)
@@ -181,7 +180,8 @@ fn test_link_single_file_to_path() {
 
     // Install the package first
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/tool")
         .arg("--root")
         .arg(install_root)
@@ -242,7 +242,8 @@ fn test_link_to_directory() {
         .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
         .create();
 
-    let tar_gz_bytes = create_tar_gz_with_executable(&[("cli-v2/cli", "#!/bin/bash\necho cli", 0o755)]);
+    let tar_gz_bytes =
+        create_tar_gz_with_executable(&[("cli-v2/cli", "#!/bin/bash\necho cli", 0o755)]);
     let _mock_download = server
         .mock("GET", "/download/v2.0.0.tar.gz")
         .with_status(200)
@@ -255,7 +256,8 @@ fn test_link_to_directory() {
 
     // Install the package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("org/cli")
         .arg("--root")
         .arg(install_root)
@@ -276,7 +278,11 @@ fn test_link_to_directory() {
 
     // Verify symlink was created inside the directory with repo name
     let expected_link = bin_dir.path().join("cli");
-    assert!(expected_link.is_symlink(), "Expected symlink at {:?}", expected_link);
+    assert!(
+        expected_link.is_symlink(),
+        "Expected symlink at {:?}",
+        expected_link
+    );
 
     // Verify meta.json has the full path in links array
     let meta_content = std::fs::read_to_string(install_root.join("org/cli/meta.json")).unwrap();
@@ -328,7 +334,8 @@ fn test_link_update_on_reinstall() {
 
     // Install v1
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("dev/app")
         .arg("--root")
         .arg(install_root)
@@ -390,7 +397,8 @@ fn test_link_update_on_reinstall() {
 
     // Install v2 (should automatically update the link)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("dev/app@v2.0.0")
         .arg("--root")
         .arg(install_root)
@@ -402,7 +410,11 @@ fn test_link_update_on_reinstall() {
     // Verify link now points to v2
     assert!(link_path.is_symlink());
     let v2_target = std::fs::read_link(&link_path).unwrap();
-    assert!(v2_target.to_string_lossy().contains("v2.0.0"), "Expected v2.0.0 in {:?}", v2_target);
+    assert!(
+        v2_target.to_string_lossy().contains("v2.0.0"),
+        "Expected v2.0.0 in {:?}",
+        v2_target
+    );
 }
 
 #[test]
@@ -459,7 +471,8 @@ fn test_link_update_existing_symlink() {
 
     // Install v0.9.0 first
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("my/pkg@v0.9.0")
         .arg("--root")
         .arg(install_root)
@@ -483,7 +496,8 @@ fn test_link_update_existing_symlink() {
 
     // Install v1.0.0 (this changes current version)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("my/pkg@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -504,7 +518,11 @@ fn test_link_update_existing_symlink() {
 
     // Verify link now points to v1.0.0
     let v1_target = std::fs::read_link(&link_path).unwrap();
-    assert!(v1_target.to_string_lossy().contains("v1.0.0"), "Expected v1.0.0 in {:?}", v1_target);
+    assert!(
+        v1_target.to_string_lossy().contains("v1.0.0"),
+        "Expected v1.0.0 in {:?}",
+        v1_target
+    );
 }
 
 #[test]
@@ -563,7 +581,8 @@ fn test_link_fails_for_existing_non_symlink() {
 
     // Install package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/blocked")
         .arg("--root")
         .arg(install_root)
@@ -606,7 +625,8 @@ fn test_unlink_removes_link_and_rule() {
         .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
         .create();
 
-    let tar_gz = create_tar_gz_with_executable(&[("unlink-v1/tool", "#!/bin/bash\necho test", 0o755)]);
+    let tar_gz =
+        create_tar_gz_with_executable(&[("unlink-v1/tool", "#!/bin/bash\necho test", 0o755)]);
     let _mock_download = server
         .mock("GET", "/download/v1.0.0.tar.gz")
         .with_status(200)
@@ -620,7 +640,8 @@ fn test_unlink_removes_link_and_rule() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/unlink")
         .arg("--root")
         .arg(install_root)
@@ -704,7 +725,8 @@ fn test_unlink_all_removes_all_links() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/unlinkall")
         .arg("--root")
         .arg(install_root)
@@ -751,8 +773,13 @@ fn test_unlink_all_removes_all_links() {
     assert!(!link2.exists());
 
     // Verify meta has empty links
-    let meta_content = std::fs::read_to_string(install_root.join("test/unlinkall/meta.json")).unwrap();
-    assert!(!meta_content.contains("\"links\"") || meta_content.contains("\"links\": []") || !meta_content.contains("link1"));
+    let meta_content =
+        std::fs::read_to_string(install_root.join("test/unlinkall/meta.json")).unwrap();
+    assert!(
+        !meta_content.contains("\"links\"")
+            || meta_content.contains("\"links\": []")
+            || !meta_content.contains("link1")
+    );
 }
 
 #[test]
@@ -806,7 +833,8 @@ fn test_unlink_requires_dest_or_all() {
 
     // Install and create a link
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/needarg")
         .arg("--root")
         .arg(install_root)
@@ -857,7 +885,8 @@ fn test_remove_package() {
         .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
         .create();
 
-    let tar_gz = create_tar_gz_with_executable(&[("removeme-v1/tool", "#!/bin/bash\necho test", 0o755)]);
+    let tar_gz =
+        create_tar_gz_with_executable(&[("removeme-v1/tool", "#!/bin/bash\necho test", 0o755)]);
     let _mock_download = server
         .mock("GET", "/download/v1.0.0.tar.gz")
         .with_status(200)
@@ -871,7 +900,8 @@ fn test_remove_package() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/removeme")
         .arg("--root")
         .arg(install_root)
@@ -896,7 +926,8 @@ fn test_remove_package() {
 
     // Remove package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove").arg("-y")
+        .arg("remove")
+        .arg("-y")
         .arg("test/removeme")
         .arg("--root")
         .arg(install_root)
@@ -939,14 +970,16 @@ fn test_remove_specific_version() {
         .with_body(r#"{"description": null, "homepage": null, "license": null, "updated_at": "2023-01-01T00:00:00Z"}"#)
         .create();
 
-    let tar_gz_v1 = create_tar_gz_with_executable(&[("multiversion-v1/tool", "#!/bin/bash\necho v1", 0o755)]);
+    let tar_gz_v1 =
+        create_tar_gz_with_executable(&[("multiversion-v1/tool", "#!/bin/bash\necho v1", 0o755)]);
     let _mock_download_v1 = server
         .mock("GET", "/download/v1.0.0.tar.gz")
         .with_status(200)
         .with_body(&tar_gz_v1)
         .create();
 
-    let tar_gz_v2 = create_tar_gz_with_executable(&[("multiversion-v2/tool", "#!/bin/bash\necho v2", 0o755)]);
+    let tar_gz_v2 =
+        create_tar_gz_with_executable(&[("multiversion-v2/tool", "#!/bin/bash\necho v2", 0o755)]);
     let _mock_download_v2 = server
         .mock("GET", "/download/v2.0.0.tar.gz")
         .with_status(200)
@@ -958,7 +991,8 @@ fn test_remove_specific_version() {
 
     // Install v1
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/multiversion@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -969,7 +1003,8 @@ fn test_remove_specific_version() {
 
     // Install v2 (becomes current)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/multiversion@v2.0.0")
         .arg("--root")
         .arg(install_root)
@@ -984,7 +1019,8 @@ fn test_remove_specific_version() {
 
     // Remove v1 (not current, should work without --force)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove").arg("-y")
+        .arg("remove")
+        .arg("-y")
         .arg("test/multiversion@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -1031,7 +1067,8 @@ fn test_remove_current_version_requires_force() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install").arg("-y")
+        .arg("install")
+        .arg("-y")
         .arg("test/forceme")
         .arg("--root")
         .arg(install_root)
@@ -1042,7 +1079,8 @@ fn test_remove_current_version_requires_force() {
 
     // Try to remove current version without --force
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove").arg("-y")
+        .arg("remove")
+        .arg("-y")
         .arg("test/forceme@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -1052,7 +1090,8 @@ fn test_remove_current_version_requires_force() {
 
     // Remove with --force
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove").arg("-y")
+        .arg("remove")
+        .arg("-y")
         .arg("test/forceme@v1.0.0")
         .arg("--force")
         .arg("--root")
@@ -1070,7 +1109,8 @@ fn test_remove_nonexistent_package_fails() {
     let install_root = root_dir.path();
 
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove").arg("-y")
+        .arg("remove")
+        .arg("-y")
         .arg("nonexistent/package")
         .arg("--root")
         .arg(install_root)

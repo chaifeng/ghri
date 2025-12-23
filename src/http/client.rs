@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use std::io::Write;
 
-use super::retry::{check_retryable, NonRetryableError, MAX_RETRIES, RETRY_DELAY_MS};
+use super::retry::{MAX_RETRIES, NonRetryableError, RETRY_DELAY_MS, check_retryable};
 
 /// HTTP client with built-in retry logic for network operations.
 #[derive(Clone)]
@@ -282,7 +282,10 @@ mod tests {
 
         let client = HttpClient::new(Client::new());
         let result: Vec<String> = client
-            .get_json_with_query(&format!("{}/test", url), &[("page", "1"), ("per_page", "10")])
+            .get_json_with_query(
+                &format!("{}/test", url),
+                &[("page", "1"), ("per_page", "10")],
+            )
             .await
             .unwrap();
 
@@ -304,9 +307,7 @@ mod tests {
 
         let client = HttpClient::new(Client::new());
         let bytes = client
-            .download_file(&format!("{}/file.txt", url), || {
-                Ok(std::io::sink())
-            })
+            .download_file(&format!("{}/file.txt", url), || Ok(std::io::sink()))
             .await
             .unwrap();
 
@@ -327,9 +328,7 @@ mod tests {
 
         let client = HttpClient::new(Client::new());
         let result = client
-            .download_file(&format!("{}/file.txt", url), || {
-                Ok(std::io::sink())
-            })
+            .download_file(&format!("{}/file.txt", url), || Ok(std::io::sink()))
             .await;
 
         mock.assert_async().await;

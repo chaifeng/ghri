@@ -27,10 +27,18 @@ impl std::fmt::Display for NonRetryableError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NonRetryableError::RateLimitExceeded(msg) => {
-                write!(f, "Rate limit exceeded: {}. Try again later or set GITHUB_TOKEN environment variable.", msg)
+                write!(
+                    f,
+                    "Rate limit exceeded: {}. Try again later or set GITHUB_TOKEN environment variable.",
+                    msg
+                )
             }
             NonRetryableError::AuthenticationFailed(msg) => {
-                write!(f, "Authentication failed: {}. Check your GITHUB_TOKEN.", msg)
+                write!(
+                    f,
+                    "Authentication failed: {}. Check your GITHUB_TOKEN.",
+                    msg
+                )
             }
             NonRetryableError::NotFound(msg) => {
                 write!(f, "Not found: {}", msg)
@@ -133,7 +141,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_unauthorized() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(401).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(401)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -149,7 +161,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_forbidden() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(403).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(403)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -162,7 +178,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_too_many_requests() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(429).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(429)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -178,7 +198,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_not_found() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(404).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(404)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -191,7 +215,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_other_client_error() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(400).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(400)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -204,7 +232,11 @@ mod tests {
     #[tokio::test]
     async fn test_classify_error_server_error_is_retryable() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(500).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(500)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -217,7 +249,11 @@ mod tests {
     #[tokio::test]
     async fn test_check_retryable_non_retryable() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(404).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(404)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();
@@ -230,7 +266,11 @@ mod tests {
     #[tokio::test]
     async fn test_check_retryable_retryable() {
         let mut server = mockito::Server::new_async().await;
-        let _m = server.mock("GET", "/").with_status(503).create_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(503)
+            .create_async()
+            .await;
 
         let client = reqwest::Client::new();
         let response = client.get(server.url()).send().await.unwrap();

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::RepoSpec,
     package::Meta,
-    runtime::{is_path_under, Runtime},
+    runtime::{Runtime, is_path_under},
 };
 
 use super::link_check::{check_links, check_versioned_links, check_versioned_links_for_version};
@@ -36,10 +36,7 @@ pub fn remove<R: Runtime>(
 
     if !runtime.exists(&package_dir) {
         debug!("Package directory not found");
-        anyhow::bail!(
-            "Package {} is not installed.",
-            spec.repo
-        );
+        anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     // Load meta if exists
@@ -52,7 +49,7 @@ pub fn remove<R: Runtime>(
     if let Some(ref version) = spec.version {
         // Remove specific version only
         debug!("Removing specific version: {}", version);
-        
+
         // Show removal plan and confirm
         if !yes {
             show_version_removal_plan(&runtime, &spec.repo, &package_dir, version, meta.as_ref())?;
@@ -61,12 +58,12 @@ pub fn remove<R: Runtime>(
                 return Ok(());
             }
         }
-        
+
         remove_version(&runtime, &package_dir, version, meta.as_ref(), force)?;
     } else {
         // Remove entire package
         debug!("Removing entire package");
-        
+
         // Show removal plan and confirm
         if !yes {
             show_package_removal_plan(&runtime, &spec.repo, &package_dir, meta.as_ref());
@@ -75,7 +72,7 @@ pub fn remove<R: Runtime>(
                 return Ok(());
             }
         }
-        
+
         remove_package(&runtime, &package_dir, meta.as_ref(), force)?;
     }
 
@@ -92,38 +89,48 @@ pub fn remove<R: Runtime>(
     Ok(())
 }
 
-fn show_package_removal_plan<R: Runtime>(runtime: &R, repo: &crate::github::GitHubRepo, package_dir: &Path, meta: Option<&Meta>) {
+fn show_package_removal_plan<R: Runtime>(
+    runtime: &R,
+    repo: &crate::github::GitHubRepo,
+    package_dir: &Path,
+    meta: Option<&Meta>,
+) {
     println!();
     println!("=== Removal Plan ===");
     println!();
     println!("Package: {}", repo);
     println!();
-    
+
     println!("Directories to remove:");
     println!("  [DEL] {}", package_dir.display());
-    
+
     if let Some(meta) = meta {
         // Check regular links
         let (valid_links, invalid_links) = check_links(runtime, &meta.links, package_dir);
-        
+
         // Check versioned links
-        let (valid_versioned, invalid_versioned) = check_versioned_links(runtime, &meta.versioned_links, package_dir);
-        
+        let (valid_versioned, invalid_versioned) =
+            check_versioned_links(runtime, &meta.versioned_links, package_dir);
+
         // Combine valid links (only those that actually exist and point to package)
         let all_valid: Vec<_> = valid_links
             .iter()
             .chain(valid_versioned.iter())
             .filter(|l| l.status.is_valid())
             .collect();
-        
+
         // Combine invalid links
         let all_invalid: Vec<_> = invalid_links
             .iter()
             .chain(invalid_versioned.iter())
             .chain(valid_links.iter().filter(|l| l.status.will_be_created()))
-            .chain(valid_versioned.iter().filter(|l| l.status.will_be_created()))
+            .chain(
+                valid_versioned
+                    .iter()
+                    .filter(|l| l.status.will_be_created()),
+            )
             .collect();
-        
+
         if !all_valid.is_empty() {
             println!();
             println!("Symlinks to remove:");
@@ -131,12 +138,16 @@ fn show_package_removal_plan<R: Runtime>(runtime: &R, repo: &crate::github::GitH
                 println!("  [DEL] {}", link.dest.display());
             }
         }
-        
+
         if !all_invalid.is_empty() {
             println!();
             println!("Symlinks to skip (will not be removed):");
             for link in &all_invalid {
-                println!("  [SKIP] {} ({})", link.dest.display(), link.status.reason());
+                println!(
+                    "  [SKIP] {} ({})",
+                    link.dest.display(),
+                    link.status.reason()
+                );
             }
         }
     }
@@ -152,7 +163,7 @@ fn show_version_removal_plan<R: Runtime>(
 ) -> Result<()> {
     let version_dir = package_dir.join(version);
     let current_link = package_dir.join("current");
-    
+
     // Check if this is the current version
     let is_current = if runtime.is_symlink(&current_link) {
         if let Ok(target) = runtime.read_link(&current_link) {
@@ -164,7 +175,7 @@ fn show_version_removal_plan<R: Runtime>(
     } else {
         false
     };
-    
+
     println!();
     println!("=== Removal Plan ===");
     println!();
@@ -174,22 +185,22 @@ fn show_version_removal_plan<R: Runtime>(
         println!("  (This is the current version!)");
     }
     println!();
-    
+
     println!("Directories to remove:");
     println!("  [DEL] {}", version_dir.display());
-    
+
     if is_current {
         println!();
         println!("Symlinks to remove:");
         println!("  [DEL] {}/current", package_dir.display());
     }
-    
+
     // Show links that will be removed
     if let Some(meta) = meta {
         // Check regular links pointing to this version
         let (valid_links, _) = check_links(runtime, &meta.links, &version_dir);
         let regular_valid: Vec<_> = valid_links.iter().filter(|l| l.status.is_valid()).collect();
-        
+
         // Check versioned links for this version
         let (valid_versioned, invalid_versioned) = check_versioned_links_for_version(
             runtime,
@@ -197,11 +208,14 @@ fn show_version_removal_plan<R: Runtime>(
             version,
             &version_dir,
         );
-        let versioned_valid: Vec<_> = valid_versioned.iter().filter(|l| l.status.is_valid()).collect();
-        
+        let versioned_valid: Vec<_> = valid_versioned
+            .iter()
+            .filter(|l| l.status.is_valid())
+            .collect();
+
         // Combine all valid links
         let all_valid: Vec<_> = regular_valid.iter().chain(versioned_valid.iter()).collect();
-        
+
         if !all_valid.is_empty() {
             if !is_current {
                 println!();
@@ -211,22 +225,30 @@ fn show_version_removal_plan<R: Runtime>(
                 println!("  [DEL] {}", link.dest.display());
             }
         }
-        
+
         // Show invalid versioned links (only versioned links matter here, regular links pointing elsewhere are fine)
         let all_invalid: Vec<_> = invalid_versioned
             .iter()
-            .chain(valid_versioned.iter().filter(|l| l.status.will_be_created()))
+            .chain(
+                valid_versioned
+                    .iter()
+                    .filter(|l| l.status.will_be_created()),
+            )
             .collect();
-        
+
         if !all_invalid.is_empty() {
             println!();
             println!("Symlinks to skip (will not be removed):");
             for link in &all_invalid {
-                println!("  [SKIP] {} ({})", link.dest.display(), link.status.reason());
+                println!(
+                    "  [SKIP] {} ({})",
+                    link.dest.display(),
+                    link.status.reason()
+                );
             }
         }
     }
-    
+
     println!();
     Ok(())
 }
@@ -234,10 +256,10 @@ fn show_version_removal_plan<R: Runtime>(
 fn confirm_remove() -> Result<bool> {
     print!("Proceed with removal? [y/N] ");
     io::stdout().flush()?;
-    
+
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    
+
     let response = input.trim().to_lowercase();
     Ok(response == "y" || response == "yes")
 }
@@ -313,7 +335,10 @@ fn remove_version<R: Runtime>(
             let original_len = meta.versioned_links.len();
             meta.versioned_links.retain(|l| l.version != version);
             if meta.versioned_links.len() != original_len {
-                debug!("Removed {} versioned link(s) from meta.json", original_len - meta.versioned_links.len());
+                debug!(
+                    "Removed {} versioned link(s) from meta.json",
+                    original_len - meta.versioned_links.len()
+                );
                 let json = serde_json::to_string_pretty(&meta)?;
                 let tmp_path = meta_path.with_extension("json.tmp");
                 runtime.write(&tmp_path, json.as_bytes())?;
@@ -348,20 +373,13 @@ fn remove_package<R: Runtime>(
     if let Some(meta) = meta {
         debug!("Removing {} link(s)", meta.links.len());
         for rule in &meta.links {
-            let _ = runtime.remove_symlink_if_target_under(
-                &rule.dest,
-                package_dir,
-                "link",
-            );
+            let _ = runtime.remove_symlink_if_target_under(&rule.dest, package_dir, "link");
         }
         // Also remove versioned links
         debug!("Removing {} versioned link(s)", meta.versioned_links.len());
         for link in &meta.versioned_links {
-            let _ = runtime.remove_symlink_if_target_under(
-                &link.dest,
-                package_dir,
-                "versioned link",
-            );
+            let _ =
+                runtime.remove_symlink_if_target_under(&link.dest, package_dir, "versioned link");
         }
     }
 
@@ -426,9 +444,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");                      // /home/user/.ghri/owner
-        let package_dir = owner_dir.join("repo");                // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");           // /home/user/.ghri/owner/repo/meta.json
+        let owner_dir = root.join("owner"); // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Check Package Exists ---
@@ -487,7 +505,7 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![]));  // Empty!
+            .returning(|_| Ok(vec![])); // Empty!
 
         // Remove empty owner directory /home/user/.ghri/owner
         runtime
@@ -510,11 +528,11 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
-        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
-        let version_dir = package_dir.join("v1");                 // /home/user/.ghri/owner/repo/v1
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let owner_dir = root.join("owner"); // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo"); // /home/user/.ghri/owner/repo
+        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Check Package Exists ---
@@ -536,7 +554,7 @@ mod tests {
         // Read meta.json -> current version is v2 (not v1 being removed)
         let meta = Meta {
             name: "owner/repo".into(),
-            current_version: "v2".into(),  // Different from version being removed
+            current_version: "v2".into(), // Different from version being removed
             links: vec![LinkRule {
                 dest: link_dest.clone(),
                 path: None,
@@ -597,7 +615,7 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![PathBuf::from("repo")]));  // Not empty
+            .returning(|_| Ok(vec![PathBuf::from("repo")])); // Not empty
 
         // --- Execute ---
 
@@ -614,10 +632,10 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
-        let version_dir = package_dir.join("v1");                 // /home/user/.ghri/owner/repo/v1
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
-        let current_link = package_dir.join("current");           // /home/user/.ghri/owner/repo/current
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
+        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let current_link = package_dir.join("current"); // /home/user/.ghri/owner/repo/current
 
         // --- 1. Check Package Exists ---
 
@@ -682,7 +700,7 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");                // /home/user/.ghri/owner/repo
+        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
 
         // --- 1. Check Package Exists ---
 
@@ -708,9 +726,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
-        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
+        let owner_dir = root.join("owner"); // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Check Package Exists ---
@@ -749,7 +767,7 @@ mod tests {
         runtime
             .expect_remove_symlink_if_target_under()
             .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false));  // Skipped - wrong target
+            .returning(|_, _, _| Ok(false)); // Skipped - wrong target
 
         // --- 4. Remove Package Directory ---
 
@@ -789,9 +807,9 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
-        let owner_dir = root.join("owner");                       // /home/user/.ghri/owner
-        let package_dir = owner_dir.join("repo");                 // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json");            // /home/user/.ghri/owner/repo/meta.json
+        let owner_dir = root.join("owner"); // /home/user/.ghri/owner
+        let package_dir = owner_dir.join("repo"); // /home/user/.ghri/owner/repo
+        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
         let link_dest = PathBuf::from("/usr/local/bin/tool");
 
         // --- 1. Check Package Exists ---
@@ -830,7 +848,7 @@ mod tests {
         runtime
             .expect_remove_symlink_if_target_under()
             .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false));  // Skipped - not a symlink
+            .returning(|_, _, _| Ok(false)); // Skipped - not a symlink
 
         // --- 4. Remove Package Directory ---
 
