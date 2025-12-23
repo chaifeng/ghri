@@ -103,6 +103,7 @@ setup() {
     fi
 }
 
+# shellcheck disable=SC2329
 teardown() {
     log_section "Cleaning up"
 
@@ -229,7 +230,7 @@ test_install_bach() {
     mkdir -p "$install_root"
 
     log_info "Installing bach-sh/bach..."
-    if "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_success "Install command succeeded"
     else
         log_fail "Install command failed"
@@ -260,7 +261,7 @@ test_install_zidr() {
     mkdir -p "$install_root"
 
     log_info "Installing chaifeng/zidr..."
-    if "$GHRI_BIN" install chaifeng/zidr --root "$install_root"; then
+    if "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root"; then
         log_success "Install command succeeded"
     else
         log_fail "Install command failed"
@@ -284,14 +285,14 @@ test_install_idempotent() {
 
     # First install
     log_info "First install of bach-sh/bach..."
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
 
     local meta_before
     meta_before=$(cat "$install_root/bach-sh/bach/meta.json")
 
     # Second install (should be idempotent)
     log_info "Second install of bach-sh/bach (should skip download)..."
-    if "$GHRI_BIN" install bach-sh/bach --root "$install_root" 2>&1 | grep -q "Skipping\|already exists"; then
+    if "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" 2>&1 | grep -q "Skipping\|already exists"; then
         log_success "Second install skipped download (idempotent)"
     else
         # Even if output doesn't indicate skip, verify nothing broke
@@ -311,10 +312,10 @@ test_install_multiple_packages() {
 
     # Install both packages
     log_info "Installing bach-sh/bach..."
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
 
     log_info "Installing chaifeng/zidr..."
-    "$GHRI_BIN" install chaifeng/zidr --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root" >/dev/null 2>&1
 
     # Verify both are installed
     assert_dir_exists "$install_root/bach-sh/bach" "bach-sh/bach installed"
@@ -333,7 +334,7 @@ test_install_specific_version() {
 
     # Install a specific older version
     log_info "Installing bach-sh/bach@0.6.0..."
-    if "$GHRI_BIN" install "bach-sh/bach@0.6.0" --root "$install_root"; then
+    if "$GHRI_BIN" install -y "bach-sh/bach@0.6.0" --root "$install_root"; then
         log_success "Install specific version command succeeded"
     else
         log_fail "Install specific version command failed"
@@ -363,7 +364,7 @@ test_install_version_with_v_prefix() {
 
     # Install using v-prefixed version (zidr uses v prefix)
     log_info "Installing chaifeng/zidr@v0.2.0..."
-    if "$GHRI_BIN" install "chaifeng/zidr@v0.2.0" --root "$install_root"; then
+    if "$GHRI_BIN" install -y "chaifeng/zidr@v0.2.0" --root "$install_root"; then
         log_success "Install with v-prefixed version succeeded"
     else
         log_fail "Install with v-prefixed version failed"
@@ -382,9 +383,9 @@ test_install_nonexistent_version() {
     mkdir -p "$install_root"
 
     log_info "Attempting to install non-existent version..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@v99.99.99" --root "$install_root" 2>&1 | grep -qi "not found\|available"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@v99.99.99" --root "$install_root" 2>&1 | grep -qi "not found\|available"; then
         # Command should fail
-        if ! "$GHRI_BIN" install "bach-sh/bach@v99.99.99" --root "$install_root" 2>/dev/null; then
+        if ! "$GHRI_BIN" install -y "bach-sh/bach@v99.99.99" --root "$install_root" 2>/dev/null; then
             log_success "Non-existent version correctly failed"
         else
             log_fail "Non-existent version should have failed"
@@ -403,7 +404,7 @@ test_update_command() {
 
     # Install a package first
     log_info "Installing bach-sh/bach for update test..."
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
 
     # Run update
     log_info "Running update command..."
@@ -440,8 +441,8 @@ test_update_multiple_packages() {
 
     # Install both packages
     log_info "Installing packages..."
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
-    "$GHRI_BIN" install chaifeng/zidr --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root" >/dev/null 2>&1
 
     # Run update
     log_info "Running update command..."
@@ -542,7 +543,7 @@ EOF
 
     # Now run install to upgrade to latest
     log_info "Running install to upgrade to latest version..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install (upgrade) command failed"
         return 1
     fi
@@ -581,15 +582,15 @@ test_invalid_repo_format() {
 
     # Missing slash
     assert_command_fails "Invalid repo format (no slash) should fail" \
-        "$GHRI_BIN" install "invalid" --root "$install_root"
+        "$GHRI_BIN" install -y "invalid" --root "$install_root"
 
     # Empty owner
     assert_command_fails "Invalid repo format (empty owner) should fail" \
-        "$GHRI_BIN" install "/repo" --root "$install_root"
+        "$GHRI_BIN" install -y "/repo" --root "$install_root"
 
     # Empty repo
     assert_command_fails "Invalid repo format (empty repo) should fail" \
-        "$GHRI_BIN" install "owner/" --root "$install_root"
+        "$GHRI_BIN" install -y "owner/" --root "$install_root"
 }
 
 test_nonexistent_repo() {
@@ -601,7 +602,7 @@ test_nonexistent_repo() {
     # This should fail gracefully
     log_info "Attempting to install non-existent repo..."
     assert_command_fails "Non-existent repo should fail" \
-        "$GHRI_BIN" install "this-owner-does-not-exist-12345/fake-repo-67890" --root "$install_root"
+        "$GHRI_BIN" install -y "this-owner-does-not-exist-12345/fake-repo-67890" --root "$install_root"
 }
 
 test_custom_root_via_env() {
@@ -611,7 +612,7 @@ test_custom_root_via_env() {
     mkdir -p "$install_root"
 
     log_info "Installing with GHRI_ROOT env var..."
-    if GHRI_ROOT="$install_root" "$GHRI_BIN" install bach-sh/bach; then
+    if GHRI_ROOT="$install_root" "$GHRI_BIN" install -y bach-sh/bach; then
         log_success "Install with GHRI_ROOT succeeded"
     else
         log_fail "Install with GHRI_ROOT failed"
@@ -625,7 +626,7 @@ test_help_commands() {
     log_section "Test: Help commands"
 
     assert_command_succeeds "Main help" "$GHRI_BIN" --help
-    assert_command_succeeds "Install help" "$GHRI_BIN" install --help
+    assert_command_succeeds "Install help" "$GHRI_BIN" install -y --help
     assert_command_succeeds "Update help" "$GHRI_BIN" update --help
 }
 
@@ -646,7 +647,7 @@ test_meta_json_structure() {
     mkdir -p "$install_root"
 
     # Install a package
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
 
     local meta_file="$install_root/bach-sh/bach/meta.json"
 
@@ -674,7 +675,7 @@ test_symlink_target_is_relative() {
     local install_root="$TEST_ROOT/symlink_relative"
     mkdir -p "$install_root"
 
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
 
     local link="$install_root/bach-sh/bach/current"
     local target
@@ -695,7 +696,7 @@ test_external_link_uses_relative_path() {
     local bin_dir="$TEST_ROOT/external_link_relative_bin"
     mkdir -p "$install_root" "$bin_dir"
 
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
     "$GHRI_BIN" link bach-sh/bach "$bin_dir" --root "$install_root" >/dev/null 2>&1
 
     local link="$bin_dir/bach"
@@ -719,10 +720,10 @@ test_concurrent_installs() {
     log_info "Starting concurrent installations..."
 
     # Start both installs in background
-    "$GHRI_BIN" install bach-sh/bach --root "$install_root" >/dev/null 2>&1 &
+    "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1 &
     local pid1=$!
 
-    "$GHRI_BIN" install chaifeng/zidr --root "$install_root" >/dev/null 2>&1 &
+    "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root" >/dev/null 2>&1 &
     local pid2=$!
 
     # Wait for both
@@ -758,7 +759,7 @@ test_link_to_file_path() {
 
     # Install bach first
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -799,7 +800,7 @@ test_link_to_directory() {
 
     # Install zidr
     log_info "Installing chaifeng/zidr..."
-    if ! "$GHRI_BIN" install chaifeng/zidr --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -836,7 +837,7 @@ test_link_update_on_version_change() {
 
     # Install older version of bach
     log_info "Installing bach-sh/bach@0.7.1..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.1 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.1 --root "$install_root"; then
         log_fail "Install v0.7.1 failed"
         return 1
     fi
@@ -864,7 +865,7 @@ test_link_update_on_version_change() {
 
     # Install newer version
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.2 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.2 --root "$install_root"; then
         log_fail "Install v0.7.2 failed"
         return 1
     fi
@@ -888,7 +889,7 @@ test_link_update_existing_symlink() {
 
     # Install two versions of bach
     log_info "Installing bach-sh/bach@0.7.1..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.1 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.1 --root "$install_root"; then
         log_fail "Install v0.7.1 failed"
         return 1
     fi
@@ -904,7 +905,7 @@ test_link_update_existing_symlink() {
     # Update and install v0.7.2
     "$GHRI_BIN" update --root "$install_root" || true
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.2 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.2 --root "$install_root"; then
         log_fail "Install v0.7.2 failed"
         return 1
     fi
@@ -959,7 +960,7 @@ test_link_fails_for_existing_file() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -993,7 +994,7 @@ test_link_single_file_detection() {
 
     # Install bach (which should have a single 'bach' file)
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1046,7 +1047,7 @@ test_unlink_single_link() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1100,7 +1101,7 @@ test_unlink_all_links() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1156,7 +1157,7 @@ test_unlink_nonexistent_symlink() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1218,7 +1219,7 @@ test_unlink_requires_dest_or_all() {
 
     # Install and link
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1261,7 +1262,7 @@ test_links_command() {
 
     # Install
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1301,7 +1302,7 @@ test_unlink_by_path() {
 
     # Install zidr (has multiple files)
     log_info "Installing chaifeng/zidr..."
-    if ! "$GHRI_BIN" install chaifeng/zidr --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y chaifeng/zidr --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1379,7 +1380,7 @@ test_unlink_colon_in_repo_name() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1436,7 +1437,7 @@ test_install_with_asset_filter() {
     # Install chaifeng/zidr with filter to match x86_64-linux files
     # zidr has releases with multiple platform-specific assets
     log_info "Installing chaifeng/zidr with --filter '*x86_64-linux*'..."
-    if "$GHRI_BIN" install chaifeng/zidr --filter '*x86_64-linux*' --root "$install_root"; then
+    if "$GHRI_BIN" install -y chaifeng/zidr --filter '*x86_64-linux*' --root "$install_root"; then
         log_success "Install with filter succeeded"
     else
         log_fail "Install with filter failed"
@@ -1493,7 +1494,7 @@ test_install_filter_no_match_fails() {
     # zidr has assets but none will match this pattern
     log_info "Installing chaifeng/zidr with --filter '*nonexistent-platform-xyz*'..."
     local output
-    if output=$("$GHRI_BIN" install chaifeng/zidr --filter '*nonexistent-platform-xyz*' --root "$install_root" 2>&1); then
+    if output=$("$GHRI_BIN" install -y chaifeng/zidr --filter '*nonexistent-platform-xyz*' --root "$install_root" 2>&1); then
         log_fail "Install should have failed when filter matches no assets"
         return 1
     else
@@ -1540,7 +1541,7 @@ test_versioned_link_creation() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1597,7 +1598,7 @@ test_versioned_link_not_updated_on_install() {
 
     # Install bach at specific version
     log_info "Installing bach-sh/bach@0.7.1..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.1" --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1616,7 +1617,7 @@ test_versioned_link_not_updated_on_install() {
 
     # Now install a newer version
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.2" --root "$install_root"; then
         log_fail "Second install command failed"
         return 1
     fi
@@ -1649,13 +1650,13 @@ test_versioned_link_removed_with_version() {
 
     # Install two versions
     log_info "Installing bach-sh/bach@0.7.1..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.1" --root "$install_root"; then
         log_fail "First install command failed"
         return 1
     fi
 
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.2" --root "$install_root"; then
         log_fail "Second install command failed"
         return 1
     fi
@@ -1677,7 +1678,7 @@ test_versioned_link_removed_with_version() {
 
     # Remove version 0.7.1
     log_info "Removing version 0.7.1..."
-    if ! "$GHRI_BIN" remove "bach-sh/bach@0.7.1" --root "$install_root"; then
+    if ! "$GHRI_BIN" remove -y "bach-sh/bach@0.7.1" --root "$install_root"; then
         log_fail "Remove version command failed"
         return 1
     fi
@@ -1706,7 +1707,7 @@ test_versioned_link_shown_in_show() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1749,13 +1750,13 @@ test_regular_vs_versioned_links() {
 
     # Install two versions
     log_info "Installing bach-sh/bach@0.7.1..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.1" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.1" --root "$install_root"; then
         log_fail "First install failed"
         return 1
     fi
 
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install "bach-sh/bach@0.7.2" --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y "bach-sh/bach@0.7.2" --root "$install_root"; then
         log_fail "Second install failed"
         return 1
     fi
@@ -1822,7 +1823,7 @@ test_remove_package() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1844,7 +1845,7 @@ test_remove_package() {
 
     # Remove package
     log_info "Removing bach-sh/bach..."
-    if "$GHRI_BIN" remove bach-sh/bach --root "$install_root"; then
+    if "$GHRI_BIN" remove -y bach-sh/bach --root "$install_root"; then
         log_success "Remove command succeeded"
     else
         log_fail "Remove command failed"
@@ -1881,13 +1882,13 @@ test_remove_specific_version() {
 
     # Install two versions of bach
     log_info "Installing bach-sh/bach@0.7.0..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.0 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.0 --root "$install_root"; then
         log_fail "Install v0.7.0 failed"
         return 1
     fi
 
     log_info "Installing bach-sh/bach@0.7.2..."
-    if ! "$GHRI_BIN" install bach-sh/bach@0.7.2 --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach@0.7.2 --root "$install_root"; then
         log_fail "Install v0.7.2 failed"
         return 1
     fi
@@ -1902,7 +1903,7 @@ test_remove_specific_version() {
 
     # Remove v0.7.0 (not current, should work without --force)
     log_info "Removing bach-sh/bach@0.7.0..."
-    if "$GHRI_BIN" remove bach-sh/bach@0.7.0 --root "$install_root"; then
+    if "$GHRI_BIN" remove -y bach-sh/bach@0.7.0 --root "$install_root"; then
         log_success "Remove specific version succeeded"
     else
         log_fail "Remove specific version failed"
@@ -1938,7 +1939,7 @@ test_remove_current_version_requires_force() {
 
     # Install bach (single version, will be current)
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -1951,7 +1952,7 @@ test_remove_current_version_requires_force() {
     # Try to remove current version without --force (should fail)
     log_info "Attempting to remove current version without --force..."
     local output
-    if output=$("$GHRI_BIN" remove "bach-sh/bach@$current_version" --root "$install_root" 2>&1); then
+    if output=$("$GHRI_BIN" remove -y "bach-sh/bach@$current_version" --root "$install_root" 2>&1); then
         log_fail "Remove should have failed without --force"
     else
         if echo "$output" | grep -qi "\-\-force"; then
@@ -1971,7 +1972,7 @@ test_remove_current_version_requires_force() {
 
     # Now remove with --force
     log_info "Removing current version with --force..."
-    if "$GHRI_BIN" remove "bach-sh/bach@$current_version" --force --root "$install_root"; then
+    if "$GHRI_BIN" remove -y "bach-sh/bach@$current_version" --force --root "$install_root"; then
         log_success "Remove with --force succeeded"
     else
         log_fail "Remove with --force failed"
@@ -1994,7 +1995,7 @@ test_remove_fails_for_uninstalled() {
 
     log_info "Attempting to remove uninstalled package..."
     local output
-    if output=$("$GHRI_BIN" remove nonexistent/package --root "$install_root" 2>&1); then
+    if output=$("$GHRI_BIN" remove -y nonexistent/package --root "$install_root" 2>&1); then
         log_fail "Remove should have failed for uninstalled package"
     else
         if echo "$output" | grep -qi "not installed"; then
@@ -2016,7 +2017,7 @@ test_remove_with_multiple_links() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -2036,7 +2037,7 @@ test_remove_with_multiple_links() {
 
     # Remove package
     log_info "Removing package..."
-    if "$GHRI_BIN" remove bach-sh/bach --root "$install_root"; then
+    if "$GHRI_BIN" remove -y bach-sh/bach --root "$install_root"; then
         log_success "Remove command succeeded"
     else
         log_fail "Remove command failed"
@@ -2060,7 +2061,7 @@ test_remove_validates_link_target() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -2085,7 +2086,7 @@ test_remove_validates_link_target() {
     # Remove package - should warn about wrong target but not fail
     log_info "Removing package..."
     local output
-    if output=$("$GHRI_BIN" remove bach-sh/bach --root "$install_root" 2>&1); then
+    if output=$("$GHRI_BIN" remove -y bach-sh/bach --root "$install_root" 2>&1); then
         log_success "Remove command succeeded"
     else
         log_fail "Remove command failed"
@@ -2121,7 +2122,7 @@ test_remove_preserves_regular_file() {
 
     # Install bach
     log_info "Installing bach-sh/bach..."
-    if ! "$GHRI_BIN" install bach-sh/bach --root "$install_root"; then
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "$install_root"; then
         log_fail "Install command failed"
         return 1
     fi
@@ -2138,7 +2139,7 @@ test_remove_preserves_regular_file() {
     # Remove package - should warn but not delete the file
     log_info "Removing package..."
     local output
-    if output=$("$GHRI_BIN" remove bach-sh/bach --root "$install_root" 2>&1); then
+    if output=$("$GHRI_BIN" remove -y bach-sh/bach --root "$install_root" 2>&1); then
         log_success "Remove command succeeded"
     else
         log_fail "Remove command failed"
