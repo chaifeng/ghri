@@ -7,10 +7,52 @@ use crate::{
     archive::Extractor,
     cleanup::CleanupContext,
     download::download_file,
-    github::{GitHubRepo, Release},
+    github::{GitHubRepo, Release, ReleaseAsset},
     http::HttpClient,
     runtime::Runtime,
 };
+
+/// Describes what will be downloaded during installation
+#[derive(Debug, Clone)]
+pub enum DownloadPlan {
+    /// Download source tarball (when no assets available)
+    Tarball { url: String },
+    /// Download release assets
+    Assets { assets: Vec<ReleaseAsset> },
+}
+
+/// Get the download plan without actually downloading
+pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<DownloadPlan> {
+    // Filter assets if filters are provided
+    let filtered_assets = if filters.is_empty() {
+        release.assets.clone()
+    } else {
+        filter_assets(&release.assets, filters)
+    };
+
+    // Error if assets exist but none matched the filters
+    if !release.assets.is_empty() && !filters.is_empty() && filtered_assets.is_empty() {
+        let mut asset_names: Vec<&str> = release.assets.iter().map(|a| a.name.as_str()).collect();
+        asset_names.sort();
+        let assets_list = asset_names.join("\n  ");
+
+        anyhow::bail!(
+            "No assets matched the filter patterns {:?}.\nAvailable assets:\n  {}",
+            filters,
+            assets_list
+        );
+    }
+
+    if filtered_assets.is_empty() {
+        Ok(DownloadPlan::Tarball {
+            url: release.tarball_url.clone(),
+        })
+    } else {
+        Ok(DownloadPlan::Assets {
+            assets: filtered_assets,
+        })
+    }
+}
 
 #[tracing::instrument(skip(
     runtime,

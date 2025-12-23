@@ -77,6 +77,10 @@ pub struct InstallArgs {
     /// Allow installing pre-release versions when no version is specified
     #[arg(long = "pre")]
     pub pre: bool,
+
+    /// Skip confirmation prompt
+    #[arg(long = "yes", short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -152,7 +156,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Install(args) => {
-            install(runtime, &args.repo, cli.install_root, args.api_url, args.filters, args.pre).await?
+            install(runtime, &args.repo, cli.install_root, args.api_url, args.filters, args.pre, args.yes).await?
         }
         Commands::Update(args) => ghri::commands::update(runtime, cli.install_root, None, args.repos).await?,
         Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,

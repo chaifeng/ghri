@@ -23,9 +23,10 @@ pub async fn install<R: Runtime + 'static>(
     api_url: Option<String>,
     filters: Vec<String>,
     pre: bool,
+    yes: bool,
 ) -> Result<()> {
     let config = Config::new(runtime, install_root, api_url)?;
-    run(repo_str, config, filters, pre).await
+    run(repo_str, config, filters, pre, yes).await
 }
 
 #[tracing::instrument(skip(config, filters))]
@@ -34,6 +35,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     config: Config<R, G, E>,
     filters: Vec<String>,
     pre: bool,
+    yes: bool,
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
     let installer = Installer::new(
@@ -42,5 +44,5 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
         config.http_client,
         config.extractor,
     );
-    installer.install(&spec.repo, spec.version.as_deref(), config.install_root, filters, pre).await
+    installer.install(&spec.repo, spec.version.as_deref(), config.install_root, filters, pre, yes).await
 }

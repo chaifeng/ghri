@@ -100,7 +100,7 @@ fn test_end_to_end_install() {
     let install_root = root_dir.path();
 
     let mut cmd = Command::new(cargo::cargo_bin!("ghri"));
-    cmd.arg("install")
+    cmd.arg("install").arg("-y")
         .arg("owner/repo")
         .arg("--root")
         .arg(install_root)
@@ -181,7 +181,7 @@ fn test_link_single_file_to_path() {
 
     // Install the package first
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/tool")
         .arg("--root")
         .arg(install_root)
@@ -255,7 +255,7 @@ fn test_link_to_directory() {
 
     // Install the package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("org/cli")
         .arg("--root")
         .arg(install_root)
@@ -328,7 +328,7 @@ fn test_link_update_on_reinstall() {
 
     // Install v1
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("dev/app")
         .arg("--root")
         .arg(install_root)
@@ -390,7 +390,7 @@ fn test_link_update_on_reinstall() {
 
     // Install v2 (should automatically update the link)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("dev/app@v2.0.0")
         .arg("--root")
         .arg(install_root)
@@ -459,7 +459,7 @@ fn test_link_update_existing_symlink() {
 
     // Install v0.9.0 first
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("my/pkg@v0.9.0")
         .arg("--root")
         .arg(install_root)
@@ -483,7 +483,7 @@ fn test_link_update_existing_symlink() {
 
     // Install v1.0.0 (this changes current version)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("my/pkg@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -563,7 +563,7 @@ fn test_link_fails_for_existing_non_symlink() {
 
     // Install package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/blocked")
         .arg("--root")
         .arg(install_root)
@@ -620,7 +620,7 @@ fn test_unlink_removes_link_and_rule() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/unlink")
         .arg("--root")
         .arg(install_root)
@@ -704,7 +704,7 @@ fn test_unlink_all_removes_all_links() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/unlinkall")
         .arg("--root")
         .arg(install_root)
@@ -806,7 +806,7 @@ fn test_unlink_requires_dest_or_all() {
 
     // Install and create a link
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/needarg")
         .arg("--root")
         .arg(install_root)
@@ -871,7 +871,7 @@ fn test_remove_package() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/removeme")
         .arg("--root")
         .arg(install_root)
@@ -958,7 +958,7 @@ fn test_remove_specific_version() {
 
     // Install v1
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/multiversion@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -969,7 +969,7 @@ fn test_remove_specific_version() {
 
     // Install v2 (becomes current)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/multiversion@v2.0.0")
         .arg("--root")
         .arg(install_root)
@@ -1031,7 +1031,7 @@ fn test_remove_current_version_requires_force() {
 
     // Install
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("install")
+        .arg("install").arg("-y")
         .arg("test/forceme")
         .arg("--root")
         .arg(install_root)

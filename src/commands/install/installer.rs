@@ -1,5 +1,6 @@
 use anyhow::Result;
 use log::{info, warn};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -15,7 +16,7 @@ use crate::{
 use crate::commands::paths::{default_install_root, get_target_dir};
 use crate::commands::symlink::update_current_symlink;
 
-use super::download::ensure_installed;
+use super::download::{ensure_installed, get_download_plan, DownloadPlan};
 use super::external_links::update_external_links;
 
 pub struct Installer<R: Runtime, G: GetReleases, E: Extractor> {
@@ -37,7 +38,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
     }
 
     #[tracing::instrument(skip(self, repo, version, install_root, filters))]
-    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>, pre: bool) -> Result<()> {
+    pub async fn install(&self, repo: &GitHubRepo, version: Option<&str>, install_root: Option<PathBuf>, filters: Vec<String>, pre: bool, yes: bool) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path, needs_save) = self
             .get_or_fetch_meta(repo, install_root.as_deref())
@@ -73,6 +74,23 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         let release: Release = meta_release.clone().into();
 
         let target_dir = get_target_dir(&self.runtime, repo, &release, install_root)?;
+
+        // Check if already installed
+        if self.runtime.exists(&target_dir) {
+            println!("   {} {} is already installed", repo, release.tag_name);
+            return Ok(());
+        }
+
+        // Get download plan and show confirmation
+        let plan = get_download_plan(&release, &effective_filters)?;
+        
+        if !yes {
+            self.show_install_plan(repo, &release, &target_dir, &meta_path, &plan, needs_save, &meta);
+            if !self.confirm_install()? {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
 
         // Set up cleanup context for Ctrl-C handling
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
@@ -131,6 +149,77 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         self.print_install_success(repo, &release.tag_name, &target_dir);
 
         Ok(())
+    }
+
+    fn show_install_plan(&self, repo: &GitHubRepo, release: &Release, target_dir: &Path, meta_path: &Path, plan: &DownloadPlan, needs_save: bool, meta: &Meta) {
+        println!();
+        println!("=== Installation Plan ===");
+        println!();
+        println!("Package:  {}", repo);
+        println!("Version:  {}", release.tag_name);
+        println!();
+        
+        // Show files to download
+        println!("Files to download:");
+        match plan {
+            DownloadPlan::Tarball { url } => {
+                println!("  - {} (source tarball)", url);
+            }
+            DownloadPlan::Assets { assets } => {
+                for asset in assets {
+                    println!("  - {} ({} bytes)", asset.name, asset.size);
+                }
+            }
+        }
+        println!();
+        
+        // Show files/directories to create
+        println!("Files/directories to create:");
+        println!("  [DIR]  {}", target_dir.display());
+        if needs_save {
+            println!("  [FILE] {}", meta_path.display());
+        } else {
+            println!("  [MOD]  {} (update)", meta_path.display());
+        }
+        if let Some(parent) = target_dir.parent() {
+            println!("  [LINK] {}/current -> {}", parent.display(), release.tag_name);
+        }
+        
+        // Show external links that will be updated
+        if !meta.links.is_empty() {
+            println!();
+            println!("External links to update:");
+            for link in &meta.links {
+                let source = if let Some(ref path) = link.path {
+                    format!(":{}", path)
+                } else {
+                    String::new()
+                };
+                println!("  [LINK] {} -> {}{}/{}", link.dest.display(), repo, source, release.tag_name);
+            }
+        }
+        
+        // Show versioned links (these won't be updated)
+        if !meta.versioned_links.is_empty() {
+            println!();
+            println!("Versioned links (unchanged):");
+            for link in &meta.versioned_links {
+                println!("  [LINK] {} -> {}@{}", link.dest.display(), repo, link.version);
+            }
+        }
+        
+        println!();
+    }
+
+    fn confirm_install(&self) -> Result<bool> {
+        print!("Proceed with installation? [y/N] ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        
+        let response = input.trim().to_lowercase();
+        Ok(response == "y" || response == "yes")
     }
 
     #[tracing::instrument(skip(self, repo, tag, target_dir))]
@@ -379,7 +468,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, extractor);
-        installer.install(&repo, None, None, vec![], false).await.unwrap();
+        installer.install(&repo, None, None, vec![], false, true).await.unwrap();
     }
 
     #[tokio::test]
@@ -514,7 +603,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // Should fail because no stable release found
-        let result = installer.install(&repo, None, None, vec![], false).await;
+        let result = installer.install(&repo, None, None, vec![], false, true).await;
         assert!(result.is_err());
         assert!(
             result
@@ -608,7 +697,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, extractor);
 
         // With pre=true, should succeed and install the pre-release
-        let result = installer.install(&repo, None, None, vec![], true).await;
+        let result = installer.install(&repo, None, None, vec![], true, true).await;
         assert!(result.is_ok());
     }
 
@@ -672,7 +761,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run("invalid", config, vec![], false).await;
+        let result = super::super::run("invalid", config, vec![], false, true).await;
         assert!(result.is_err());
     }
 
@@ -767,7 +856,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, extractor);
 
         // Should succeed despite metadata save failure (it's just a warning)
-        let result = installer.install(&repo, None, None, vec![], false).await;
+        let result = installer.install(&repo, None, None, vec![], false, true).await;
         assert!(result.is_ok());
     }
 
@@ -873,7 +962,7 @@ mod tests {
         };
         let http_client = HttpClient::new(Client::new());
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
-        installer.install(&repo, None, None, vec![], false).await.unwrap();
+        installer.install(&repo, None, None, vec![], false, true).await.unwrap();
     }
 
     #[tokio::test]
@@ -922,7 +1011,7 @@ mod tests {
         };
 
         // Install o/r using run() entry point
-        super::super::run("o/r", config, vec![], false).await.unwrap();
+        super::super::run("o/r", config, vec![], false, true).await.unwrap();
     }
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
@@ -1056,7 +1145,7 @@ mod tests {
 
         // User provides NEW filter, should override saved "*old-filter*"
         installer
-            .install(&repo, None, None, vec!["*new-user-filter*".to_string()], false)
+            .install(&repo, None, None, vec!["*new-user-filter*".to_string()], false, true)
             .await
             .unwrap();
     }
@@ -1139,7 +1228,7 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // User provides NO filters -> should use saved filters from meta.json
-        installer.install(&repo, None, None, vec![], false).await.unwrap();
+        installer.install(&repo, None, None, vec![], false, true).await.unwrap();
     }
 
     #[tokio::test]
@@ -1214,6 +1303,6 @@ mod tests {
         let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
 
         // Empty filters vec -> uses saved filters (current behavior)
-        installer.install(&repo, None, None, vec![], false).await.unwrap();
+        installer.install(&repo, None, None, vec![], false, true).await.unwrap();
     }
 }

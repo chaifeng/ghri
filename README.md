@@ -87,6 +87,8 @@ ghri update
 
 Install a package from a GitHub repository. ghri auto-detects your system and downloads the matching asset.
 
+Before installing, ghri shows you what files will be downloaded and what changes will be made to your system. You need to confirm before proceeding.
+
 ```bash
 ghri install <OWNER/REPO[@VERSION]> [OPTIONS]
 ```
@@ -98,6 +100,7 @@ ghri install <OWNER/REPO[@VERSION]> [OPTIONS]
 **Options:**
 - `-f, --filter <PATTERN>` - Filter assets by glob pattern (can use multiple times)
 - `--pre` - Allow installing pre-release versions
+- `-y, --yes` - Skip confirmation prompt
 - `--api-url <URL>` - Custom GitHub API URL (for GitHub Enterprise)
 - `-r, --root <PATH>` - Custom install root directory
 
@@ -110,14 +113,18 @@ ghri install chaifeng/zidr
 # Install a specific version
 ghri install chaifeng/zidr@v0.1.0
 
-# Install bach (Bash Unit Testing Framework)
+# Install bach (Bach Unit Testing Framework)
 ghri install bach-sh/bach
 
 # Install a pre-release version
 ghri install chaifeng/zidr --pre
 
+# Skip confirmation prompt (useful for scripts)
+ghri install chaifeng/zidr -y
+
 # Install to custom directory
 ghri install bach-sh/bach --root ~/src/my-project/vendor # Install bach-sh/bach to your project's vendor directory
+ghri install chaifeng/zidr --root ~/my-apps
 ```
 
 ### list - List Installed Packages
