@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
-use crate::package::{Meta, find_all_packages};
+use crate::package::PackageRepository;
 use crate::runtime::Runtime;
 
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
@@ -31,8 +31,10 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
-    let meta_files = find_all_packages(&runtime, &config.install_root)?;
-    if meta_files.is_empty() {
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
+    let packages = pkg_repo.find_all_with_meta()?;
+
+    if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
     }
@@ -53,8 +55,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
     let mut upgraded_count = 0;
     let mut skipped_count = 0;
 
-    for meta_path in meta_files {
-        let meta = Meta::load(&installer.runtime, &meta_path)?;
+    for (_meta_path, meta) in packages {
         let repo = meta.name.parse::<GitHubRepo>()?;
 
         // Skip if not in filter list (when filter is specified)
@@ -129,6 +130,7 @@ mod tests {
     use crate::archive::MockArchiveExtractor;
     use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, Release};
+    use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;

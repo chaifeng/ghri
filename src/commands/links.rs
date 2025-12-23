@@ -40,7 +40,12 @@ pub(crate) fn print_links<R: Runtime>(
     for rule in links {
         let status = link_manager.check_link(&rule.dest, expected_prefix);
         let source = rule.path.as_deref().unwrap_or("(default)");
-        println!("  {} -> {:?}{}", source, rule.dest, format_link_status(&status));
+        println!(
+            "  {} -> {:?}{}",
+            source,
+            rule.dest,
+            format_link_status(&status)
+        );
     }
 }
 
@@ -66,7 +71,10 @@ pub(crate) fn print_versioned_links<R: Runtime>(
         let source = link.path.as_deref().unwrap_or("(default)");
         println!(
             "  @{} {} -> {:?}{}",
-            link.version, source, link.dest, format_link_status(&status)
+            link.version,
+            source,
+            link.dest,
+            format_link_status(&status)
         );
     }
 }
@@ -83,7 +91,7 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBu
     debug!("Using install root: {:?}", root);
 
     let pkg_repo = PackageRepository::new(&runtime, root);
-    
+
     if !pkg_repo.is_installed(&spec.repo.owner, &spec.repo.repo) {
         debug!("Package not installed");
         anyhow::bail!("Package {} is not installed.", spec.repo);
@@ -135,9 +143,18 @@ mod tests {
 
         assert_eq!(format_link_status(&LinkStatus::Valid), "");
         assert_eq!(format_link_status(&LinkStatus::NotExists), " [missing]");
-        assert_eq!(format_link_status(&LinkStatus::NotSymlink), " [not a symlink]");
-        assert_eq!(format_link_status(&LinkStatus::WrongTarget), " [wrong target]");
-        assert_eq!(format_link_status(&LinkStatus::Unresolvable), " [unresolvable]");
+        assert_eq!(
+            format_link_status(&LinkStatus::NotSymlink),
+            " [not a symlink]"
+        );
+        assert_eq!(
+            format_link_status(&LinkStatus::WrongTarget),
+            " [wrong target]"
+        );
+        assert_eq!(
+            format_link_status(&LinkStatus::Unresolvable),
+            " [unresolvable]"
+        );
     }
 
     #[test]

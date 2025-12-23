@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     github::RepoSpec,
-    package::{Meta, find_all_packages},
+    package::{Meta, PackageRepository},
     runtime::Runtime,
 };
 
@@ -40,32 +40,20 @@ pub fn prune<R: Runtime>(
 }
 
 fn prune_all<R: Runtime>(runtime: &R, root: &Path, yes: bool) -> Result<()> {
-    let meta_files = find_all_packages(runtime, root)?;
-    if meta_files.is_empty() {
+    let pkg_repo = PackageRepository::new(runtime, root.to_path_buf());
+    let packages = pkg_repo.find_all_with_meta()?;
+
+    if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
     }
 
-    debug!("Found {} package(s)", meta_files.len());
+    debug!("Found {} package(s)", packages.len());
 
     let mut total_pruned = 0;
-    for meta_path in meta_files {
+    for (meta_path, meta) in packages {
         if let Some(package_dir) = meta_path.parent() {
-            let name = match Meta::load(runtime, &meta_path) {
-                Ok(meta) => meta.name,
-                Err(_) => {
-                    // Try to derive name from path
-                    let repo = package_dir.file_name().and_then(|s| s.to_str());
-                    let owner = package_dir
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|s| s.to_str());
-                    match (owner, repo) {
-                        (Some(o), Some(r)) => format!("{}/{}", o, r),
-                        _ => continue,
-                    }
-                }
-            };
+            let name = meta.name.clone();
             let pruned = prune_package(runtime, package_dir, &name, yes)?;
             total_pruned += pruned;
         }

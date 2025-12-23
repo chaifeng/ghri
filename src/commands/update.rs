@@ -32,7 +32,7 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
 ) -> Result<()> {
     let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
     let packages = pkg_repo.find_all_with_meta()?;
-    
+
     if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
