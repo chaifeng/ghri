@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{info, warn};
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -117,7 +116,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
                 needs_save,
                 &meta,
             );
-            if !self.confirm_install()? {
+            if !self.runtime.confirm("Proceed with installation?")? {
                 println!("Installation cancelled.");
                 return Ok(());
             }
@@ -299,17 +298,6 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         }
 
         println!();
-    }
-
-    fn confirm_install(&self) -> Result<bool> {
-        print!("Proceed with installation? [y/N] ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        let response = input.trim().to_lowercase();
-        Ok(response == "y" || response == "yes")
     }
 
     #[tracing::instrument(skip(self, repo, tag, target_dir))]

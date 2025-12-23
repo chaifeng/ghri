@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{debug, info};
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -53,7 +52,7 @@ pub fn remove<R: Runtime>(
         // Show removal plan and confirm
         if !yes {
             show_version_removal_plan(&runtime, &spec.repo, &package_dir, version, meta.as_ref())?;
-            if !confirm_remove()? {
+            if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
@@ -67,7 +66,7 @@ pub fn remove<R: Runtime>(
         // Show removal plan and confirm
         if !yes {
             show_package_removal_plan(&runtime, &spec.repo, &package_dir, meta.as_ref());
-            if !confirm_remove()? {
+            if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
@@ -251,17 +250,6 @@ fn show_version_removal_plan<R: Runtime>(
 
     println!();
     Ok(())
-}
-
-fn confirm_remove() -> Result<bool> {
-    print!("Proceed with removal? [y/N] ");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    let response = input.trim().to_lowercase();
-    Ok(response == "y" || response == "yes")
 }
 
 /// Remove a specific version of a package
