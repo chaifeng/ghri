@@ -623,11 +623,21 @@ mod tests {
             .with(eq(v1_dir.clone()))
             .returning(|_| true);
 
-        // 6. remove_version removes versioned link
+        // 6. remove_version removes versioned link via LinkManager
+        // LinkManager.remove_link_if_under checks:
+        let v1_dir_clone = v1_dir.clone();
         runtime
-            .expect_remove_symlink_if_target_under()
-            .with(eq(link_dest), eq(v1_dir.clone()), eq("versioned link"))
-            .returning(|_, _, _| Ok(true));
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(v1_dir_clone.join("tool")));
+        runtime
+            .expect_remove_symlink()
+            .with(eq(link_dest))
+            .returning(|_| Ok(()));
 
         // 7. remove_version removes directory
         runtime

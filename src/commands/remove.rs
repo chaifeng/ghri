@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     github::RepoSpec,
-    package::Meta,
-    runtime::{Runtime, is_path_under},
+    package::{LinkManager, Meta, PackageRepository},
+    runtime::Runtime,
 };
 
 use super::link_check::{check_links, check_versioned_links, check_versioned_links_for_version};
@@ -28,22 +28,18 @@ pub fn remove<R: Runtime>(
     };
     debug!("Using install root: {:?}", root);
 
+    let pkg_repo = PackageRepository::new(&runtime, root.clone());
+    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
     let owner_dir = root.join(&spec.repo.owner);
-    let package_dir = owner_dir.join(&spec.repo.repo);
-    let meta_path = package_dir.join("meta.json");
     debug!("Package directory: {:?}", package_dir);
 
-    if !runtime.exists(&package_dir) {
+    if !pkg_repo.package_exists(&spec.repo.owner, &spec.repo.repo) {
         debug!("Package directory not found");
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     // Load meta if exists
-    let meta = if runtime.exists(&meta_path) {
-        Some(Meta::load(&runtime, &meta_path)?)
-    } else {
-        None
-    };
+    let meta = pkg_repo.load(&spec.repo.owner, &spec.repo.repo)?;
 
     if let Some(ref version) = spec.version {
         // Remove specific version only
@@ -287,28 +283,17 @@ pub(crate) fn remove_version<R: Runtime>(
         );
     }
 
-    // Remove links pointing to this version (but don't modify meta.json for regular links)
+    // Remove links pointing to this version using LinkManager
+    let link_manager = LinkManager::new(runtime);
     if let Some(meta) = meta {
         for rule in &meta.links {
             // For regular links, only remove if pointing to this specific version
-            if runtime.is_symlink(&rule.dest)
-                && let Ok(resolved_target) = runtime.resolve_link(&rule.dest)
-            {
-                // Check if link points to this version (using safe path comparison)
-                if is_path_under(&resolved_target, &version_dir) {
-                    let _ =
-                        runtime.remove_symlink_if_target_under(&rule.dest, &version_dir, "link");
-                }
-            }
+            let _ = link_manager.remove_link_if_under(&rule.dest, &version_dir);
         }
         // Also remove versioned links for this version
         for link in &meta.versioned_links {
             if link.version == version {
-                let _ = runtime.remove_symlink_if_target_under(
-                    &link.dest,
-                    &version_dir,
-                    "versioned link",
-                );
+                let _ = link_manager.remove_link_if_under(&link.dest, &version_dir);
             }
         }
     }
@@ -340,7 +325,7 @@ pub(crate) fn remove_version<R: Runtime>(
     // If this was the current version, remove the current symlink
     if is_current {
         debug!("Removing current symlink");
-        runtime.remove_symlink(&current_link)?;
+        let _ = link_manager.remove_link(&current_link);
         println!("Warning: Removed current version symlink. No version is now active.");
     }
 
@@ -354,17 +339,17 @@ fn remove_package<R: Runtime>(
     meta: Option<&Meta>,
     _force: bool,
 ) -> Result<()> {
-    // Remove all external links first
+    // Remove all external links first using LinkManager
+    let link_manager = LinkManager::new(runtime);
     if let Some(meta) = meta {
         debug!("Removing {} link(s)", meta.links.len());
         for rule in &meta.links {
-            let _ = runtime.remove_symlink_if_target_under(&rule.dest, package_dir, "link");
+            let _ = link_manager.remove_link_if_under(&rule.dest, package_dir);
         }
         // Also remove versioned links
         debug!("Removing {} versioned link(s)", meta.versioned_links.len());
         for link in &meta.versioned_links {
-            let _ =
-                runtime.remove_symlink_if_target_under(&link.dest, package_dir, "versioned link");
+            let _ = link_manager.remove_link_if_under(&link.dest, package_dir);
         }
     }
 
@@ -464,13 +449,27 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Remove External Symlinks ---
+        // --- 3. Remove External Symlinks (via LinkManager) ---
 
-        // Remove symlink /usr/local/bin/tool if it points to package directory
+        // LinkManager.remove_link_if_under checks:
+        // 1. is_symlink
         runtime
-            .expect_remove_symlink_if_target_under()
-            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(true));
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // 2. resolve_link -> points to package directory
+        let resolved_target = package_dir.join("v1/tool");
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(resolved_target.clone()));
+
+        // 3. remove_symlink
+        runtime
+            .expect_remove_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Ok(()));
 
         // --- 4. Remove Package Directory ---
 
@@ -748,11 +747,20 @@ mod tests {
 
         // --- 3. Try to Remove Link (Points to Different Package) ---
 
-        // Link /usr/local/bin/tool points to different package -> Ok(false) (skipped)
+        // LinkManager.remove_link_if_under checks:
+        // 1. is_symlink
         runtime
-            .expect_remove_symlink_if_target_under()
-            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false)); // Skipped - wrong target
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // 2. resolve_link -> points to different package (not removed)
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/other/package/tool")));
+
+        // remove_symlink should NOT be called because target is not under package_dir
 
         // --- 4. Remove Package Directory ---
 
@@ -829,11 +837,14 @@ mod tests {
 
         // --- 3. Try to Remove Link (Not a Symlink) ---
 
-        // /usr/local/bin/tool is not a symlink -> Ok(false) (skipped)
+        // LinkManager.remove_link_if_under checks is_symlink first
+        // /usr/local/bin/tool is not a symlink -> skipped
         runtime
-            .expect_remove_symlink_if_target_under()
-            .with(eq(link_dest.clone()), eq(package_dir.clone()), eq("link"))
-            .returning(|_, _, _| Ok(false)); // Skipped - not a symlink
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| false);
+
+        // remove_symlink should NOT be called because it's not a symlink
 
         // --- 4. Remove Package Directory ---
 

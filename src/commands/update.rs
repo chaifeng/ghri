@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
-use crate::package::{Meta, find_all_packages};
+use crate::package::{Meta, PackageRepository, VersionResolver};
 use crate::runtime::Runtime;
 
 use super::config::{Config, ConfigOverrides};
@@ -30,8 +30,10 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
     services: Services<G, D, E>,
     repos: Vec<String>,
 ) -> Result<()> {
-    let meta_files = find_all_packages(&runtime, &config.install_root)?;
-    if meta_files.is_empty() {
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
+    let packages = pkg_repo.find_all_with_meta()?;
+    
+    if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
     }
@@ -49,9 +51,14 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
         services.extractor,
     );
 
-    for meta_path in meta_files {
-        let meta = Meta::load(&installer.runtime, &meta_path)?;
-        let repo = meta.name.parse::<GitHubRepo>()?;
+    for (meta_path, meta) in packages {
+        let repo = match meta.name.parse::<GitHubRepo>() {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Invalid repo name in meta: {}", e);
+                continue;
+            }
+        };
 
         // Skip if not in filter list (when filter is specified)
         if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
@@ -64,11 +71,13 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
         {
             warn!("Failed to update metadata for {}: {}", repo, e);
         } else {
-            // Check if update is available
+            // Check if update is available using VersionResolver
             let updated_meta = Meta::load(&installer.runtime, &meta_path)?;
-            if let Some(latest) = updated_meta.get_latest_stable_release()
-                && meta.current_version != latest.version
-            {
+            if let Some(latest) = VersionResolver::check_update(
+                &updated_meta.releases,
+                &meta.current_version,
+                false, // don't include prereleases
+            ) {
                 print_update_available(&repo, &meta.current_version, &latest.version);
             }
         }

@@ -4,66 +4,20 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     github::RepoSpec,
-    package::{LinkRule, Meta, VersionedLink},
-    runtime::{Runtime, is_path_under},
+    package::{LinkManager, LinkRule, LinkStatus, PackageRepository, VersionedLink},
+    runtime::Runtime,
 };
 
 use super::paths::default_install_root;
 
-/// Link status for display
-#[derive(Debug, PartialEq)]
-enum LinkStatus {
-    /// Link exists and points to the expected target
-    Ok,
-    /// Link path does not exist
-    Missing,
-    /// Path exists but is not a symlink
-    NotSymlink,
-    /// Link exists but points to a different target
-    WrongTarget(PathBuf),
-}
-
-impl std::fmt::Display for LinkStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LinkStatus::Ok => write!(f, ""),
-            LinkStatus::Missing => write!(f, " [missing]"),
-            LinkStatus::NotSymlink => write!(f, " [not a symlink]"),
-            LinkStatus::WrongTarget(target) => write!(f, " [wrong target: {}]", target.display()),
-        }
-    }
-}
-
-/// Check the status of a symlink
-fn check_link_status<R: Runtime>(
-    runtime: &R,
-    link_dest: &Path,
-    expected_prefix: &Path,
-) -> LinkStatus {
-    if !runtime.exists(link_dest) && !runtime.is_symlink(link_dest) {
-        return LinkStatus::Missing;
-    }
-
-    if !runtime.is_symlink(link_dest) {
-        return LinkStatus::NotSymlink;
-    }
-
-    match runtime.resolve_link(link_dest) {
-        Ok(resolved) => {
-            // Canonicalize for accurate comparison (resolves actual filesystem paths)
-            let canonicalized = runtime.canonicalize(&resolved).unwrap_or(resolved);
-            let canonicalized_prefix = runtime
-                .canonicalize(expected_prefix)
-                .unwrap_or_else(|_| expected_prefix.to_path_buf());
-
-            // Check if target is under expected prefix using safe path comparison
-            if is_path_under(&canonicalized, &canonicalized_prefix) {
-                LinkStatus::Ok
-            } else {
-                LinkStatus::WrongTarget(canonicalized)
-            }
-        }
-        Err(_) => LinkStatus::Missing,
+/// Convert LinkManager's LinkStatus to display string
+fn format_link_status(status: &LinkStatus) -> String {
+    match status {
+        LinkStatus::Valid => String::new(),
+        LinkStatus::NotExists => " [missing]".to_string(),
+        LinkStatus::NotSymlink => " [not a symlink]".to_string(),
+        LinkStatus::WrongTarget => " [wrong target]".to_string(),
+        LinkStatus::Unresolvable => " [unresolvable]".to_string(),
     }
 }
 
@@ -82,10 +36,11 @@ pub(crate) fn print_links<R: Runtime>(
         println!("{}", h);
     }
 
+    let link_manager = LinkManager::new(runtime);
     for rule in links {
-        let status = check_link_status(runtime, &rule.dest, expected_prefix);
+        let status = link_manager.check_link(&rule.dest, expected_prefix);
         let source = rule.path.as_deref().unwrap_or("(default)");
-        println!("  {} -> {:?}{}", source, rule.dest, status);
+        println!("  {} -> {:?}{}", source, rule.dest, format_link_status(&status));
     }
 }
 
@@ -104,13 +59,14 @@ pub(crate) fn print_versioned_links<R: Runtime>(
         println!("{}", h);
     }
 
+    let link_manager = LinkManager::new(runtime);
     for link in links {
         let version_dir = package_dir.join(&link.version);
-        let status = check_link_status(runtime, &link.dest, &version_dir);
+        let status = link_manager.check_link(&link.dest, &version_dir);
         let source = link.path.as_deref().unwrap_or("(default)");
         println!(
             "  @{} {} -> {:?}{}",
-            link.version, source, link.dest, status
+            link.version, source, link.dest, format_link_status(&status)
         );
     }
 }
@@ -126,16 +82,14 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBu
     };
     debug!("Using install root: {:?}", root);
 
-    let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
-    let meta_path = package_dir.join("meta.json");
-    debug!("Loading meta from {:?}", meta_path);
-
-    if !runtime.exists(&meta_path) {
-        debug!("Meta file not found");
+    let pkg_repo = PackageRepository::new(&runtime, root);
+    
+    if !pkg_repo.is_installed(&spec.repo.owner, &spec.repo.repo) {
+        debug!("Package not installed");
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
-    let meta = Meta::load(&runtime, &meta_path)?;
+    let meta = pkg_repo.load_required(&spec.repo.owner, &spec.repo.repo)?;
     debug!(
         "Found {} link rules, {} versioned links",
         meta.links.len(),
@@ -147,7 +101,8 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBu
         return Ok(());
     }
 
-    let current_dir = package_dir.join("current");
+    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
+    let current_dir = pkg_repo.current_link(&spec.repo.owner, &spec.repo.repo);
     let header = format!(
         "Link rules for {} (current: {}):",
         spec.repo, meta.current_version
@@ -170,123 +125,19 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
 
     #[test]
-    fn test_link_status_display() {
-        // Test the Display trait for LinkStatus enum
+    fn test_format_link_status() {
+        // Test format_link_status function
 
-        // --- Ok status displays empty string ---
-        assert_eq!(format!("{}", LinkStatus::Ok), "");
-
-        // --- Missing status ---
-        assert_eq!(format!("{}", LinkStatus::Missing), " [missing]");
-
-        // --- Not a symlink status ---
-        assert_eq!(format!("{}", LinkStatus::NotSymlink), " [not a symlink]");
-
-        // --- Wrong target status includes the actual target path ---
-        assert_eq!(
-            format!("{}", LinkStatus::WrongTarget(PathBuf::from("/other/path"))),
-            " [wrong target: /other/path]"
-        );
-    }
-
-    #[test]
-    fn test_check_link_status_missing() {
-        // Test that check_link_status returns Missing when symlink doesn't exist
-
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
-        let expected_prefix = PathBuf::from("/root/o/r/current");
-
-        // --- Check Link Status ---
-
-        // File exists: /usr/local/bin/tool -> false (doesn't exist)
-        runtime
-            .expect_exists()
-            .with(eq(link_dest.clone()))
-            .returning(|_| false);
-
-        // Is symlink: /usr/local/bin/tool -> false
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| false);
-
-        // --- Execute & Verify ---
-
-        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
-        assert_eq!(status, LinkStatus::Missing);
-    }
-
-    #[test]
-    fn test_check_link_status_not_symlink() {
-        // Test that check_link_status returns NotSymlink when path is a regular file
-
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
-        let expected_prefix = PathBuf::from("/root/o/r/current");
-
-        // --- Check Link Status ---
-
-        // File exists: /usr/local/bin/tool -> true (exists)
-        runtime
-            .expect_exists()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-
-        // Is symlink: /usr/local/bin/tool -> false (it's a regular file!)
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| false);
-
-        // --- Execute & Verify ---
-
-        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
-        assert_eq!(status, LinkStatus::NotSymlink);
-    }
-
-    #[test]
-    fn test_check_link_status_read_link_error() {
-        // Test that check_link_status returns Missing when read_link fails
-
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
-        let expected_prefix = PathBuf::from("/root/o/r/current");
-
-        // --- Check Link Status ---
-
-        // File exists: /usr/local/bin/tool -> true
-        runtime
-            .expect_exists()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-
-        // Is symlink: /usr/local/bin/tool -> true
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-
-        // Resolve link: /usr/local/bin/tool -> ERROR (unreadable)
-        runtime
-            .expect_resolve_link()
-            .with(eq(link_dest.clone()))
-            .returning(|_| Err(anyhow::anyhow!("not found")));
-
-        // --- Execute & Verify ---
-
-        let status = check_link_status(&runtime, &link_dest, &expected_prefix);
-        assert_eq!(status, LinkStatus::Missing);
+        assert_eq!(format_link_status(&LinkStatus::Valid), "");
+        assert_eq!(format_link_status(&LinkStatus::NotExists), " [missing]");
+        assert_eq!(format_link_status(&LinkStatus::NotSymlink), " [not a symlink]");
+        assert_eq!(format_link_status(&LinkStatus::WrongTarget), " [wrong target]");
+        assert_eq!(format_link_status(&LinkStatus::Unresolvable), " [unresolvable]");
     }
 
     #[test]
@@ -337,7 +188,7 @@ mod tests {
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
 
-        // --- 2. Check Package Exists ---
+        // --- 2. Check Package Exists (is_installed checks meta.json) ---
 
         // File exists: /home/user/.ghri/owner/repo/meta.json -> false (not installed!)
         runtime
@@ -368,7 +219,7 @@ mod tests {
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
 
-        // --- 2. Check Package Exists ---
+        // --- 2. Check Package Exists (is_installed) ---
 
         // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
@@ -376,7 +227,7 @@ mod tests {
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // --- 3. Load Metadata ---
+        // --- 3. Load Metadata (load_required) ---
 
         // Read meta.json -> package with NO link rules
         let meta = Meta {
@@ -408,7 +259,7 @@ mod tests {
         let install_root = PathBuf::from("/custom/root");
         let meta_path = install_root.join("owner/repo/meta.json"); // /custom/root/owner/repo/meta.json
 
-        // --- 1. Check Package Exists ---
+        // --- 1. Check Package Exists (is_installed) ---
 
         // File exists: /custom/root/owner/repo/meta.json -> false (not installed)
         runtime
