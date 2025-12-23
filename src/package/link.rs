@@ -257,8 +257,8 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
             self.runtime.create_dir_all(parent)?;
         }
 
-        // Calculate relative path if possible
-        if let Some(link_target) = relative_symlink_path(target, dest) {
+        // Calculate relative path if possible (from symlink location to target)
+        if let Some(link_target) = relative_symlink_path(dest, target) {
             self.runtime.symlink(&link_target, dest)
         } else {
             self.runtime.symlink(target, dest)
