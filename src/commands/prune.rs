@@ -203,7 +203,11 @@ pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str
     };
 
     // Remove each version
-    println!("Pruning {} old version(s) from {}...", versions_to_prune.len(), name);
+    println!(
+        "Pruning {} old version(s) from {}...",
+        versions_to_prune.len(),
+        name
+    );
     for version in &versions_to_prune {
         if version == &current_version {
             continue; // Safety check
@@ -868,7 +872,10 @@ mod tests {
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
+        #[cfg(not(windows))]
         let root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let root = PathBuf::from("C:\\Users\\user\\.ghri");
 
         // Root exists but is empty - no packages
         runtime
