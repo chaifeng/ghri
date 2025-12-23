@@ -697,6 +697,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_install_version_not_found() {
+        // Test that install fails with descriptive error when specified version doesn't exist
+        // Simplified: mock cached meta.json instead of GitHub API
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Mock cached meta.json with available versions ---
+
+        // Prepare meta.json content with versions v1.0.0, v2.0.0, v3.0.0
+        // Note: current_version must be set to avoid read_link call in Meta::load
+        let meta_json = serde_json::json!({
+            "name": "o/r",
+            "api_url": "https://api.github.com",
+            "current_version": "v3.0.0",
+            "releases": [
+                { "version": "v3.0.0", "published_at": "2024-03-01T00:00:00Z", "prerelease": false, "assets": [] },
+                { "version": "v2.0.0", "published_at": "2024-02-01T00:00:00Z", "prerelease": false, "assets": [] },
+                { "version": "v1.0.0", "published_at": "2024-01-01T00:00:00Z", "prerelease": false, "assets": [] }
+            ]
+        });
+
+        // meta.json exists -> true (use cached)
+        runtime.expect_exists().returning(|_| true);
+
+        // Read meta.json -> returns valid JSON
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(meta_json.to_string()));
+
+        // --- Execute & Verify ---
+
+        let repo = GitHubRepo {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let http_client = HttpClient::new(Client::new());
+        // No GitHub mock needed - meta is loaded from "cached" file
+        let installer = Installer::new(
+            runtime,
+            MockGetReleases::new(),
+            http_client,
+            MockExtractor::new(),
+        );
+
+        // Try to install version "v999.0.0" which doesn't exist
+        let result = installer
+            .install(&repo, Some("v999.0.0"), None, vec![], false, true)
+            .await;
+
+        // Should fail because requested version not found
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Version 'v999.0.0' not found"),
+            "Error should mention the missing version, got: {}",
+            err
+        );
+        assert!(
+            err.contains("o/r"),
+            "Error should mention the repo, got: {}",
+            err
+        );
+        assert!(
+            err.contains("v3.0.0") && err.contains("v2.0.0") && err.contains("v1.0.0"),
+            "Error should list available versions, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
     async fn test_install_prerelease_with_pre_flag() {
         // Test that --pre flag allows selecting pre-release when no stable release exists
         // This test verifies that with pre=true, get_latest_release() is used instead of get_latest_stable_release()
