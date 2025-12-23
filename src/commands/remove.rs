@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{debug, info};
+use log::debug;
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -29,7 +29,6 @@ pub fn remove<R: Runtime>(
 
     let pkg_repo = PackageRepository::new(&runtime, root.clone());
     let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
-    let owner_dir = root.join(&spec.repo.owner);
     debug!("Package directory: {:?}", package_dir);
 
     if !pkg_repo.package_exists(&spec.repo.owner, &spec.repo.repo) {
@@ -75,17 +74,13 @@ pub fn remove<R: Runtime>(
             }
         }
 
-        remove_package(&runtime, &package_dir, meta.as_ref(), force)?;
-    }
-
-    // Check if owner directory is empty and remove it
-    if runtime.exists(&owner_dir) {
-        let entries = runtime.read_dir(&owner_dir)?;
-        if entries.is_empty() {
-            debug!("Owner directory {:?} is empty, removing", owner_dir);
-            runtime.remove_dir(&owner_dir)?;
-            info!("Removed empty owner directory {:?}", owner_dir);
-        }
+        remove_package(
+            &runtime,
+            &pkg_repo,
+            &spec.repo.owner,
+            &spec.repo.repo,
+            meta.as_ref(),
+        )?;
     }
 
     Ok(())
@@ -318,39 +313,32 @@ pub(crate) fn remove_version<R: Runtime>(
 /// Remove an entire package
 fn remove_package<R: Runtime>(
     runtime: &R,
-    package_dir: &Path,
+    pkg_repo: &PackageRepository<'_, R>,
+    owner: &str,
+    repo: &str,
     meta: Option<&Meta>,
-    _force: bool,
 ) -> Result<()> {
+    let package_dir = pkg_repo.package_dir(owner, repo);
+
     // Remove all external links first using LinkManager
     let link_manager = LinkManager::new(runtime);
     if let Some(meta) = meta {
         debug!("Removing {} link(s)", meta.links.len());
         for rule in &meta.links {
-            let _ = link_manager.remove_link_if_under(&rule.dest, package_dir);
+            let _ = link_manager.remove_link_if_under(&rule.dest, &package_dir);
         }
         // Also remove versioned links
         debug!("Removing {} versioned link(s)", meta.versioned_links.len());
         for link in &meta.versioned_links {
-            let _ = link_manager.remove_link_if_under(&link.dest, package_dir);
+            let _ = link_manager.remove_link_if_under(&link.dest, &package_dir);
         }
     }
 
-    // Remove the package directory
+    // Remove the package directory (also cleans up empty owner directory)
     debug!("Removing package directory {:?}", package_dir);
-    runtime.remove_dir_all(package_dir)?;
+    pkg_repo.remove_package_dir(owner, repo)?;
 
-    let package_name = package_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-    let owner_name = package_dir
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown");
-
-    println!("Removed package {}/{}", owner_name, package_name);
+    println!("Removed package {}/{}", owner, repo);
 
     Ok(())
 }
@@ -454,7 +442,13 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(()));
 
-        // --- 4. Remove Package Directory ---
+        // --- 4. Remove Package Directory (via PackageRepository) ---
+
+        // PackageRepository.remove_package_dir checks exists first
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
 
         // Remove /home/user/.ghri/owner/repo
         runtime
@@ -464,7 +458,7 @@ mod tests {
 
         // --- 5. Cleanup Empty Owner Directory ---
 
-        // Check if /home/user/.ghri/owner is empty -> yes
+        // Check if /home/user/.ghri/owner exists and is empty -> yes
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -474,9 +468,9 @@ mod tests {
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(vec![])); // Empty!
 
-        // Remove empty owner directory /home/user/.ghri/owner
+        // Remove empty owner directory /home/user/.ghri/owner (uses remove_dir_all)
         runtime
-            .expect_remove_dir()
+            .expect_remove_dir_all()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
 
@@ -743,7 +737,13 @@ mod tests {
 
         // remove_symlink should NOT be called because target is not under package_dir
 
-        // --- 4. Remove Package Directory ---
+        // --- 4. Remove Package Directory (via PackageRepository) ---
+
+        // PackageRepository.remove_package_dir checks exists first
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
 
         // Remove /home/user/.ghri/owner/repo
         runtime
@@ -762,7 +762,7 @@ mod tests {
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(vec![]));
         runtime
-            .expect_remove_dir()
+            .expect_remove_dir_all()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
 
@@ -827,7 +827,13 @@ mod tests {
 
         // remove_symlink should NOT be called because it's not a symlink
 
-        // --- 4. Remove Package Directory ---
+        // --- 4. Remove Package Directory (via PackageRepository) ---
+
+        // PackageRepository.remove_package_dir checks exists first
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
 
         // Remove /home/user/.ghri/owner/repo
         runtime
@@ -846,7 +852,7 @@ mod tests {
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(vec![]));
         runtime
-            .expect_remove_dir()
+            .expect_remove_dir_all()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
 
