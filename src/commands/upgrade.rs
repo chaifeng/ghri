@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use crate::archive::Extractor;
+use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
@@ -26,8 +27,8 @@ pub async fn upgrade<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, repos))]
-async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
-    config: Config<R, G, E>,
+async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    config: Config<R, G, E, D>,
     repos: Vec<String>,
     pre: bool,
     yes: bool,
@@ -53,7 +54,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     let installer = Installer::new(
         config.runtime,
         config.github,
-        config.http_client,
+        config.downloader,
         config.extractor,
     );
 
@@ -135,11 +136,10 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
 mod tests {
     use super::*;
     use crate::archive::MockExtractor;
+    use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, Release};
-    use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
-    use reqwest::Client;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
@@ -197,7 +197,7 @@ mod tests {
         let config = Config {
             runtime,
             github: MockGetReleases::new(),
-            http_client: HttpClient::new(Client::new()),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -279,7 +279,7 @@ mod tests {
         let config = Config {
             runtime,
             github,
-            http_client: HttpClient::new(Client::new()),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -387,12 +387,13 @@ mod tests {
         let config = Config {
             runtime,
             github,
-            http_client: HttpClient::new(Client::new()),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
             install_root: None,
         };
         // Only upgrade owner1/repo1, skip owner2/repo2
-        let result = run_upgrade(config, vec!["owner1/repo1".to_string()], false, true, false).await;
+        let result =
+            run_upgrade(config, vec!["owner1/repo1".to_string()], false, true, false).await;
         assert!(result.is_ok());
     }
 

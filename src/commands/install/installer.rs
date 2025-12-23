@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use crate::{
     archive::Extractor,
     cleanup::CleanupContext,
+    download::Downloader,
     github::{GetReleases, GitHubRepo, Release},
-    http::HttpClient,
     package::Meta,
     runtime::Runtime,
 };
@@ -19,20 +19,20 @@ use crate::commands::symlink::update_current_symlink;
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
 use super::external_links::update_external_links;
 
-pub struct Installer<R: Runtime, G: GetReleases, E: Extractor> {
+pub struct Installer<R: Runtime, G: GetReleases, E: Extractor, D: Downloader> {
     pub runtime: R,
     pub github: G,
-    pub http_client: HttpClient,
+    pub downloader: D,
     pub extractor: E,
 }
 
-impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
-    #[tracing::instrument(skip(runtime, github, http_client, extractor))]
-    pub fn new(runtime: R, github: G, http_client: HttpClient, extractor: E) -> Self {
+impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installer<R, G, E, D> {
+    #[tracing::instrument(skip(runtime, github, downloader, extractor))]
+    pub fn new(runtime: R, github: G, downloader: D, extractor: E) -> Self {
         Self {
             runtime,
             github,
-            http_client,
+            downloader,
             extractor,
         }
     }
@@ -140,7 +140,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
             &target_dir,
             repo,
             &release,
-            &self.http_client,
+            &self.downloader,
             &self.extractor,
             Arc::clone(&cleanup_ctx),
             &effective_filters,
@@ -372,10 +372,10 @@ mod tests {
     use super::*;
     use crate::archive::MockExtractor;
     use crate::commands::config::Config;
+    use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, RepoInfo};
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
-    use reqwest::Client;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
@@ -544,8 +544,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, extractor);
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, extractor);
         installer
             .install(&repo, None, None, vec![], false, true)
             .await
@@ -615,8 +615,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
         let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
 
         // Should have fetched fresh metadata (needs_save = true)
@@ -680,8 +680,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Should fail because no stable release found
         let result = installer
@@ -732,12 +732,12 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
+        let downloader = MockDownloader::new();
         // No GitHub mock needed - meta is loaded from "cached" file
         let installer = Installer::new(
             runtime,
             MockGetReleases::new(),
-            http_client,
+            downloader,
             MockExtractor::new(),
         );
 
@@ -848,8 +848,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, extractor);
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, extractor);
 
         // With pre=true, should succeed and install the pre-release
         let result = installer
@@ -893,8 +893,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Should fail because API call failed
         let result = installer.get_or_fetch_meta(&repo, None).await;
@@ -910,7 +910,7 @@ mod tests {
         let config = Config {
             runtime: MockRuntime::new(),
             github: MockGetReleases::new(),
-            http_client: HttpClient::new(Client::new()),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -1009,8 +1009,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, extractor);
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, extractor);
 
         // Should succeed despite metadata save failure (it's just a warning)
         let result = installer
@@ -1043,11 +1043,11 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
+        let downloader = MockDownloader::new();
         let installer = Installer::new(
             runtime,
             MockGetReleases::new(),
-            http_client,
+            downloader,
             MockExtractor::new(),
         );
         let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
@@ -1119,8 +1119,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
         installer
             .install(&repo, None, None, vec![], false, true)
             .await
@@ -1167,7 +1167,7 @@ mod tests {
         let config = Config {
             runtime,
             github: MockGetReleases::new(),
-            http_client: HttpClient::new(Client::new()),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -1215,11 +1215,11 @@ mod tests {
             name: "o/r".into(),
             ..Default::default()
         };
-        let http_client = HttpClient::new(Client::new());
+        let downloader = MockDownloader::new();
         Installer::new(
             runtime,
             MockGetReleases::new(),
-            http_client,
+            downloader,
             MockExtractor::new(),
         )
         .save_meta(&PathBuf::from("meta.json"), &meta)
@@ -1304,8 +1304,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // User provides NEW filter, should override saved "*old-filter*"
         installer
@@ -1395,8 +1395,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
@@ -1473,8 +1473,8 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let http_client = HttpClient::new(Client::new());
-        let installer = Installer::new(runtime, github, http_client, MockExtractor::new());
+        let downloader = MockDownloader::new();
+        let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer

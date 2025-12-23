@@ -3,6 +3,7 @@ use log::warn;
 use std::path::{Path, PathBuf};
 
 use crate::archive::Extractor;
+use crate::download::Downloader;
 use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
@@ -23,8 +24,8 @@ pub async fn update<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, repos))]
-async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
-    config: Config<R, G, E>,
+async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    config: Config<R, G, E, D>,
     repos: Vec<String>,
 ) -> Result<()> {
     let root = match config.install_root {
@@ -47,7 +48,7 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     let installer = Installer::new(
         config.runtime,
         config.github,
-        config.http_client,
+        config.downloader,
         config.extractor,
     );
 
@@ -88,8 +89,8 @@ fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
 }
 
 #[tracing::instrument(skip(installer, repo, current_version, target_dir))]
-async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor>(
-    installer: &Installer<R, G, E>,
+async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
     current_version: &str,
     target_dir: &Path,
@@ -134,8 +135,8 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor>(
 }
 
 #[tracing::instrument(skip(installer, repo, current_version, api_url))]
-async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor>(
-    installer: &Installer<R, G, E>,
+async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
     current_version: &str,
     api_url: Option<&str>,
@@ -156,6 +157,7 @@ async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor>(
 mod tests {
     use super::*;
     use crate::archive::MockExtractor;
+    use crate::download::HttpDownloader;
     use crate::github::{MockGetReleases, Release, RepoInfo};
     use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
@@ -311,7 +313,7 @@ mod tests {
         let config = Config {
             runtime,
             github,
-            http_client: HttpClient::new(Client::new()),
+            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -348,7 +350,7 @@ mod tests {
         let config = Config {
             runtime,
             github: MockGetReleases::new(),
-            http_client: HttpClient::new(Client::new()),
+            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
             extractor: MockExtractor::new(),
             install_root: None,
         };
@@ -481,7 +483,7 @@ mod tests {
         let config = Config {
             runtime,
             github,
-            http_client: HttpClient::new(Client::new()),
+            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
             extractor: MockExtractor::new(),
             install_root: None,
         };

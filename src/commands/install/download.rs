@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use crate::{
     archive::Extractor,
     cleanup::CleanupContext,
-    download::download_file,
+    download::Downloader,
     github::{GitHubRepo, Release, ReleaseAsset},
-    http::HttpClient,
     runtime::Runtime,
 };
 
@@ -59,18 +58,18 @@ pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<Downlo
     target_dir,
     repo,
     release,
-    http_client,
+    downloader,
     extractor,
     cleanup_ctx,
     filters
 ))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
+pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
     release: &Release,
-    http_client: &HttpClient,
+    downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
     filters: &[String],
@@ -162,7 +161,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
             target_dir,
             repo,
             &filtered_release,
-            http_client,
+            downloader,
             extractor,
             Arc::clone(&cleanup_ctx),
         )
@@ -174,7 +173,7 @@ pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
             target_dir,
             repo,
             &filtered_release,
-            http_client,
+            downloader,
             extractor,
             Arc::clone(&cleanup_ctx),
         )
@@ -210,12 +209,12 @@ fn filter_assets(
 
 /// Download source tarball (when no assets available)
 /// Since it's a single file that is an archive, extract it
-async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor>(
+async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
     release: &Release,
-    http_client: &HttpClient,
+    downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
@@ -227,7 +226,9 @@ async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor>(
         " downloading {} {} -> {}",
         &repo, release.tag_name, release.tarball_url
     );
-    if let Err(e) = download_file(runtime, &release.tarball_url, &temp_file_path, http_client).await
+    if let Err(e) = downloader
+        .download(runtime, &release.tarball_url, &temp_file_path)
+        .await
     {
         debug!(
             "Download failed, cleaning up target directory: {:?}",
@@ -374,12 +375,12 @@ fn set_executable_if_binary<R: Runtime>(_runtime: &R, _path: &Path) -> Result<()
 /// Download all release assets (when assets are available)
 /// If only one file is downloaded and it's an archive, extract it.
 /// If multiple files are downloaded, keep them as-is without extraction.
-async fn download_all_assets<R: Runtime + 'static, E: Extractor>(
+async fn download_all_assets<R: Runtime + 'static, E: Extractor, D: Downloader>(
     runtime: &R,
     target_dir: &Path,
     repo: &GitHubRepo,
     release: &Release,
-    http_client: &HttpClient,
+    downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
@@ -409,13 +410,9 @@ async fn download_all_assets<R: Runtime + 'static, E: Extractor>(
             " downloading {} {} ({}/{} assets) -> {}",
             &repo, release.tag_name, asset_index, assets_count, &asset.browser_download_url
         );
-        if let Err(e) = download_file(
-            runtime,
-            &asset.browser_download_url,
-            &temp_file_path,
-            http_client,
-        )
-        .await
+        if let Err(e) = downloader
+            .download(runtime, &asset.browser_download_url, &temp_file_path)
+            .await
         {
             debug!("Download failed for asset {}, cleaning up", asset.name);
             // Clean up already downloaded temp files
@@ -504,6 +501,8 @@ async fn download_all_assets<R: Runtime + 'static, E: Extractor>(
 mod tests {
     use super::*;
     use crate::archive::MockExtractor;
+    use crate::download::HttpDownloader;
+    use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use reqwest::Client;
@@ -689,13 +688,13 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         ensure_installed(
             &runtime,
             &target,
             &repo,
             &release_with_url,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -766,13 +765,13 @@ mod tests {
         // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -841,13 +840,13 @@ mod tests {
         // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -928,13 +927,13 @@ mod tests {
         // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target_dir,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -972,7 +971,7 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
@@ -981,7 +980,7 @@ mod tests {
                 repo: "r".into(),
             },
             &Release::default(),
-            &http_client,
+            &downloader,
             &MockExtractor::new(),
             cleanup_ctx,
             &[],
@@ -1090,13 +1089,13 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -1182,13 +1181,13 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -1283,13 +1282,13 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -1366,13 +1365,13 @@ mod tests {
         // --- Execute ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -1468,13 +1467,13 @@ mod tests {
         // --- Execute & Verify ---
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let http_client = HttpClient::new(Client::new());
+        let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
         let result = ensure_installed(
             &runtime,
             &target,
             &repo,
             &release,
-            &http_client,
+            &downloader,
             &extractor,
             cleanup_ctx,
             &[],
@@ -1544,7 +1543,7 @@ mod tests {
             &target,
             &repo,
             &release,
-            &HttpClient::new(Client::new()),
+            &HttpDownloader::new(HttpClient::new(Client::new())),
             &MockExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,
@@ -1613,7 +1612,7 @@ mod tests {
             &target,
             &repo,
             &release,
-            &HttpClient::new(Client::new()),
+            &HttpDownloader::new(HttpClient::new(Client::new())),
             &MockExtractor::new(),
             Arc::new(Mutex::new(CleanupContext::new())),
             &filters,

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::{
     archive::Extractor,
+    download::Downloader,
     github::{GetReleases, RepoSpec},
     runtime::Runtime,
 };
@@ -34,9 +35,9 @@ pub async fn install<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, filters))]
-pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
+pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
     repo_str: &str,
-    config: Config<R, G, E>,
+    config: Config<R, G, E, D>,
     filters: Vec<String>,
     pre: bool,
     yes: bool,
@@ -53,7 +54,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     let installer = Installer::new(
         config.runtime,
         config.github,
-        config.http_client,
+        config.downloader,
         config.extractor,
     );
     installer

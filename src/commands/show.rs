@@ -305,7 +305,9 @@ mod tests {
             });
 
         // Canonicalize paths for link status check
-        runtime.expect_canonicalize().returning(|p| Ok(p.to_path_buf()));
+        runtime
+            .expect_canonicalize()
+            .returning(|p| Ok(p.to_path_buf()));
 
         // --- Execute ---
 
@@ -770,7 +772,9 @@ mod tests {
             .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0/tool")));
 
         // Canonicalize paths for link status check
-        runtime.expect_canonicalize().returning(|p| Ok(p.to_path_buf()));
+        runtime
+            .expect_canonicalize()
+            .returning(|p| Ok(p.to_path_buf()));
 
         // --- Execute ---
 

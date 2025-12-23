@@ -9,20 +9,21 @@ use std::path::PathBuf;
 
 use crate::{
     archive::{ArchiveExtractor, Extractor},
+    download::{Downloader, HttpDownloader},
     github::{GetReleases, GitHub},
     http::HttpClient,
     runtime::Runtime,
 };
 
-pub struct Config<R: Runtime, G: GetReleases, E: Extractor> {
+pub struct Config<R: Runtime, G: GetReleases, E: Extractor, D: Downloader> {
     pub runtime: R,
     pub github: G,
-    pub http_client: HttpClient,
+    pub downloader: D,
     pub extractor: E,
     pub install_root: Option<PathBuf>,
 }
 
-impl<R: Runtime> Config<R, GitHub, ArchiveExtractor> {
+impl<R: Runtime> Config<R, GitHub, ArchiveExtractor, HttpDownloader> {
     pub fn new(runtime: R, install_root: Option<PathBuf>, api_url: Option<String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         if let Ok(token) = runtime.env_var("GITHUB_TOKEN") {
@@ -44,11 +45,12 @@ impl<R: Runtime> Config<R, GitHub, ArchiveExtractor> {
         let github = GitHub::new(client.clone(), api_url);
         let http_client = HttpClient::new(client);
         let extractor = ArchiveExtractor;
+        let downloader = HttpDownloader::new(http_client);
 
         Ok(Self {
             runtime,
             github,
-            http_client,
+            downloader,
             extractor,
             install_root,
         })
@@ -91,7 +93,7 @@ mod tests {
         // --- Execute ---
 
         let config = Config::new(runtime, None, None).unwrap();
-        let client = config.http_client.inner();
+        let client = config.downloader.http_client().inner();
         let _ = client.get(server.url()).send().await;
 
         // --- Verify ---
