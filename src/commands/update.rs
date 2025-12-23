@@ -1,6 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::warn;
-use std::path::Path;
 
 use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
@@ -30,7 +29,14 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
     services: Services<G, D, E>,
     repos: Vec<String>,
 ) -> Result<()> {
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
+    let installer = Installer::new(
+        runtime,
+        services.github,
+        services.downloader,
+        services.extractor,
+    );
+
+    let pkg_repo = PackageRepository::new(&installer.runtime, config.install_root.clone());
     let packages = pkg_repo.find_all_with_meta()?;
 
     if packages.is_empty() {
@@ -44,14 +50,7 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
         .filter_map(|r| r.parse::<GitHubRepo>().ok())
         .collect();
 
-    let installer = Installer::new(
-        runtime,
-        services.github,
-        services.downloader,
-        services.extractor,
-    );
-
-    for (meta_path, meta) in packages {
+    for (_meta_path, meta) in packages {
         let repo = match meta.name.parse::<GitHubRepo>() {
             Ok(r) => r,
             Err(e) => {
@@ -67,12 +66,12 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
 
         println!("   updating {}", repo);
         if let Err(e) =
-            save_metadata(config, &installer, &repo, &meta.current_version, &meta_path).await
+            save_metadata(config, &pkg_repo, &installer, &repo, &meta.current_version).await
         {
             warn!("Failed to update metadata for {}: {}", repo, e);
         } else {
             // Check if update is available using VersionResolver
-            let updated_meta = Meta::load(&installer.runtime, &meta_path)?;
+            let updated_meta = pkg_repo.load_required(&repo.owner, &repo.repo)?;
             if let Some(latest) = VersionResolver::check_update(
                 &updated_meta.releases,
                 &meta.current_version,
@@ -96,26 +95,15 @@ fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
     println!("  updatable {} {} -> {}", repo, current_display, latest);
 }
 
-#[tracing::instrument(skip(config, installer, repo, current_version, target_dir))]
+#[tracing::instrument(skip(config, pkg_repo, installer, repo, current_version))]
 async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
+    pkg_repo: &PackageRepository<'_, R>,
     installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
     current_version: &str,
-    target_dir: &Path,
 ) -> Result<()> {
-    let meta_path = if !installer.runtime.is_dir(target_dir) {
-        target_dir.to_path_buf()
-    } else {
-        let package_root = target_dir.parent().context("Failed to get package root")?;
-        package_root.join("meta.json")
-    };
-
-    let existing_meta = if installer.runtime.exists(&meta_path) {
-        Meta::load(&installer.runtime, &meta_path).ok()
-    } else {
-        None
-    };
+    let existing_meta = pkg_repo.load(&repo.owner, &repo.repo)?;
 
     let new_meta = fetch_meta(
         config,
@@ -126,8 +114,7 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor
     )
     .await?;
 
-    let mut final_meta = if installer.runtime.exists(&meta_path) {
-        let mut existing = Meta::load(&installer.runtime, &meta_path)?;
+    let mut final_meta = if let Some(mut existing) = existing_meta {
         if existing.merge(new_meta.clone()) {
             existing.updated_at = new_meta.updated_at;
         }
@@ -139,7 +126,7 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor
     // Ensure current_version is always correct (e.g. if we just installed a new version)
     final_meta.current_version = current_version.to_string();
 
-    installer.save_meta(&meta_path, &final_meta)?;
+    pkg_repo.save(&repo.owner, &repo.repo, &final_meta)?;
 
     Ok(())
 }
@@ -328,6 +315,12 @@ mod tests {
 
         // --- 4. Save Updated Metadata ---
 
+        // Check if package directory exists (for PackageRepository::save)
+        runtime
+            .expect_exists()
+            .with(eq(root.join("o/r")))
+            .returning(|_| true);
+
         // Write and rename meta.json
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
@@ -495,6 +488,12 @@ mod tests {
         });
 
         // --- 4. Save Updated Metadata ---
+
+        // Check if package directory exists (for PackageRepository::save)
+        runtime
+            .expect_exists()
+            .with(eq(root.join("owner1/repo1")))
+            .returning(|_| true);
 
         runtime.expect_write().returning(|_, _| Ok(()));
         runtime.expect_rename().returning(|_, _| Ok(()));
