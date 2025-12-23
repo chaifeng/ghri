@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     github::LinkSpec,
     package::{LinkManager, LinkRule, PackageRepository, VersionedLink},
-    runtime::{Runtime, is_path_under},
+    runtime::Runtime,
 };
 
 use super::paths::default_install_root;
@@ -110,39 +110,8 @@ pub fn link<R: Runtime>(
         dest
     };
 
-    // Handle existing destination
-    if runtime.exists(&final_dest) || runtime.is_symlink(&final_dest) {
-        if runtime.is_symlink(&final_dest) {
-            // Check if the existing symlink points to a version in this package
-            if let Ok(existing_target) = runtime.resolve_link(&final_dest) {
-                // Check if existing target is within the package directory (using safe path comparison)
-                if is_path_under(&existing_target, &package_dir) {
-                    debug!(
-                        "Updating existing link from {:?} to {:?}",
-                        existing_target, link_target
-                    );
-                    link_mgr.remove_link(&final_dest)?;
-                } else {
-                    anyhow::bail!(
-                        "Destination {:?} exists and points to {:?} which is not part of package {}",
-                        final_dest,
-                        existing_target,
-                        spec.repo
-                    );
-                }
-            } else {
-                anyhow::bail!(
-                    "Destination {:?} is a symlink but cannot read its target",
-                    final_dest
-                );
-            }
-        } else {
-            anyhow::bail!(
-                "Destination {:?} already exists and is not a symlink",
-                final_dest
-            );
-        }
-    }
+    // Prepare destination (check if can update and remove existing if needed)
+    link_mgr.prepare_link_destination(&final_dest, &package_dir)?;
 
     // Create the symlink
     link_mgr.create_link(&link_target, &final_dest)?;
@@ -968,7 +937,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not part of package")
+                .contains("not managed by this package")
         );
     }
 

@@ -293,6 +293,59 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
         Ok(false)
     }
 
+    /// Check if destination can be updated (for creating/updating a link).
+    ///
+    /// Returns Ok(true) if the destination doesn't exist or is a symlink pointing to within package_dir.
+    /// Returns Ok(false) if the destination doesn't exist (safe to create).
+    /// Returns Err if:
+    /// - Destination exists but is not a symlink
+    /// - Destination is a symlink pointing outside package_dir
+    /// - Destination is a symlink but cannot be read
+    pub fn can_update_link(&self, dest: &Path, package_dir: &Path) -> Result<bool> {
+        // Check if dest or symlink exists
+        if !self.runtime.exists(dest) && !self.runtime.is_symlink(dest) {
+            return Ok(false); // Doesn't exist, safe to create
+        }
+
+        if !self.runtime.is_symlink(dest) {
+            anyhow::bail!(
+                "Destination {:?} already exists and is not a symlink",
+                dest
+            );
+        }
+
+        // It's a symlink, check where it points
+        let existing_target = self.runtime.resolve_link(dest).map_err(|_| {
+            anyhow::anyhow!(
+                "Destination {:?} is a symlink but cannot read its target",
+                dest
+            )
+        })?;
+
+        if is_path_under(&existing_target, package_dir) {
+            Ok(true) // Points within package, can be updated
+        } else {
+            anyhow::bail!(
+                "Destination {:?} exists and points to {:?} which is not managed by this package",
+                dest,
+                existing_target
+            )
+        }
+    }
+
+    /// Prepare destination for link creation/update.
+    ///
+    /// If the destination is a symlink pointing within package_dir, removes it.
+    /// Returns Ok(()) if ready to create the new link.
+    /// Returns Err if the destination cannot be updated.
+    pub fn prepare_link_destination(&self, dest: &Path, package_dir: &Path) -> Result<()> {
+        if self.can_update_link(dest, package_dir)? {
+            // Symlink exists and points within package, remove it
+            self.remove_link(dest)?;
+        }
+        Ok(())
+    }
+
     /// Find the default link target in a version directory.
     ///
     /// If there's a single non-directory entry, returns it.
@@ -578,5 +631,135 @@ mod tests {
         assert!(!LinkStatus::NotSymlink.is_valid());
         assert!(!LinkStatus::NotSymlink.is_creatable());
         assert!(LinkStatus::NotSymlink.is_problematic());
+    }
+
+    #[test]
+    fn test_can_update_link_not_exists() {
+        let mut runtime = MockRuntime::new();
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| false);
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.can_update_link(&dest, &package_dir);
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Returns false (doesn't exist, safe to create)
+    }
+
+    #[test]
+    fn test_can_update_link_symlink_in_package() {
+        let mut runtime = MockRuntime::new();
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+        let target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest.clone()))
+            .returning(move |_| Ok(target.clone()));
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.can_update_link(&dest, &package_dir);
+        assert!(result.is_ok());
+        assert!(result.unwrap()); // Returns true (can be updated)
+    }
+
+    #[test]
+    fn test_can_update_link_symlink_outside_package() {
+        let mut runtime = MockRuntime::new();
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+        let target = PathBuf::from("/some/other/path/tool");
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest.clone()))
+            .returning(move |_| Ok(target.clone()));
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.can_update_link(&dest, &package_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not managed"));
+    }
+
+    #[test]
+    fn test_can_update_link_not_a_symlink() {
+        let mut runtime = MockRuntime::new();
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| false);
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.can_update_link(&dest, &package_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a symlink"));
+    }
+
+    #[test]
+    fn test_prepare_link_destination_removes_existing() {
+        let mut runtime = MockRuntime::new();
+        let dest = PathBuf::from("/usr/local/bin/tool");
+        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+        let target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+
+        // can_update_link checks
+        runtime
+            .expect_exists()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest.clone()))
+            .returning(move |_| Ok(target.clone()));
+
+        // remove_link checks
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_remove_symlink()
+            .with(eq(dest.clone()))
+            .returning(|_| Ok(()));
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.prepare_link_destination(&dest, &package_dir);
+        assert!(result.is_ok());
     }
 }
