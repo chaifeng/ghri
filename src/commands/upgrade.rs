@@ -9,6 +9,7 @@ use crate::runtime::Runtime;
 use super::config::Config;
 use super::install::Installer;
 use super::paths::default_install_root;
+use super::prune::prune_package_dir;
 
 #[tracing::instrument(skip(runtime, install_root, api_url, repos))]
 pub async fn upgrade<R: Runtime + 'static>(
@@ -18,9 +19,10 @@ pub async fn upgrade<R: Runtime + 'static>(
     repos: Vec<String>,
     pre: bool,
     yes: bool,
+    prune: bool,
 ) -> Result<()> {
     let config = Config::new(runtime, install_root, api_url)?;
-    run_upgrade(config, repos, pre, yes).await
+    run_upgrade(config, repos, pre, yes, prune).await
 }
 
 #[tracing::instrument(skip(config, repos))]
@@ -29,6 +31,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
     repos: Vec<String>,
     pre: bool,
     yes: bool,
+    prune: bool,
 ) -> Result<()> {
     let root = match config.install_root {
         Some(ref path) => path.clone(),
@@ -93,6 +96,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
 
         // Install the new version using saved filters from meta
         let install_root = config.install_root.clone();
+        let package_dir = root.join(&repo.owner).join(&repo.repo);
         if let Err(e) = installer
             .install(
                 &repo,
@@ -107,6 +111,14 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor>(
             eprintln!("   failed to upgrade {}: {}", repo, e);
         } else {
             upgraded_count += 1;
+
+            // Prune old versions if requested
+            if prune
+                && let Err(e) =
+                    prune_package_dir(&installer.runtime, &package_dir, &repo.to_string())
+            {
+                eprintln!("   warning: failed to prune {}: {}", repo, e);
+            }
         }
     }
 
@@ -189,7 +201,7 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
-        let result = run_upgrade(config, vec![], false, true).await;
+        let result = run_upgrade(config, vec![], false, true, false).await;
         assert!(result.is_ok());
     }
 
@@ -271,7 +283,7 @@ mod tests {
             extractor: MockExtractor::new(),
             install_root: None,
         };
-        let result = run_upgrade(config, vec![], false, true).await;
+        let result = run_upgrade(config, vec![], false, true, false).await;
         assert!(result.is_ok());
     }
 
@@ -380,7 +392,7 @@ mod tests {
             install_root: None,
         };
         // Only upgrade owner1/repo1, skip owner2/repo2
-        let result = run_upgrade(config, vec!["owner1/repo1".to_string()], false, true).await;
+        let result = run_upgrade(config, vec!["owner1/repo1".to_string()], false, true, false).await;
         assert!(result.is_ok());
     }
 
@@ -398,7 +410,7 @@ mod tests {
 
         // --- Execute ---
 
-        upgrade(runtime, None, None, vec![], false, true)
+        upgrade(runtime, None, None, vec![], false, true, false)
             .await
             .unwrap();
     }

@@ -8,6 +8,7 @@ use crate::{
 };
 
 use super::config::Config;
+use super::prune::prune_package_dir;
 
 mod download;
 mod external_links;
@@ -15,6 +16,7 @@ mod installer;
 
 pub use installer::Installer;
 
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip(runtime, install_root, api_url, filters))]
 pub async fn install<R: Runtime + 'static>(
     runtime: R,
@@ -24,9 +26,26 @@ pub async fn install<R: Runtime + 'static>(
     filters: Vec<String>,
     pre: bool,
     yes: bool,
+    prune: bool,
 ) -> Result<()> {
-    let config = Config::new(runtime, install_root, api_url)?;
-    run(repo_str, config, filters, pre, yes).await
+    let config = Config::new(runtime, install_root.clone(), api_url)?;
+    let spec = repo_str.parse::<RepoSpec>()?;
+
+    run(repo_str, config, filters, pre, yes).await?;
+
+    // Prune old versions if requested
+    if prune {
+        let root = install_root.unwrap_or_else(|| {
+            dirs::home_dir()
+                .map(|h| h.join(".ghri"))
+                .expect("Could not determine home directory")
+        });
+        let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
+        let rt = crate::runtime::RealRuntime;
+        prune_package_dir(&rt, &package_dir, &spec.repo.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(skip(config, filters))]

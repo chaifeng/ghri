@@ -87,6 +87,10 @@ pub struct InstallArgs {
     /// Skip confirmation prompt
     #[arg(long = "yes", short = 'y')]
     pub yes: bool,
+
+    /// Remove other versions after successful installation
+    #[arg(long = "prune")]
+    pub prune: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -109,6 +113,10 @@ pub struct UpgradeArgs {
     /// Skip confirmation prompt
     #[arg(long = "yes", short = 'y')]
     pub yes: bool,
+
+    /// Remove other versions after successful upgrade
+    #[arg(long = "prune")]
+    pub prune: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -200,6 +208,7 @@ async fn main() -> Result<()> {
                 args.filters,
                 args.pre,
                 args.yes,
+                args.prune,
             )
             .await?
         }
@@ -214,6 +223,7 @@ async fn main() -> Result<()> {
                 args.repos,
                 args.pre,
                 args.yes,
+                args.prune,
             )
             .await?
         }
@@ -248,6 +258,7 @@ mod tests {
             Commands::Install(args) => {
                 assert_eq!(args.repo, "owner/repo");
                 assert_eq!(args.api_url, None);
+                assert!(!args.prune);
             }
             _ => panic!("Expected Install command"),
         }
@@ -268,6 +279,7 @@ mod tests {
                 assert!(args.repos.is_empty());
                 assert!(!args.pre);
                 assert!(!args.yes);
+                assert!(!args.prune);
             }
             _ => panic!("Expected Upgrade command"),
         }
@@ -303,6 +315,28 @@ mod tests {
                 assert!(args.yes);
             }
             _ => panic!("Expected Upgrade command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_upgrade_with_prune_flag() {
+        let cli = Cli::try_parse_from(["ghri", "upgrade", "--prune"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => {
+                assert!(args.prune);
+            }
+            _ => panic!("Expected Upgrade command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_install_with_prune_flag() {
+        let cli = Cli::try_parse_from(["ghri", "install", "owner/repo", "--prune"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => {
+                assert!(args.prune);
+            }
+            _ => panic!("Expected Install command"),
         }
     }
 

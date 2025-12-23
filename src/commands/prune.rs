@@ -178,6 +178,42 @@ fn prune_package<R: Runtime>(
     Ok(pruned_count)
 }
 
+/// Prune old versions from a package directory (no confirmation, for use after install/upgrade)
+pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str) -> Result<()> {
+    if !runtime.exists(package_dir) {
+        return Ok(()); // Package not installed, nothing to prune
+    }
+
+    let (current_version, versions_to_prune) = find_versions_to_prune(runtime, package_dir)?;
+
+    let Some(current_version) = current_version else {
+        return Ok(()); // No current version, nothing to prune
+    };
+
+    if versions_to_prune.is_empty() {
+        return Ok(()); // Nothing to prune
+    }
+
+    // Load meta for remove_version
+    let meta_path = package_dir.join("meta.json");
+    let meta = if runtime.exists(&meta_path) {
+        Meta::load(runtime, &meta_path).ok()
+    } else {
+        None
+    };
+
+    // Remove each version
+    println!("Pruning {} old version(s) from {}...", versions_to_prune.len(), name);
+    for version in &versions_to_prune {
+        if version == &current_version {
+            continue; // Safety check
+        }
+        remove_version(runtime, package_dir, version, meta.as_ref(), true)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
