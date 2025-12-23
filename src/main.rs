@@ -60,6 +60,9 @@ enum Commands {
 
     /// Show detailed information about a package
     Show(ShowArgs),
+
+    /// Remove unused versions, keeping only the current version
+    Prune(PruneArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -166,6 +169,17 @@ pub struct ShowArgs {
     pub repo: String,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct PruneArgs {
+    /// Packages to prune (default: all installed packages)
+    #[arg(value_name = "OWNER/REPO")]
+    pub repos: Vec<String>,
+
+    /// Skip confirmation prompt
+    #[arg(long = "yes", short = 'y')]
+    pub yes: bool,
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> Result<()> {
@@ -215,6 +229,9 @@ async fn main() -> Result<()> {
             ghri::commands::remove(runtime, &args.repo, args.force, args.yes, cli.install_root)?
         }
         Commands::Show(args) => ghri::commands::show(runtime, &args.repo, cli.install_root)?,
+        Commands::Prune(args) => {
+            ghri::commands::prune(runtime, args.repos, args.yes, cli.install_root)?
+        }
     }
     Ok(())
 }
@@ -557,6 +574,53 @@ mod tests {
                 assert_eq!(args.repo, "owner/repo");
             }
             _ => panic!("Expected Show command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_prune_parsing() {
+        let cli = Cli::try_parse_from(["ghri", "prune"]).unwrap();
+        match cli.command {
+            Commands::Prune(args) => {
+                assert!(args.repos.is_empty());
+                assert!(!args.yes);
+            }
+            _ => panic!("Expected Prune command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_prune_with_repos() {
+        let cli = Cli::try_parse_from(["ghri", "prune", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Prune(args) => {
+                assert_eq!(args.repos, vec!["owner/repo"]);
+            }
+            _ => panic!("Expected Prune command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_prune_with_yes() {
+        let cli = Cli::try_parse_from(["ghri", "prune", "-y"]).unwrap();
+        match cli.command {
+            Commands::Prune(args) => {
+                assert!(args.yes);
+            }
+            _ => panic!("Expected Prune command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_prune_with_multiple_repos() {
+        let cli =
+            Cli::try_parse_from(["ghri", "prune", "owner1/repo1", "owner2/repo2", "-y"]).unwrap();
+        match cli.command {
+            Commands::Prune(args) => {
+                assert_eq!(args.repos, vec!["owner1/repo1", "owner2/repo2"]);
+                assert!(args.yes);
+            }
+            _ => panic!("Expected Prune command"),
         }
     }
 }

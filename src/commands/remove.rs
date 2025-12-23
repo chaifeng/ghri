@@ -265,7 +265,7 @@ fn confirm_remove() -> Result<bool> {
 }
 
 /// Remove a specific version of a package
-fn remove_version<R: Runtime>(
+pub(crate) fn remove_version<R: Runtime>(
     runtime: &R,
     package_dir: &Path,
     version: &str,
