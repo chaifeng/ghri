@@ -11,10 +11,9 @@ mod symlink;
 mod unlink;
 mod update;
 
-pub use install::{install, run, Installer};
-pub use link::link;
+pub use install::{Installer, install, run};
 pub(crate) use link::determine_link_target;
-pub(crate) use link_check::{check_links, LinkStatus};
+pub use link::link;
 pub use links::links;
 pub(crate) use links::{print_links, print_versioned_links};
 pub use list::list;
