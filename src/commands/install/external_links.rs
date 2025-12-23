@@ -3,34 +3,9 @@ use log::{debug, info, warn};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    package::{LinkRule, Meta},
-    runtime::{Runtime, is_path_under, relative_symlink_path},
+    package::{LinkManager, LinkRule, LinkValidation, Meta},
+    runtime::Runtime,
 };
-
-use crate::commands::determine_link_target;
-
-/// Describes a validated link operation ready to be executed
-#[derive(Debug)]
-struct ValidatedLink {
-    /// The link target (source file in version directory)
-    link_target: PathBuf,
-    /// The destination path (symlink location)
-    dest: PathBuf,
-    /// Whether the destination already exists and needs to be removed first
-    needs_removal: bool,
-    /// Whether the parent directory needs to be created
-    needs_parent_dir: bool,
-}
-
-/// The result of validating a single link
-enum LinkValidation {
-    /// Link is valid and ready to be created/updated
-    Valid(ValidatedLink),
-    /// Link should be skipped (e.g., destination is not a symlink, or points to external path)
-    Skip { dest: PathBuf, reason: String },
-    /// Link validation failed with an error
-    Error { dest: PathBuf, error: anyhow::Error },
-}
 
 /// Update external links for a package after installation
 /// Uses atomic approach: first validate all links, then execute all updates
@@ -54,15 +29,32 @@ pub(crate) fn update_external_links<R: Runtime>(
         return Ok(());
     }
 
+    let link_manager = LinkManager::new(runtime);
+
     // --- Phase 1: Validate all links ---
+    #[derive(Debug)]
+    struct ValidatedLink {
+        target: PathBuf,
+        dest: PathBuf,
+        needs_removal: bool,
+    }
+
     let mut validated_links: Vec<ValidatedLink> = Vec::new();
     let mut skipped: Vec<(PathBuf, String)> = Vec::new();
-    let mut errors: Vec<(PathBuf, anyhow::Error)> = Vec::new();
+    let mut errors: Vec<(PathBuf, String)> = Vec::new();
 
     for rule in &all_rules {
-        match validate_single_link(runtime, package_dir, version_dir, rule) {
-            LinkValidation::Valid(validated) => {
-                validated_links.push(validated);
+        match link_manager.validate_link(rule, version_dir, package_dir) {
+            LinkValidation::Valid {
+                target,
+                dest,
+                needs_removal,
+            } => {
+                validated_links.push(ValidatedLink {
+                    target,
+                    dest,
+                    needs_removal,
+                });
             }
             LinkValidation::Skip { dest, reason } => {
                 debug!("Skipping link {:?}: {}", dest, reason);
@@ -91,147 +83,22 @@ pub(crate) fn update_external_links<R: Runtime>(
 
     // --- Phase 2: Execute all validated link updates ---
     for validated in &validated_links {
-        if let Err(e) = execute_link_update(runtime, validated) {
-            // This shouldn't happen after validation, but handle it gracefully
-            anyhow::bail!(
-                "Failed to update link {:?} -> {:?}: {}",
-                validated.dest,
-                validated.link_target,
-                e
-            );
+        // Remove existing symlink if needed
+        if validated.needs_removal {
+            link_manager.remove_link(&validated.dest)?;
         }
+
+        // Create new symlink (create_link handles parent directory and relative path)
+        link_manager.create_link(&validated.target, &validated.dest)?;
+        info!(
+            "Updated external link {:?} -> {:?}",
+            validated.dest, validated.target
+        );
     }
 
     if !skipped.is_empty() {
         warn!("{} link(s) were skipped", skipped.len());
     }
-
-    Ok(())
-}
-
-/// Validate a single link rule without making any changes
-fn validate_single_link<R: Runtime>(
-    runtime: &R,
-    package_dir: &Path,
-    version_dir: &Path,
-    rule: &LinkRule,
-) -> LinkValidation {
-    let linked_to = &rule.dest;
-
-    // Determine link target based on rule.path or default behavior
-    let link_target = match determine_link_target_for_rule(runtime, version_dir, rule) {
-        Ok(target) => target,
-        Err(e) => {
-            return LinkValidation::Error {
-                dest: linked_to.clone(),
-                error: e,
-            };
-        }
-    };
-
-    // Check destination status
-    let dest_exists = runtime.exists(linked_to);
-    let is_symlink = runtime.is_symlink(linked_to);
-
-    if dest_exists || is_symlink {
-        if is_symlink {
-            // Security check: verify the symlink points to a path within the package directory
-            match runtime.resolve_link(linked_to) {
-                Ok(existing_target) => {
-                    if !is_path_under(&existing_target, package_dir) {
-                        // Symlink points outside the package directory - skip with warning
-                        return LinkValidation::Skip {
-                            dest: linked_to.clone(),
-                            reason: format!(
-                                "points to external path {:?} (outside {:?})",
-                                existing_target, package_dir
-                            ),
-                        };
-                    }
-                    debug!(
-                        "Existing symlink {:?} -> {:?} is within package directory",
-                        linked_to, existing_target
-                    );
-                }
-                Err(e) => {
-                    return LinkValidation::Skip {
-                        dest: linked_to.clone(),
-                        reason: format!("cannot resolve symlink target: {}", e),
-                    };
-                }
-            }
-
-            // Valid: needs removal before creating new symlink
-            return LinkValidation::Valid(ValidatedLink {
-                link_target,
-                dest: linked_to.clone(),
-                needs_removal: true,
-                needs_parent_dir: false,
-            });
-        } else {
-            // Destination exists but is not a symlink - skip with warning
-            return LinkValidation::Skip {
-                dest: linked_to.clone(),
-                reason: "exists but is not a symlink".to_string(),
-            };
-        }
-    }
-
-    // Destination doesn't exist - check if parent directory exists
-    let needs_parent_dir = if let Some(parent) = linked_to.parent() {
-        !runtime.exists(parent)
-    } else {
-        false
-    };
-
-    LinkValidation::Valid(ValidatedLink {
-        link_target,
-        dest: linked_to.clone(),
-        needs_removal: false,
-        needs_parent_dir,
-    })
-}
-
-/// Determine the link target for a rule
-fn determine_link_target_for_rule<R: Runtime>(
-    runtime: &R,
-    version_dir: &Path,
-    rule: &LinkRule,
-) -> Result<PathBuf> {
-    if let Some(ref path) = rule.path {
-        let target = version_dir.join(path);
-        if !runtime.exists(&target) {
-            anyhow::bail!("Path '{}' does not exist in {:?}", path, version_dir);
-        }
-        Ok(target)
-    } else {
-        determine_link_target(runtime, version_dir)
-    }
-}
-
-/// Execute a validated link update
-fn execute_link_update<R: Runtime>(runtime: &R, validated: &ValidatedLink) -> Result<()> {
-    // Create parent directory if needed
-    if validated.needs_parent_dir
-        && let Some(parent) = validated.dest.parent()
-    {
-        runtime.create_dir_all(parent)?;
-    }
-
-    // Remove existing symlink if needed
-    if validated.needs_removal {
-        runtime.remove_symlink(&validated.dest)?;
-    }
-
-    // Create new symlink using relative path for shorter, portable links
-    // Example: /usr/local/bin/tool -> ../ghri/owner/repo/v1/tool
-    let symlink_target = relative_symlink_path(&validated.dest, &validated.link_target)
-        .unwrap_or_else(|| validated.link_target.clone());
-    runtime.symlink(&symlink_target, &validated.dest)?;
-    info!(
-        "Updated external link {:?} -> {:?}",
-        validated.dest, validated.link_target
-    );
 
     Ok(())
 }
@@ -331,6 +198,12 @@ mod tests {
 
         // --- 4. Remove Old Symlink ---
 
+        // remove_link checks is_symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
         // Remove symlink: /usr/local/bin/tool
         runtime
             .expect_remove_symlink()
@@ -338,6 +211,12 @@ mod tests {
             .returning(|_| Ok(()));
 
         // --- 5. Create New Symlink ---
+
+        // create_link checks if parent exists
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
 
         // Create symlink: /usr/local/bin/tool -> ../../../root/o/r/v2/tool (relative path)
         runtime
@@ -663,11 +542,23 @@ mod tests {
 
         // --- 4. Update Symlink ---
 
+        // remove_link checks is_symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
         // Remove old symlink
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(()));
+
+        // create_link checks if parent exists
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
 
         // Create new symlink: /usr/local/bin/legacy-tool -> ../../../root/o/r/v1/tool (relative path)
         runtime
@@ -918,11 +809,20 @@ mod tests {
 
         // --- Phase 2: Execution (all updates happen after validation) ---
 
-        // First link: remove old, create new symlink with relative path
+        // First link: remove_link checks is_symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to1.clone()))
+            .returning(|_| true);
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to1.clone()))
             .returning(|_| Ok(()));
+        // create_link checks if parent exists
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
         runtime
             .expect_symlink()
             .with(
@@ -931,11 +831,20 @@ mod tests {
             )
             .returning(|_, _| Ok(()));
 
-        // Second link: remove old, create new symlink with relative path
+        // Second link: remove_link checks is_symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to2.clone()))
+            .returning(|_| true);
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to2.clone()))
             .returning(|_| Ok(()));
+        // create_link checks if parent exists
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
         runtime
             .expect_symlink()
             .with(
@@ -993,7 +902,7 @@ mod tests {
             .with(eq(linked_to.clone()))
             .returning(|_| true);
 
-        // Is symlink: /home/user/.ghri/bin/tool -> false (it's a regular file!)
+        // Is symlink: /home/user/.ghri/bin/tool -> true
         runtime
             .expect_is_symlink()
             .with(eq(linked_to.clone()))
@@ -1004,10 +913,24 @@ mod tests {
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(PathBuf::from("/home/user/.ghri/o/r/v0/tool")));
 
+        // --- 3. Update Symlink ---
+
+        // remove_link checks is_symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(linked_to.clone()))
+            .returning(|_| true);
+
         runtime
             .expect_remove_symlink()
             .with(eq(linked_to.clone()))
             .returning(|_| Ok(()));
+
+        // create_link checks if parent exists
+        runtime
+            .expect_exists()
+            .with(eq(PathBuf::from("/home/user/.ghri/bin")))
+            .returning(|_| true);
 
         // Symlink /home/user/.ghri/bin/tool -> /home/user/.ghri/o/r/v1/tool
         // Should be relative path: ../o/r/v1/tool

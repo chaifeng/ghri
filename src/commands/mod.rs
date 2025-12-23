@@ -14,7 +14,6 @@ mod upgrade;
 
 pub use config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 pub use install::{Installer, install, run};
-pub(crate) use link::determine_link_target;
 pub use link::link;
 pub use links::links;
 pub(crate) use links::{print_links, print_versioned_links};

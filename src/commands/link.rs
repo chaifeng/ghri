@@ -1,5 +1,4 @@
 use anyhow::Result;
-use log::debug;
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -174,28 +173,6 @@ pub fn link<R: Runtime>(
     Ok(())
 }
 
-/// Determine what to link to: if version dir has only one file, link to that file
-pub(crate) fn determine_link_target<R: Runtime>(
-    runtime: &R,
-    version_dir: &Path,
-) -> Result<PathBuf> {
-    let entries = runtime.read_dir(version_dir)?;
-
-    if entries.len() == 1 {
-        let single_entry = &entries[0];
-        if !runtime.is_dir(single_entry) {
-            debug!(
-                "Version directory has single file, linking to {:?}",
-                single_entry
-            );
-            return Ok(single_entry.clone());
-        }
-    }
-
-    // Multiple entries or single directory - link to version dir itself
-    Ok(version_dir.to_path_buf())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,88 +204,6 @@ mod tests {
             .returning(|_| Err(std::env::VarError::NotPresent));
 
         runtime.expect_is_privileged().returning(|| false);
-    }
-
-    #[test]
-    fn test_determine_link_target_single_file() {
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let version_dir = PathBuf::from("/root/o/r/v1");
-        let tool_path = PathBuf::from("/root/o/r/v1/tool");
-
-        // --- Read Directory ---
-
-        // Read dir /root/o/r/v1 -> returns single entry [/root/o/r/v1/tool]
-        runtime
-            .expect_read_dir()
-            .with(eq(version_dir.clone()))
-            .returning(move |_| Ok(vec![tool_path.clone()]));
-
-        // Check /root/o/r/v1/tool is file (not directory) -> true
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v1/tool")))
-            .returning(|_| false);
-
-        // --- Execute & Verify ---
-        // When version dir has single file, should return that file path
-        let result = determine_link_target(&runtime, &version_dir).unwrap();
-        assert_eq!(result, PathBuf::from("/root/o/r/v1/tool"));
-    }
-
-    #[test]
-    fn test_determine_link_target_multiple_files() {
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let version_dir = PathBuf::from("/root/o/r/v1");
-
-        // --- Read Directory ---
-
-        // Read dir /root/o/r/v1 -> returns multiple entries
-        runtime
-            .expect_read_dir()
-            .with(eq(version_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/root/o/r/v1/tool"),
-                    PathBuf::from("/root/o/r/v1/README.md"),
-                ])
-            });
-
-        // --- Execute & Verify ---
-        // When version dir has multiple files, should return the version dir itself
-        let result = determine_link_target(&runtime, &version_dir).unwrap();
-        assert_eq!(result, version_dir);
-    }
-
-    #[test]
-    fn test_determine_link_target_single_directory() {
-        let mut runtime = MockRuntime::new();
-
-        // --- Setup Paths ---
-        let version_dir = PathBuf::from("/root/o/r/v1");
-        let subdir_path = PathBuf::from("/root/o/r/v1/subdir");
-
-        // --- Read Directory ---
-
-        // Read dir /root/o/r/v1 -> returns single entry [/root/o/r/v1/subdir]
-        runtime
-            .expect_read_dir()
-            .with(eq(version_dir.clone()))
-            .returning(move |_| Ok(vec![subdir_path.clone()]));
-
-        // Check /root/o/r/v1/subdir is directory -> true
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/root/o/r/v1/subdir")))
-            .returning(|_| true);
-
-        // --- Execute & Verify ---
-        // When version dir has single directory (not file), should return version dir itself
-        let result = determine_link_target(&runtime, &version_dir).unwrap();
-        assert_eq!(result, version_dir);
     }
 
     #[test]

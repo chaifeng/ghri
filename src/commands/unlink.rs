@@ -175,11 +175,11 @@ pub fn unlink<R: Runtime>(
             }
             RemoveLinkResult::Unresolvable => {
                 if all {
-                    warn!("Cannot resolve symlink target for {:?}, skipping", rule.dest);
-                    eprintln!(
-                        "Warning: Cannot verify symlink {:?}, skipping",
+                    warn!(
+                        "Cannot resolve symlink target for {:?}, skipping",
                         rule.dest
                     );
+                    eprintln!("Warning: Cannot verify symlink {:?}, skipping", rule.dest);
                     error_count += 1;
                     continue; // Don't remove this rule from meta
                 } else {
