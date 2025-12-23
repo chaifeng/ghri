@@ -323,6 +323,54 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
         Ok(false)
     }
 
+    /// Update the 'current' symlink in a package directory to point to a specific version.
+    ///
+    /// The `current` symlink is located in the package directory and points to a version subdirectory.
+    /// For example: `/home/user/.ghri/owner/repo/current` -> `v1.0.0`
+    ///
+    /// This method:
+    /// - Creates a new symlink if it doesn't exist
+    /// - Updates an existing symlink if it points to a different version
+    /// - Does nothing if the symlink already points to the correct version
+    /// - Returns an error if `current` exists but is not a symlink
+    pub fn update_current_link(&self, package_dir: &Path, version: &str) -> Result<()> {
+        let current_link = package_dir.join("current");
+        let link_target = Path::new(version);
+
+        if self.runtime.exists(&current_link) {
+            if !self.runtime.is_symlink(&current_link) {
+                anyhow::bail!("'current' exists but is not a symlink");
+            }
+
+            match self.runtime.read_link(&current_link) {
+                Ok(target) => {
+                    // Normalize paths for comparison
+                    let existing_target = target.components().as_path();
+                    let new_target = link_target.components().as_path();
+
+                    if existing_target == new_target {
+                        log::debug!("'current' symlink already points to the correct version");
+                        return Ok(());
+                    }
+
+                    log::debug!(
+                        "'current' symlink points to {:?}, updating to {:?}",
+                        existing_target,
+                        new_target
+                    );
+                    self.runtime.remove_symlink(&current_link)?;
+                }
+                Err(_) => {
+                    log::debug!("'current' symlink is unreadable, recreating...");
+                    self.runtime.remove_symlink(&current_link)?;
+                }
+            }
+        }
+
+        self.runtime.symlink(link_target, &current_link)?;
+        Ok(())
+    }
+
     /// Check if destination can be updated (for creating/updating a link).
     ///
     /// Returns Ok(true) if the destination doesn't exist or is a symlink pointing to within package_dir.
@@ -788,5 +836,166 @@ mod tests {
         let manager = LinkManager::new(&runtime);
         let result = manager.prepare_link_destination(&dest, &package_dir);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_current_link_create_new() {
+        // Test creating a new 'current' symlink when it doesn't exist
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/root/o/r");
+        let current_link = PathBuf::from("/root/o/r/current");
+
+        // File doesn't exist
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| false);
+
+        // Create symlink: current -> v1
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
+            .returning(|_, _| Ok(()));
+
+        let manager = LinkManager::new(&runtime);
+        manager.update_current_link(&package_dir, "v1").unwrap();
+    }
+
+    #[test]
+    fn test_update_current_link_update_existing() {
+        // Test updating 'current' symlink from v1 to v2
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/root/o/r");
+        let current_link = PathBuf::from("/root/o/r/current");
+
+        // File exists
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Is symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Read link -> points to v1
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v1")));
+
+        // Remove old symlink
+        runtime
+            .expect_remove_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(()));
+
+        // Create new symlink: current -> v2
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("v2")), eq(current_link.clone()))
+            .returning(|_, _| Ok(()));
+
+        let manager = LinkManager::new(&runtime);
+        manager.update_current_link(&package_dir, "v2").unwrap();
+    }
+
+    #[test]
+    fn test_update_current_link_idempotent() {
+        // Test that update is idempotent - no changes when already correct
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/root/o/r");
+        let current_link = PathBuf::from("/root/o/r/current");
+
+        // File exists
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Is symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Read link -> already points to v1
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v1")));
+
+        // No remove_symlink or symlink calls expected
+
+        let manager = LinkManager::new(&runtime);
+        manager.update_current_link(&package_dir, "v1").unwrap();
+    }
+
+    #[test]
+    fn test_update_current_link_fails_if_not_symlink() {
+        // Test that update fails if 'current' exists but is not a symlink
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/root/o/r");
+        let current_link = PathBuf::from("/root/o/r/current");
+
+        // File exists
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Not a symlink (regular file)
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| false);
+
+        let manager = LinkManager::new(&runtime);
+        let result = manager.update_current_link(&package_dir, "v1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a symlink"));
+    }
+
+    #[test]
+    fn test_update_current_link_recreates_unreadable() {
+        // Test that symlink is recreated when read_link fails
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/root/o/r");
+        let current_link = PathBuf::from("/root/o/r/current");
+
+        // File exists
+        runtime
+            .expect_exists()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Is symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+
+        // Read link fails (corrupted)
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Err(anyhow::anyhow!("corrupted symlink")));
+
+        // Remove corrupted symlink
+        runtime
+            .expect_remove_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(()));
+
+        // Create new symlink
+        runtime
+            .expect_symlink()
+            .with(eq(PathBuf::from("v1")), eq(current_link.clone()))
+            .returning(|_, _| Ok(()));
+
+        let manager = LinkManager::new(&runtime);
+        manager.update_current_link(&package_dir, "v1").unwrap();
     }
 }

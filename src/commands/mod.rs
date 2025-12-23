@@ -8,7 +8,6 @@ mod prune;
 mod remove;
 pub mod services;
 mod show;
-mod symlink;
 mod unlink;
 mod update;
 mod upgrade;

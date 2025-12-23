@@ -13,7 +13,6 @@ use crate::{
 };
 
 use crate::commands::config::{Config, InstallOptions};
-use crate::commands::symlink::update_current_symlink;
 
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
 use super::external_links::update_external_links;
@@ -150,7 +149,11 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
 
         result?;
 
-        update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
+        // Update 'current' symlink to point to the new version
+        let link_manager = LinkManager::new(&self.runtime);
+        if let Some(package_dir) = target_dir.parent() {
+            link_manager.update_current_link(package_dir, &release.tag_name)?;
+        }
 
         // Update external links if configured
         if let Some(parent) = target_dir.parent()
