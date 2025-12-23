@@ -31,6 +31,15 @@ impl GitHub {
             api_url,
         }
     }
+
+    /// Create a GitHub client from an existing HttpClient
+    #[tracing::instrument(skip(http_client, api_url))]
+    pub fn from_http_client(http_client: HttpClient, api_url: &str) -> Self {
+        Self {
+            http_client,
+            api_url: api_url.to_string(),
+        }
+    }
 }
 
 #[async_trait]

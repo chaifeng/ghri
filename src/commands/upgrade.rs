@@ -7,10 +7,10 @@ use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
 
-use super::config::Config;
+use super::config::{Config, ConfigOverrides};
 use super::install::Installer;
-use super::paths::default_install_root;
 use super::prune::prune_package_dir;
+use super::services::Services;
 
 #[tracing::instrument(skip(runtime, install_root, api_url, repos))]
 pub async fn upgrade<R: Runtime + 'static>(
@@ -22,24 +22,29 @@ pub async fn upgrade<R: Runtime + 'static>(
     yes: bool,
     prune: bool,
 ) -> Result<()> {
-    let config = Config::new(runtime, install_root, api_url)?;
-    run_upgrade(config, repos, pre, yes, prune).await
+    let config = Config::load(
+        &runtime,
+        ConfigOverrides {
+            install_root,
+            api_url,
+        },
+    )?;
+    let services = Services::from_config(&config)?;
+    run_upgrade(&config, runtime, services, repos, pre, yes, prune).await
 }
 
-#[tracing::instrument(skip(config, repos))]
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(config, runtime, services, repos))]
 async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
-    config: Config<R, G, E, D>,
+    config: &Config,
+    runtime: R,
+    services: Services<G, D, E>,
     repos: Vec<String>,
     pre: bool,
     yes: bool,
     prune: bool,
 ) -> Result<()> {
-    let root = match config.install_root {
-        Some(ref path) => path.clone(),
-        None => default_install_root(&config.runtime)?,
-    };
-
-    let meta_files = find_all_packages(&config.runtime, &root)?;
+    let meta_files = find_all_packages(&runtime, &config.install_root)?;
     if meta_files.is_empty() {
         println!("No packages installed.");
         return Ok(());
@@ -52,10 +57,10 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
         .collect();
 
     let installer = Installer::new(
-        config.runtime,
-        config.github,
-        config.downloader,
-        config.extractor,
+        runtime,
+        services.github,
+        services.downloader,
+        services.extractor,
     );
 
     let mut upgraded_count = 0;
@@ -96,13 +101,12 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
         );
 
         // Install the new version using saved filters from meta
-        let install_root = config.install_root.clone();
-        let package_dir = root.join(&repo.owner).join(&repo.repo);
+        let package_dir = config.package_dir(&repo.owner, &repo.repo);
         if let Err(e) = installer
             .install(
+                config,
                 &repo,
                 Some(&latest.version),
-                install_root,
                 vec![], // Empty filters - installer will use saved filters from meta
                 pre,
                 yes,
@@ -167,6 +171,19 @@ mod tests {
         runtime.expect_is_privileged().returning(|| false);
     }
 
+    fn test_config() -> Config {
+        #[cfg(not(windows))]
+        let install_root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let install_root = PathBuf::from("C:\\Users\\user\\.ghri");
+
+        Config {
+            install_root,
+            api_url: Config::DEFAULT_API_URL.to_string(),
+            token: None,
+        }
+    }
+
     #[tokio::test]
     async fn test_upgrade_no_packages() {
         // Test that upgrade shows "No packages installed" when directory is empty
@@ -176,7 +193,6 @@ mod tests {
         let root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup ---
 
@@ -194,14 +210,13 @@ mod tests {
 
         // --- Execute ---
 
-        let config = Config {
-            runtime,
+        let config = test_config();
+        let services = Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
-        let result = run_upgrade(config, vec![], false, true, false).await;
+        let result = run_upgrade(&config, runtime, services, vec![], false, true, false).await;
         assert!(result.is_ok());
     }
 
@@ -214,7 +229,6 @@ mod tests {
         let root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Find Installed Packages ---
 
@@ -275,15 +289,13 @@ mod tests {
 
         // --- Execute ---
 
-        let github = MockGetReleases::new();
-        let config = Config {
-            runtime,
-            github,
+        let config = test_config();
+        let services = Services {
+            github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
-        let result = run_upgrade(config, vec![], false, true, false).await;
+        let result = run_upgrade(&config, runtime, services, vec![], false, true, false).await;
         assert!(result.is_ok());
     }
 
@@ -296,7 +308,6 @@ mod tests {
         let root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Find Installed Packages ---
 
@@ -383,17 +394,23 @@ mod tests {
 
         // --- Execute ---
 
-        let github = MockGetReleases::new();
-        let config = Config {
-            runtime,
-            github,
+        let config = test_config();
+        let services = Services {
+            github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
         // Only upgrade owner1/repo1, skip owner2/repo2
-        let result =
-            run_upgrade(config, vec!["owner1/repo1".to_string()], false, true, false).await;
+        let result = run_upgrade(
+            &config,
+            runtime,
+            services,
+            vec!["owner1/repo1".to_string()],
+            false,
+            true,
+            false,
+        )
+        .await;
         assert!(result.is_ok());
     }
 

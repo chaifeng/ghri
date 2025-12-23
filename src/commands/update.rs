@@ -8,9 +8,9 @@ use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
 
-use super::config::Config;
+use super::config::{Config, ConfigOverrides};
 use super::install::Installer;
-use super::paths::default_install_root;
+use super::services::Services;
 
 #[tracing::instrument(skip(runtime, install_root, api_url, repos))]
 pub async fn update<R: Runtime + 'static>(
@@ -19,21 +19,25 @@ pub async fn update<R: Runtime + 'static>(
     api_url: Option<String>,
     repos: Vec<String>,
 ) -> Result<()> {
-    let config = Config::new(runtime, install_root, api_url)?;
-    run_update(config, repos).await
+    let config = Config::load(
+        &runtime,
+        ConfigOverrides {
+            install_root,
+            api_url,
+        },
+    )?;
+    let services = Services::from_config(&config)?;
+    run_update(&config, runtime, services, repos).await
 }
 
-#[tracing::instrument(skip(config, repos))]
+#[tracing::instrument(skip(config, runtime, services, repos))]
 async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
-    config: Config<R, G, E, D>,
+    config: &Config,
+    runtime: R,
+    services: Services<G, D, E>,
     repos: Vec<String>,
 ) -> Result<()> {
-    let root = match config.install_root {
-        Some(path) => path,
-        None => default_install_root(&config.runtime)?,
-    };
-
-    let meta_files = find_all_packages(&config.runtime, &root)?;
+    let meta_files = find_all_packages(&runtime, &config.install_root)?;
     if meta_files.is_empty() {
         println!("No packages installed.");
         return Ok(());
@@ -46,10 +50,10 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downl
         .collect();
 
     let installer = Installer::new(
-        config.runtime,
-        config.github,
-        config.downloader,
-        config.extractor,
+        runtime,
+        services.github,
+        services.downloader,
+        services.extractor,
     );
 
     for meta_path in meta_files {
@@ -62,7 +66,9 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downl
         }
 
         println!("   updating {}", repo);
-        if let Err(e) = save_metadata(&installer, &repo, &meta.current_version, &meta_path).await {
+        if let Err(e) =
+            save_metadata(config, &installer, &repo, &meta.current_version, &meta_path).await
+        {
             warn!("Failed to update metadata for {}: {}", repo, e);
         } else {
             // Check if update is available
@@ -88,8 +94,9 @@ fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
     println!("  updatable {} {} -> {}", repo, current_display, latest);
 }
 
-#[tracing::instrument(skip(installer, repo, current_version, target_dir))]
+#[tracing::instrument(skip(config, installer, repo, current_version, target_dir))]
 async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    config: &Config,
     installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
     current_version: &str,
@@ -109,6 +116,7 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Do
     };
 
     let new_meta = fetch_meta(
+        config,
         installer,
         repo,
         current_version,
@@ -134,14 +142,15 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Do
     Ok(())
 }
 
-#[tracing::instrument(skip(installer, repo, current_version, api_url))]
+#[tracing::instrument(skip(config, installer, repo, current_version, api_url))]
 async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    config: &Config,
     installer: &Installer<R, G, E, D>,
     repo: &GitHubRepo,
     current_version: &str,
     api_url: Option<&str>,
 ) -> Result<Meta> {
-    let api_url = api_url.unwrap_or(installer.github.api_url());
+    let api_url = api_url.unwrap_or(&config.api_url);
     let repo_info = installer.github.get_repo_info_at(repo, api_url).await?;
     let releases = installer.github.get_releases_at(repo, api_url).await?;
     Ok(Meta::from(
@@ -157,12 +166,10 @@ async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downl
 mod tests {
     use super::*;
     use crate::archive::MockExtractor;
-    use crate::download::HttpDownloader;
+    use crate::download::mock::MockDownloader;
     use crate::github::{MockGetReleases, Release, RepoInfo};
-    use crate::http::HttpClient;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
-    use reqwest::Client;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
@@ -188,6 +195,19 @@ mod tests {
             .returning(|_| Err(std::env::VarError::NotPresent));
 
         runtime.expect_is_privileged().returning(|| false);
+    }
+
+    fn test_config() -> Config {
+        #[cfg(not(windows))]
+        let install_root = PathBuf::from("/home/user/.ghri");
+        #[cfg(windows)]
+        let install_root = PathBuf::from("C:\\Users\\user\\.ghri");
+
+        Config {
+            install_root,
+            api_url: Config::DEFAULT_API_URL.to_string(),
+            token: None,
+        }
     }
 
     #[tokio::test]
@@ -310,14 +330,15 @@ mod tests {
 
         // --- Execute ---
 
-        let config = Config {
-            runtime,
+        let config = test_config();
+        let services = Services {
             github,
-            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
-        run_update(config, vec![]).await.unwrap();
+        run_update(&config, runtime, services, vec![])
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -329,7 +350,6 @@ mod tests {
         let root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup ---
 
@@ -347,14 +367,13 @@ mod tests {
 
         // --- Execute ---
 
-        let config = Config {
-            runtime,
+        let config = test_config();
+        let services = Services {
             github: MockGetReleases::new(),
-            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
-        let result = run_update(config, vec![]).await;
+        let result = run_update(&config, runtime, services, vec![]).await;
         assert!(result.is_ok());
     }
 
@@ -367,7 +386,6 @@ mod tests {
         let root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
         let root = PathBuf::from("C:\\Users\\user\\.ghri");
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Find Installed Packages ---
 
@@ -454,7 +472,6 @@ mod tests {
         // --- 3. Fetch New Metadata from GitHub (only for owner1/repo1) ---
 
         let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("api".to_string());
 
         // Only owner1/repo1 should be updated, so expect exactly one call
         github.expect_get_repo_info_at().times(1).returning(|_, _| {
@@ -480,15 +497,14 @@ mod tests {
 
         // --- Execute ---
 
-        let config = Config {
-            runtime,
+        let config = test_config();
+        let services = Services {
             github,
-            downloader: HttpDownloader::new(HttpClient::new(Client::new())),
+            downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
         // Only update owner1/repo1, skip owner2/repo2
-        let result = run_update(config, vec!["owner1/repo1".to_string()]).await;
+        let result = run_update(&config, runtime, services, vec!["owner1/repo1".to_string()]).await;
         assert!(result.is_ok());
     }
 }

@@ -1,59 +1,110 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::debug;
-use reqwest::{
-    Client,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue},
-};
-
 use std::path::PathBuf;
 
-use crate::{
-    archive::{ArchiveExtractor, Extractor},
-    download::{Downloader, HttpDownloader},
-    github::{GetReleases, GitHub},
-    http::HttpClient,
-    runtime::Runtime,
-};
+use crate::runtime::Runtime;
 
-pub struct Config<R: Runtime, G: GetReleases, E: Extractor, D: Downloader> {
-    pub runtime: R,
-    pub github: G,
-    pub downloader: D,
-    pub extractor: E,
-    pub install_root: Option<PathBuf>,
+/// Application configuration loaded from environment and CLI overrides.
+/// This struct contains only configuration values, not service dependencies.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Installation root directory (e.g., ~/.ghri or /opt/ghri)
+    pub install_root: PathBuf,
+    /// GitHub API URL (e.g., https://api.github.com)
+    pub api_url: String,
+    /// GitHub authentication token (optional)
+    pub token: Option<String>,
 }
 
-impl<R: Runtime> Config<R, GitHub, ArchiveExtractor, HttpDownloader> {
-    pub fn new(runtime: R, install_root: Option<PathBuf>, api_url: Option<String>) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        if let Ok(token) = runtime.env_var("GITHUB_TOKEN") {
-            let mut auth_value = HeaderValue::from_str(&format!("Bearer {}", token))?;
-            auth_value.set_sensitive(true);
-            headers.insert(AUTHORIZATION, auth_value);
-            debug!(
-                "Using GITHUB_TOKEN for authentication: {}*********{}",
-                &token[..8],
-                &token[token.len() - 4..]
-            );
+/// Overrides that can be provided via CLI arguments
+#[derive(Debug, Default)]
+pub struct ConfigOverrides {
+    /// Override the default install root
+    pub install_root: Option<PathBuf>,
+    /// Override the default GitHub API URL
+    pub api_url: Option<String>,
+}
+
+impl Config {
+    /// Default GitHub API URL
+    pub const DEFAULT_API_URL: &'static str = "https://api.github.com";
+
+    /// Load configuration from runtime environment with optional CLI overrides
+    pub fn load<R: Runtime>(runtime: &R, overrides: ConfigOverrides) -> Result<Self> {
+        // Determine install root: CLI override > default based on privilege
+        let install_root = match overrides.install_root {
+            Some(path) => path,
+            None => Self::default_install_root(runtime)?,
+        };
+
+        // Determine API URL: CLI override > default
+        let api_url = overrides
+            .api_url
+            .unwrap_or_else(|| Self::DEFAULT_API_URL.to_string());
+
+        // Load token from environment
+        let token = runtime.env_var("GITHUB_TOKEN").ok();
+
+        if let Some(ref t) = token {
+            if t.len() >= 12 {
+                debug!(
+                    "Using GITHUB_TOKEN for authentication: {}*********{}",
+                    &t[..8],
+                    &t[t.len() - 4..]
+                );
+            } else {
+                debug!("Using GITHUB_TOKEN for authentication");
+            }
         }
 
-        let client = Client::builder()
-            .user_agent("ghri-cli")
-            .default_headers(headers)
-            .build()?;
-
-        let github = GitHub::new(client.clone(), api_url);
-        let http_client = HttpClient::new(client);
-        let extractor = ArchiveExtractor;
-        let downloader = HttpDownloader::new(http_client);
-
         Ok(Self {
-            runtime,
-            github,
-            downloader,
-            extractor,
             install_root,
+            api_url,
+            token,
         })
+    }
+
+    /// Get the default installation root directory based on user privilege
+    fn default_install_root<R: Runtime>(runtime: &R) -> Result<PathBuf> {
+        if runtime.is_privileged() {
+            Ok(Self::system_install_root())
+        } else {
+            let home_dir = runtime
+                .home_dir()
+                .context("Could not find home directory")?;
+            Ok(home_dir.join(".ghri"))
+        }
+    }
+
+    /// Get the system-wide installation root (for privileged users)
+    #[cfg(target_os = "macos")]
+    fn system_install_root() -> PathBuf {
+        PathBuf::from("/opt/ghri")
+    }
+
+    #[cfg(target_os = "windows")]
+    fn system_install_root() -> PathBuf {
+        PathBuf::from(r"C:\ProgramData\ghri")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    fn system_install_root() -> PathBuf {
+        PathBuf::from("/usr/local/ghri")
+    }
+
+    /// Get the package directory for a given repo
+    pub fn package_dir(&self, owner: &str, repo: &str) -> PathBuf {
+        self.install_root.join(owner).join(repo)
+    }
+
+    /// Get the version directory for a given repo and version
+    pub fn version_dir(&self, owner: &str, repo: &str, version: &str) -> PathBuf {
+        self.package_dir(owner, repo).join(version)
+    }
+
+    /// Get the meta.json path for a given repo
+    pub fn meta_path(&self, owner: &str, repo: &str) -> PathBuf {
+        self.package_dir(owner, repo).join("meta.json")
     }
 }
 
@@ -61,55 +112,103 @@ impl<R: Runtime> Config<R, GitHub, ArchiveExtractor, HttpDownloader> {
 mod tests {
     use super::*;
     use crate::runtime::MockRuntime;
-    use mockito::{Matcher, Server};
+    use mockall::predicate::eq;
 
-    /// Helper function to verify Authorization header behavior
-    /// - `token`: Some(token) to test with GITHUB_TOKEN set, None to test without
-    async fn verify_authorization_header(token: Option<&str>) {
-        // --- Setup MockRuntime ---
-
+    #[test]
+    fn test_config_load_defaults() {
+        // Test loading config with default values (no overrides)
         let mut runtime = MockRuntime::new();
-        let token_clone = token.map(|t| t.to_string());
+
+        runtime.expect_is_privileged().returning(|| false);
+        runtime
+            .expect_home_dir()
+            .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        let config = Config::load(&runtime, ConfigOverrides::default()).unwrap();
+
+        assert_eq!(config.install_root, PathBuf::from("/home/user/.ghri"));
+        assert_eq!(config.api_url, Config::DEFAULT_API_URL);
+        assert!(config.token.is_none());
+    }
+
+    #[test]
+    fn test_config_load_with_overrides() {
+        // Test loading config with CLI overrides
+        let mut runtime = MockRuntime::new();
 
         runtime
             .expect_env_var()
-            .with(mockall::predicate::eq("GITHUB_TOKEN"))
-            .returning(move |_| token_clone.clone().ok_or(std::env::VarError::NotPresent));
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Ok("test_token".to_string()));
 
-        // --- Create Mock Server ---
-
-        let mut server = Server::new_async().await;
-
-        let expected_header = match token {
-            Some(t) => Matcher::Exact(format!("Bearer {}", t)),
-            None => Matcher::Missing,
+        let overrides = ConfigOverrides {
+            install_root: Some(PathBuf::from("/custom/root")),
+            api_url: Some("https://github.example.com/api/v3".to_string()),
         };
 
-        let mock = server
-            .mock("GET", "/")
-            .match_header("Authorization", expected_header)
-            .create();
+        let config = Config::load(&runtime, overrides).unwrap();
 
-        // --- Execute ---
-
-        let config = Config::new(runtime, None, None).unwrap();
-        let client = config.downloader.http_client().inner();
-        let _ = client.get(server.url()).send().await;
-
-        // --- Verify ---
-
-        mock.assert();
+        assert_eq!(config.install_root, PathBuf::from("/custom/root"));
+        assert_eq!(config.api_url, "https://github.example.com/api/v3");
+        assert_eq!(config.token, Some("test_token".to_string()));
     }
 
-    #[tokio::test]
-    async fn test_config_new_with_github_token() {
-        // Test that GITHUB_TOKEN is used for authentication when set
-        verify_authorization_header(Some("test_token")).await;
+    #[test]
+    fn test_config_load_privileged_user() {
+        // Test that privileged users get system install root
+        let mut runtime = MockRuntime::new();
+
+        runtime.expect_is_privileged().returning(|| true);
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
+        let config = Config::load(&runtime, ConfigOverrides::default()).unwrap();
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(config.install_root, PathBuf::from("/opt/ghri"));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(config.install_root, PathBuf::from("/usr/local/ghri"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(config.install_root, PathBuf::from("C:\\ProgramData\\ghri"));
     }
 
-    #[tokio::test]
-    async fn test_config_new_without_github_token() {
-        // Test that no Authorization header is sent when GITHUB_TOKEN is not set
-        verify_authorization_header(None).await;
+    #[test]
+    fn test_config_load_no_home_dir() {
+        // Test that config fails to load when home dir is unavailable for non-privileged user
+        let mut runtime = MockRuntime::new();
+
+        runtime.expect_is_privileged().returning(|| false);
+        runtime.expect_home_dir().returning(|| None);
+
+        let result = Config::load(&runtime, ConfigOverrides::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_path_helpers() {
+        let config = Config {
+            install_root: PathBuf::from("/root"),
+            api_url: Config::DEFAULT_API_URL.to_string(),
+            token: None,
+        };
+
+        assert_eq!(
+            config.package_dir("owner", "repo"),
+            PathBuf::from("/root/owner/repo")
+        );
+        assert_eq!(
+            config.version_dir("owner", "repo", "v1.0.0"),
+            PathBuf::from("/root/owner/repo/v1.0.0")
+        );
+        assert_eq!(
+            config.meta_path("owner", "repo"),
+            PathBuf::from("/root/owner/repo/meta.json")
+        );
     }
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::{info, warn};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::{
@@ -12,8 +12,8 @@ use crate::{
     runtime::Runtime,
 };
 
+use crate::commands::config::Config;
 use crate::commands::link_check::{LinkStatus, check_links};
-use crate::commands::paths::{default_install_root, get_target_dir};
 use crate::commands::symlink::update_current_symlink;
 
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
@@ -37,20 +37,18 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         }
     }
 
-    #[tracing::instrument(skip(self, repo, version, install_root, filters))]
+    #[tracing::instrument(skip(self, config, repo, version, filters))]
     pub async fn install(
         &self,
+        config: &Config,
         repo: &GitHubRepo,
         version: Option<&str>,
-        install_root: Option<PathBuf>,
         filters: Vec<String>,
         pre: bool,
         yes: bool,
     ) -> Result<()> {
         println!("   resolving {}", repo);
-        let (mut meta, meta_path, needs_save) = self
-            .get_or_fetch_meta(repo, install_root.as_deref())
-            .await?;
+        let (mut meta, meta_path, needs_save) = self.get_or_fetch_meta(config, repo).await?;
 
         // Use saved filters from meta if user didn't provide any
         let effective_filters = if filters.is_empty() && !meta.filters.is_empty() {
@@ -95,7 +93,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         info!("Found version: {}", meta_release.version);
         let release: Release = meta_release.clone().into();
 
-        let target_dir = get_target_dir(&self.runtime, repo, &release, install_root)?;
+        let target_dir = config.version_dir(&repo.owner, &repo.repo, &release.tag_name);
 
         // Check if already installed
         if self.runtime.exists(&target_dir) {
@@ -307,17 +305,13 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
 
     /// Get or fetch meta, returning (meta, meta_path, needs_save)
     /// needs_save is true if meta was newly fetched and needs to be saved after successful install
-    #[tracing::instrument(skip(self, repo, install_root))]
+    #[tracing::instrument(skip(self, config, repo))]
     pub(crate) async fn get_or_fetch_meta(
         &self,
+        config: &Config,
         repo: &GitHubRepo,
-        install_root: Option<&Path>,
-    ) -> Result<(Meta, PathBuf, bool)> {
-        let root = match install_root {
-            Some(path) => path.to_path_buf(),
-            None => default_install_root(&self.runtime)?,
-        };
-        let meta_path = root.join(&repo.owner).join(&repo.repo).join("meta.json");
+    ) -> Result<(Meta, std::path::PathBuf, bool)> {
+        let meta_path = config.meta_path(&repo.owner, &repo.repo);
 
         if self.runtime.exists(&meta_path) {
             match Meta::load(&self.runtime, &meta_path) {
@@ -331,7 +325,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
             }
         }
 
-        let meta = self.fetch_meta(repo, "", None).await?;
+        let meta = self.fetch_meta(repo, "", Some(&config.api_url)).await?;
 
         // Don't save meta here - let the caller save it after successful install
         Ok((meta, meta_path, true))
@@ -344,7 +338,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         current_version: &str,
         api_url: Option<&str>,
     ) -> Result<Meta> {
-        let api_url = api_url.unwrap_or(self.github.api_url());
+        let api_url = api_url.unwrap_or_else(|| self.github.api_url());
         let repo_info = self.github.get_repo_info_at(repo, api_url).await?;
         let releases = self.github.get_releases_at(repo, api_url).await?;
         Ok(Meta::from(
@@ -378,30 +372,19 @@ mod tests {
     use mockall::predicate::*;
     use std::path::PathBuf;
 
-    // Helper to configure simple home dir and user
-    fn configure_runtime_basics(runtime: &mut MockRuntime) {
+    fn test_config() -> Config {
         #[cfg(not(windows))]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-
+        let install_root = PathBuf::from("/home/user/.ghri");
         #[cfg(windows)]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
+        let install_root = PathBuf::from("C:\\Users\\user\\.ghri");
 
-        runtime
-            .expect_env_var()
-            .with(eq("USER"))
-            .returning(|_| Ok("user".to_string()));
-
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        runtime.expect_is_privileged().returning(|| false);
+        Config {
+            install_root,
+            api_url: Config::DEFAULT_API_URL.to_string(),
+            token: None,
+        }
     }
+
     // Tests for get_target_dir and update_current_symlink are now in paths.rs and symlink.rs
 
     #[cfg(not(windows))]
@@ -412,7 +395,6 @@ mod tests {
         let url = server.url();
 
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
@@ -544,10 +526,11 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, extractor);
         installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await
             .unwrap();
     }
@@ -556,7 +539,6 @@ mod tests {
     async fn test_get_or_fetch_meta_invalid_on_disk() {
         // Test that invalid meta.json on disk triggers re-fetch from GitHub API
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -592,9 +574,6 @@ mod tests {
         // --- Setup GitHub API Mock ---
 
         let mut github = MockGetReleases::new();
-        github
-            .expect_api_url()
-            .return_const("https://api".to_string());
 
         // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
@@ -615,9 +594,10 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
-        let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+        let (meta, _, needs_save) = installer.get_or_fetch_meta(&config, &repo).await.unwrap();
 
         // Should have fetched fresh metadata (needs_save = true)
         assert_eq!(meta.name, "o/r");
@@ -634,7 +614,6 @@ mod tests {
     async fn test_install_no_stable_release() {
         // Test that install fails when only pre-release versions are available
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Fetch Metadata (no cached meta) ---
 
@@ -680,12 +659,13 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Should fail because no stable release found
         let result = installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await;
         assert!(result.is_err());
         assert!(
@@ -701,7 +681,6 @@ mod tests {
         // Test that install fails with descriptive error when specified version doesn't exist
         // Simplified: mock cached meta.json instead of GitHub API
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Mock cached meta.json with available versions ---
 
@@ -732,6 +711,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         // No GitHub mock needed - meta is loaded from "cached" file
         let installer = Installer::new(
@@ -743,7 +723,7 @@ mod tests {
 
         // Try to install version "v999.0.0" which doesn't exist
         let result = installer
-            .install(&repo, Some("v999.0.0"), None, vec![], false, true)
+            .install(&config, &repo, Some("v999.0.0"), vec![], false, true)
             .await;
 
         // Should fail because requested version not found
@@ -771,7 +751,6 @@ mod tests {
         // Test that --pre flag allows selecting pre-release when no stable release exists
         // This test verifies that with pre=true, get_latest_release() is used instead of get_latest_stable_release()
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Runtime Mocks ---
 
@@ -802,9 +781,6 @@ mod tests {
         let url = server.url();
 
         let mut github = MockGetReleases::new();
-        github
-            .expect_api_url()
-            .return_const("https://api.github.com".to_string());
 
         // API returns repo info
         github.expect_get_repo_info_at().returning(|_, _| {
@@ -848,12 +824,13 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, extractor);
 
         // With pre=true, should succeed and install the pre-release
         let result = installer
-            .install(&repo, None, None, vec![], true, true)
+            .install(&config, &repo, None, vec![], true, true)
             .await;
         assert!(result.is_ok());
     }
@@ -868,7 +845,6 @@ mod tests {
     async fn test_get_or_fetch_meta_fetch_fail() {
         // Test that get_or_fetch_meta fails when GitHub API returns error
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Check for Existing Metadata ---
 
@@ -893,11 +869,12 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Should fail because API call failed
-        let result = installer.get_or_fetch_meta(&repo, None).await;
+        let result = installer.get_or_fetch_meta(&config, &repo).await;
         assert!(result.is_err());
     }
 
@@ -907,18 +884,28 @@ mod tests {
 
         // --- Setup (no runtime expectations needed - fails before any IO) ---
 
-        let config = Config {
-            runtime: MockRuntime::new(),
+        let config = test_config();
+        let runtime = MockRuntime::new();
+        let services = super::super::super::services::Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
 
         // --- Execute & Verify ---
 
         // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run("invalid", config, vec![], false, true, false).await;
+        let result = super::super::run(
+            &config,
+            runtime,
+            services,
+            "invalid",
+            vec![],
+            false,
+            true,
+            false,
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -934,7 +921,6 @@ mod tests {
         let url = server.url();
 
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Fetch Metadata (no cached meta) ---
 
@@ -1009,12 +995,13 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, extractor);
 
         // Should succeed despite metadata save failure (it's just a warning)
         let result = installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await;
         assert!(result.is_ok());
     }
@@ -1025,7 +1012,6 @@ mod tests {
     async fn test_get_or_fetch_meta_exists_interaction() {
         // Test that valid cached meta.json is used without fetching from API
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1043,6 +1029,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(
             runtime,
@@ -1050,7 +1037,7 @@ mod tests {
             downloader,
             MockExtractor::new(),
         );
-        let (meta, _, needs_save) = installer.get_or_fetch_meta(&repo, None).await.unwrap();
+        let (meta, _, needs_save) = installer.get_or_fetch_meta(&config, &repo).await.unwrap();
 
         // Should return cached metadata (needs_save = false)
         assert_eq!(meta.name, "o/r");
@@ -1062,7 +1049,6 @@ mod tests {
         // Test that install uses cached metadata and skips API fetch
         let mut runtime = MockRuntime::new();
         let github = MockGetReleases::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1119,10 +1105,11 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
         installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await
             .unwrap();
     }
@@ -1131,7 +1118,6 @@ mod tests {
     async fn test_run() {
         // Test the run() entry point with cached metadata
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1164,18 +1150,26 @@ mod tests {
 
         // --- Execute ---
 
-        let config = Config {
-            runtime,
+        let config = test_config();
+        let services = super::super::super::services::Services {
             github: MockGetReleases::new(),
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
-            install_root: None,
         };
 
         // Install o/r using run() entry point
-        super::super::run("o/r", config, vec![], false, true, false)
-            .await
-            .unwrap();
+        super::super::run(
+            &config,
+            runtime,
+            services,
+            "o/r",
+            vec![],
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
     }
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
@@ -1184,7 +1178,6 @@ mod tests {
     async fn test_update_atomic_safety() {
         // Test that metadata is saved atomically (write to .tmp then rename)
         let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Write Sequence ---
         // Must write to .tmp file FIRST, then rename to final .json file
@@ -1234,7 +1227,6 @@ mod tests {
         // When user specifies filters, meta.json filters should be ignored
         let mut runtime = MockRuntime::new();
         let github = MockGetReleases::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1304,14 +1296,15 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // User provides NEW filter, should override saved "*old-filter*"
         installer
             .install(
+                &config,
                 &repo,
-                None,
                 None,
                 vec!["*new-user-filter*".to_string()],
                 false,
@@ -1326,7 +1319,6 @@ mod tests {
         // Test that saved filters from meta.json are used when user doesn't provide any
         let mut runtime = MockRuntime::new();
         let github = MockGetReleases::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1395,12 +1387,13 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await
             .unwrap();
     }
@@ -1413,7 +1406,6 @@ mod tests {
         // empty filters from user will use saved filters.
         let mut runtime = MockRuntime::new();
         let github = MockGetReleases::new();
-        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1473,12 +1465,13 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
+        let config = test_config();
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer
-            .install(&repo, None, None, vec![], false, true)
+            .install(&config, &repo, None, vec![], false, true)
             .await
             .unwrap();
     }

@@ -8,9 +8,9 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::config::Config;
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 use super::prune::prune_package_dir;
+use super::services::Services;
 
 mod download;
 mod external_links;
@@ -30,14 +30,32 @@ pub async fn install<R: Runtime + 'static>(
     yes: bool,
     prune: bool,
 ) -> Result<()> {
-    let config = Config::new(runtime, install_root, api_url)?;
-    run(repo_str, config, filters, pre, yes, prune).await
+    // Load configuration
+    let config = Config::load(
+        &runtime,
+        ConfigOverrides {
+            install_root,
+            api_url,
+        },
+    )?;
+
+    // Build services from config
+    let services = Services::from_config(&config)?;
+
+    // Run installation
+    run(
+        &config, runtime, services, repo_str, filters, pre, yes, prune,
+    )
+    .await
 }
 
-#[tracing::instrument(skip(config, filters))]
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip(config, runtime, services, filters))]
 pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
+    config: &Config,
+    runtime: R,
+    services: Services<G, D, E>,
     repo_str: &str,
-    config: Config<R, G, E, D>,
     filters: Vec<String>,
     pre: bool,
     yes: bool,
@@ -45,23 +63,17 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Download
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
 
-    // Get install root for prune (before config is consumed)
-    let root = match &config.install_root {
-        Some(path) => path.clone(),
-        None => default_install_root(&config.runtime)?,
-    };
-
     let installer = Installer::new(
-        config.runtime,
-        config.github,
-        config.downloader,
-        config.extractor,
+        runtime,
+        services.github,
+        services.downloader,
+        services.extractor,
     );
     installer
         .install(
+            config,
             &spec.repo,
             spec.version.as_deref(),
-            config.install_root,
             filters,
             pre,
             yes,
@@ -70,7 +82,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Download
 
     // Prune old versions if requested
     if prune {
-        let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
+        let package_dir = config.package_dir(&spec.repo.owner, &spec.repo.repo);
         prune_package_dir(&installer.runtime, &package_dir, &spec.repo.to_string())?;
     }
 
