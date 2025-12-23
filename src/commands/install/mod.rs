@@ -56,8 +56,13 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: D
 
     // Prune old versions if requested
     if options.prune {
-        let package_dir = config.package_dir(&spec.repo.owner, &spec.repo.repo);
-        prune_package_dir(&installer.runtime, &package_dir, &spec.repo.to_string())?;
+        prune_package_dir(
+            &installer.runtime,
+            &config.install_root,
+            &spec.repo.owner,
+            &spec.repo.repo,
+            &spec.repo.to_string(),
+        )?;
     }
 
     Ok(())

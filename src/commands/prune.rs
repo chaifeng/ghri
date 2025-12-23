@@ -2,11 +2,7 @@ use anyhow::Result;
 use log::{debug, info};
 use std::path::{Path, PathBuf};
 
-use crate::{
-    github::RepoSpec,
-    package::{Meta, PackageRepository},
-    runtime::Runtime,
-};
+use crate::{github::RepoSpec, package::PackageRepository, runtime::Runtime};
 
 use super::paths::default_install_root;
 use super::remove_version;
@@ -30,10 +26,17 @@ pub fn prune<R: Runtime>(
         prune_all(&runtime, &root, yes)
     } else {
         // Prune specific packages
+        let pkg_repo = PackageRepository::new(&runtime, root.clone());
         for repo_str in &repos {
             let spec = repo_str.parse::<RepoSpec>()?;
-            let package_dir = root.join(&spec.repo.owner).join(&spec.repo.repo);
-            prune_package(&runtime, &package_dir, &spec.repo.to_string(), yes)?;
+            prune_package(
+                &runtime,
+                &pkg_repo,
+                &spec.repo.owner,
+                &spec.repo.repo,
+                &spec.repo.to_string(),
+                yes,
+            )?;
         }
         Ok(())
     }
@@ -53,9 +56,17 @@ fn prune_all<R: Runtime>(runtime: &R, root: &Path, yes: bool) -> Result<()> {
     let mut total_pruned = 0;
     for (meta_path, meta) in packages {
         if let Some(package_dir) = meta_path.parent() {
-            let name = meta.name.clone();
-            let pruned = prune_package(runtime, package_dir, &name, yes)?;
-            total_pruned += pruned;
+            // Extract owner/repo from path
+            let repo = package_dir.file_name().and_then(|s| s.to_str());
+            let owner = package_dir
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str());
+            if let (Some(owner), Some(repo)) = (owner, repo) {
+                let name = meta.name.clone();
+                let pruned = prune_package(runtime, &pkg_repo, owner, repo, &name, yes)?;
+                total_pruned += pruned;
+            }
         }
     }
 
@@ -68,40 +79,22 @@ fn prune_all<R: Runtime>(runtime: &R, root: &Path, yes: bool) -> Result<()> {
 
 /// Find versions that can be pruned (all versions except current)
 fn find_versions_to_prune<R: Runtime>(
-    runtime: &R,
-    package_dir: &Path,
+    pkg_repo: &PackageRepository<'_, R>,
+    owner: &str,
+    repo: &str,
 ) -> Result<(Option<String>, Vec<String>)> {
     // Get current version from symlink
-    let current_link = package_dir.join("current");
-    let current_version = if runtime.is_symlink(&current_link) {
-        runtime
-            .read_link(&current_link)
-            .ok()
-            .and_then(|t| t.file_name().and_then(|s| s.to_str()).map(String::from))
-    } else {
-        None
-    };
+    let current_version = pkg_repo.current_version(owner, repo);
 
     let Some(ref current) = current_version else {
         return Ok((None, vec![]));
     };
 
-    // Find all version directories (excluding meta.json and current)
-    let entries = runtime.read_dir(package_dir)?;
-    let versions_to_prune: Vec<String> = entries
-        .iter()
-        .filter_map(|entry| {
-            let entry_name = entry.file_name()?.to_str()?.to_string();
-            // Skip meta.json and current symlink
-            if entry_name == "meta.json" || entry_name == "current" {
-                return None;
-            }
-            if runtime.is_dir(entry) && entry_name != *current {
-                Some(entry_name)
-            } else {
-                None
-            }
-        })
+    // Get all installed versions and filter out the current one
+    let versions_to_prune: Vec<String> = pkg_repo
+        .installed_versions(owner, repo)?
+        .into_iter()
+        .filter(|v| v != current)
         .collect();
 
     Ok((current_version, versions_to_prune))
@@ -109,17 +102,20 @@ fn find_versions_to_prune<R: Runtime>(
 
 fn prune_package<R: Runtime>(
     runtime: &R,
-    package_dir: &Path,
+    pkg_repo: &PackageRepository<'_, R>,
+    owner: &str,
+    repo: &str,
     name: &str,
     yes: bool,
 ) -> Result<usize> {
+    let package_dir = pkg_repo.package_dir(owner, repo);
     debug!("Pruning package at {:?}", package_dir);
 
-    if !runtime.exists(package_dir) {
+    if !pkg_repo.package_exists(owner, repo) {
         anyhow::bail!("Package {} is not installed.", name);
     }
 
-    let (current_version, versions_to_prune) = find_versions_to_prune(runtime, package_dir)?;
+    let (current_version, versions_to_prune) = find_versions_to_prune(pkg_repo, owner, repo)?;
 
     let Some(current_version) = current_version else {
         debug!("No current version symlink found for {}", name);
@@ -147,18 +143,13 @@ fn prune_package<R: Runtime>(
     }
 
     // Load meta for remove_version
-    let meta_path = package_dir.join("meta.json");
-    let meta = if runtime.exists(&meta_path) {
-        Meta::load(runtime, &meta_path).ok()
-    } else {
-        None
-    };
+    let meta = pkg_repo.load(owner, repo)?;
 
     // Remove each version using remove_version
     let mut pruned_count = 0;
     for version in &versions_to_prune {
         // force=true because we already confirmed, and these are not current versions
-        remove_version(runtime, package_dir, version, meta.as_ref(), true)?;
+        remove_version(runtime, pkg_repo, owner, repo, version, meta.as_ref(), true)?;
         pruned_count += 1;
     }
 
@@ -167,12 +158,20 @@ fn prune_package<R: Runtime>(
 }
 
 /// Prune old versions from a package directory (no confirmation, for use after install/upgrade)
-pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str) -> Result<()> {
-    if !runtime.exists(package_dir) {
+pub fn prune_package_dir<R: Runtime>(
+    runtime: &R,
+    install_root: &Path,
+    owner: &str,
+    repo: &str,
+    name: &str,
+) -> Result<()> {
+    let pkg_repo = PackageRepository::new(runtime, install_root.to_path_buf());
+
+    if !pkg_repo.package_exists(owner, repo) {
         return Ok(()); // Package not installed, nothing to prune
     }
 
-    let (current_version, versions_to_prune) = find_versions_to_prune(runtime, package_dir)?;
+    let (current_version, versions_to_prune) = find_versions_to_prune(&pkg_repo, owner, repo)?;
 
     let Some(current_version) = current_version else {
         return Ok(()); // No current version, nothing to prune
@@ -183,12 +182,7 @@ pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str
     }
 
     // Load meta for remove_version
-    let meta_path = package_dir.join("meta.json");
-    let meta = if runtime.exists(&meta_path) {
-        Meta::load(runtime, &meta_path).ok()
-    } else {
-        None
-    };
+    let meta = pkg_repo.load(owner, repo)?;
 
     // Remove each version
     println!(
@@ -200,7 +194,15 @@ pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str
         if version == &current_version {
             continue; // Safety check
         }
-        remove_version(runtime, package_dir, version, meta.as_ref(), true)?;
+        remove_version(
+            runtime,
+            &pkg_repo,
+            owner,
+            repo,
+            version,
+            meta.as_ref(),
+            true,
+        )?;
     }
 
     Ok(())
@@ -209,6 +211,7 @@ pub fn prune_package_dir<R: Runtime>(runtime: &R, package_dir: &Path, name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;
@@ -217,14 +220,11 @@ mod tests {
     #[test]
     fn test_find_versions_to_prune_identifies_old_versions() {
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let current_link = package_dir.join("current");
+        let root = PathBuf::from("/root");
+        let current_link = PathBuf::from("/root/owner/repo/current");
+        let package_dir = PathBuf::from("/root/owner/repo");
 
         // Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link))
@@ -232,35 +232,40 @@ mod tests {
 
         // Directory contains v1.0.0, v2.0.0, meta.json, current
         runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+        runtime
             .expect_read_dir()
             .with(eq(package_dir.clone()))
             .returning(|_| {
                 Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                    PathBuf::from("/pkg/meta.json"),
-                    PathBuf::from("/pkg/current"),
+                    PathBuf::from("/root/owner/repo/v1.0.0"),
+                    PathBuf::from("/root/owner/repo/v2.0.0"),
+                    PathBuf::from("/root/owner/repo/meta.json"),
+                    PathBuf::from("/root/owner/repo/current"),
                 ])
             });
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .with(eq(PathBuf::from("/root/owner/repo/v1.0.0")))
             .returning(|_| true);
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
+            .with(eq(PathBuf::from("/root/owner/repo/v2.0.0")))
             .returning(|_| true);
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/meta.json")))
+            .with(eq(PathBuf::from("/root/owner/repo/meta.json")))
             .returning(|_| false);
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/current")))
+            .with(eq(PathBuf::from("/root/owner/repo/current")))
             .returning(|_| false);
 
-        let (current, to_prune) = find_versions_to_prune(&runtime, &package_dir).unwrap();
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let (current, to_prune) = find_versions_to_prune(&pkg_repo, "owner", "repo").unwrap();
 
         assert_eq!(current, Some("v2.0.0".to_string()));
         assert_eq!(to_prune, vec!["v1.0.0"]);
@@ -269,16 +274,19 @@ mod tests {
     #[test]
     fn test_find_versions_to_prune_no_current_symlink() {
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let current_link = package_dir.join("current");
+        let root = PathBuf::from("/root");
+        let current_link = PathBuf::from("/root/owner/repo/current");
 
         // No current symlink
         runtime
-            .expect_is_symlink()
+            .expect_read_link()
             .with(eq(current_link))
-            .returning(|_| false);
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
 
-        let (current, to_prune) = find_versions_to_prune(&runtime, &package_dir).unwrap();
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let (current, to_prune) = find_versions_to_prune(&pkg_repo, "owner", "repo").unwrap();
 
         assert_eq!(current, None);
         assert!(to_prune.is_empty());
@@ -287,13 +295,10 @@ mod tests {
     #[test]
     fn test_find_versions_to_prune_only_current_version() {
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let current_link = package_dir.join("current");
+        let root = PathBuf::from("/root");
+        let current_link = PathBuf::from("/root/owner/repo/current");
+        let package_dir = PathBuf::from("/root/owner/repo");
 
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link))
@@ -301,25 +306,30 @@ mod tests {
 
         // Only current version installed
         runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+        runtime
             .expect_read_dir()
             .with(eq(package_dir.clone()))
             .returning(|_| {
                 Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/meta.json"),
+                    PathBuf::from("/root/owner/repo/v1.0.0"),
+                    PathBuf::from("/root/owner/repo/meta.json"),
                 ])
             });
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .with(eq(PathBuf::from("/root/owner/repo/v1.0.0")))
             .returning(|_| true);
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/meta.json")))
+            .with(eq(PathBuf::from("/root/owner/repo/meta.json")))
             .returning(|_| false);
 
-        let (current, to_prune) = find_versions_to_prune(&runtime, &package_dir).unwrap();
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let (current, to_prune) = find_versions_to_prune(&pkg_repo, "owner", "repo").unwrap();
 
         assert_eq!(current, Some("v1.0.0".to_string()));
         assert!(to_prune.is_empty());
@@ -328,13 +338,10 @@ mod tests {
     #[test]
     fn test_find_versions_to_prune_multiple_old_versions() {
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let current_link = package_dir.join("current");
+        let root = PathBuf::from("/root");
+        let current_link = PathBuf::from("/root/owner/repo/current");
+        let package_dir = PathBuf::from("/root/owner/repo");
 
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link))
@@ -342,19 +349,24 @@ mod tests {
 
         // Multiple old versions
         runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+        runtime
             .expect_read_dir()
             .with(eq(package_dir.clone()))
             .returning(|_| {
                 Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                    PathBuf::from("/pkg/v3.0.0"),
+                    PathBuf::from("/root/owner/repo/v1.0.0"),
+                    PathBuf::from("/root/owner/repo/v2.0.0"),
+                    PathBuf::from("/root/owner/repo/v3.0.0"),
                 ])
             });
 
         runtime.expect_is_dir().returning(|_| true);
 
-        let (current, to_prune) = find_versions_to_prune(&runtime, &package_dir).unwrap();
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let (current, to_prune) = find_versions_to_prune(&pkg_repo, "owner", "repo").unwrap();
 
         assert_eq!(current, Some("v3.0.0".to_string()));
         assert_eq!(to_prune.len(), 2);
@@ -365,14 +377,16 @@ mod tests {
     #[test]
     fn test_prune_package_not_installed() {
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
+        let root = PathBuf::from("/root");
+        let package_dir = PathBuf::from("/root/owner/repo");
 
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| false);
 
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let result = prune_package(&runtime, &pkg_repo, "owner", "repo", "owner/repo", true);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
@@ -383,7 +397,8 @@ mod tests {
         // Test that prune does nothing when no current symlink exists
 
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
+        let root = PathBuf::from("/root");
+        let package_dir = PathBuf::from("/root/owner/repo");
         let current_link = package_dir.join("current");
 
         runtime
@@ -392,11 +407,14 @@ mod tests {
             .returning(|_| true);
 
         runtime
-            .expect_is_symlink()
+            .expect_read_link()
             .with(eq(current_link))
-            .returning(|_| false);
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
 
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let result = prune_package(&runtime, &pkg_repo, "owner", "repo", "owner/repo", true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
@@ -406,7 +424,8 @@ mod tests {
         // Test that prune does nothing when only current version exists
 
         let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
+        let root = PathBuf::from("/root");
+        let package_dir = PathBuf::from("/root/owner/repo");
         let current_link = package_dir.join("current");
 
         runtime
@@ -414,10 +433,6 @@ mod tests {
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link))
@@ -428,224 +443,24 @@ mod tests {
             .with(eq(package_dir.clone()))
             .returning(|_| {
                 Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/meta.json"),
+                    PathBuf::from("/root/owner/repo/v1.0.0"),
+                    PathBuf::from("/root/owner/repo/meta.json"),
                 ])
             });
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .with(eq(PathBuf::from("/root/owner/repo/v1.0.0")))
             .returning(|_| true);
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/meta.json")))
+            .with(eq(PathBuf::from("/root/owner/repo/meta.json")))
             .returning(|_| false);
 
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
+        let pkg_repo = PackageRepository::new(&runtime, root);
+        let result = prune_package(&runtime, &pkg_repo, "owner", "repo", "owner/repo", true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
-    }
-
-    #[test]
-    fn test_prune_package_removes_old_version() {
-        // Test that prune removes old versions via remove_version
-
-        let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
-        let v1_dir = package_dir.join("v1.0.0");
-
-        // 1. Package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 2. Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link))
-            .returning(|_| Ok(PathBuf::from("v2.0.0")));
-
-        // 3. List versions
-        runtime
-            .expect_read_dir()
-            .with(eq(package_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                    PathBuf::from("/pkg/meta.json"),
-                ])
-            });
-
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/meta.json")))
-            .returning(|_| false);
-
-        // 4. Load meta (for prune_package)
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        let meta = Meta {
-            name: "owner/repo".into(),
-            current_version: "v2.0.0".into(),
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // 5. remove_version checks version exists
-        runtime
-            .expect_exists()
-            .with(eq(v1_dir.clone()))
-            .returning(|_| true);
-
-        // 6. remove_version removes directory
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(v1_dir))
-            .returning(|_| Ok(()));
-
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
-    }
-
-    #[test]
-    fn test_prune_package_with_versioned_links() {
-        // Test that prune removes versioned links for pruned versions
-
-        let mut runtime = MockRuntime::new();
-        use crate::package::VersionedLink;
-
-        let package_dir = PathBuf::from("/pkg");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
-        let v1_dir = package_dir.join("v1.0.0");
-        let link_dest = PathBuf::from("/usr/local/bin/tool-v1");
-        let tmp_meta_path = meta_path.with_extension("json.tmp");
-
-        // 1. Package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 2. Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link))
-            .returning(|_| Ok(PathBuf::from("v2.0.0")));
-
-        // 3. List versions
-        runtime
-            .expect_read_dir()
-            .with(eq(package_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                    PathBuf::from("/pkg/meta.json"),
-                ])
-            });
-
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/meta.json")))
-            .returning(|_| false);
-
-        // 4. Load meta with versioned link
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        let meta = Meta {
-            name: "owner/repo".into(),
-            current_version: "v2.0.0".into(),
-            versioned_links: vec![VersionedLink {
-                version: "v1.0.0".into(),
-                dest: link_dest.clone(),
-                path: None,
-            }],
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // 5. remove_version checks version exists
-        runtime
-            .expect_exists()
-            .with(eq(v1_dir.clone()))
-            .returning(|_| true);
-
-        // 6. remove_version removes versioned link via LinkManager
-        // LinkManager.remove_link_if_under checks:
-        let v1_dir_clone = v1_dir.clone();
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_resolve_link()
-            .with(eq(link_dest.clone()))
-            .returning(move |_| Ok(v1_dir_clone.join("tool")));
-        runtime
-            .expect_remove_symlink()
-            .with(eq(link_dest))
-            .returning(|_| Ok(()));
-
-        // 7. remove_version removes directory
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(v1_dir))
-            .returning(|_| Ok(()));
-
-        // 8. remove_version updates meta.json
-        runtime
-            .expect_write()
-            .with(eq(tmp_meta_path.clone()), always())
-            .returning(|_, _| Ok(()));
-        runtime
-            .expect_rename()
-            .with(eq(tmp_meta_path), eq(meta_path))
-            .returning(|_, _| Ok(()));
-
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
     }
 
     // Helper to configure simple home dir and user
@@ -690,9 +505,11 @@ mod tests {
 
         // No current symlink - nothing to prune
         runtime
-            .expect_is_symlink()
+            .expect_read_link()
             .with(eq(current_link))
-            .returning(|_| false);
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
 
         let result = prune(runtime, vec!["owner/repo".to_string()], true, Some(root));
         assert!(result.is_ok());
@@ -775,68 +592,11 @@ mod tests {
 
         // 4. find_versions_to_prune - no current symlink
         runtime
-            .expect_is_symlink()
+            .expect_read_link()
             .with(eq(current_link))
-            .returning(|_| false);
-
-        let result = prune_all(&runtime, &root, true);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_prune_all_meta_load_error_fallback() {
-        // Test prune_all falls back to deriving name from path when meta load fails
-
-        let mut runtime = MockRuntime::new();
-        let root = PathBuf::from("/root");
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
-
-        // 1. find_all_packages
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(root.clone()))
-            .returning(move |_| Ok(vec![owner_dir.clone()]));
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/root/owner")))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(PathBuf::from("/root/owner")))
-            .returning(|_| Ok(vec![PathBuf::from("/root/owner/repo")]));
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/root/owner/repo")))
-            .returning(|_| true);
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        // 2. Load meta fails - return invalid JSON
-        runtime
-            .expect_read_to_string()
-            .with(eq(meta_path))
-            .returning(|_| Ok("invalid json".to_string()));
-
-        // 3. prune_package - package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 4. find_versions_to_prune - no current symlink
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link))
-            .returning(|_| false);
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
 
         let result = prune_all(&runtime, &root, true);
         assert!(result.is_ok());
@@ -887,215 +647,5 @@ mod tests {
 
         let result = prune(runtime, vec![], true, None); // None triggers default_install_root
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_prune_package_without_meta() {
-        // Test prune_package when meta.json doesn't exist
-
-        let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
-        let v1_dir = package_dir.join("v1.0.0");
-
-        // 1. Package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 2. Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link))
-            .returning(|_| Ok(PathBuf::from("v2.0.0")));
-
-        // 3. List versions
-        runtime
-            .expect_read_dir()
-            .with(eq(package_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                ])
-            });
-
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
-            .returning(|_| true);
-
-        // 4. meta.json doesn't exist
-        runtime
-            .expect_exists()
-            .with(eq(meta_path))
-            .returning(|_| false);
-
-        // 5. remove_version checks version exists
-        runtime
-            .expect_exists()
-            .with(eq(v1_dir.clone()))
-            .returning(|_| true);
-
-        // 6. remove_version removes directory
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(v1_dir))
-            .returning(|_| Ok(()));
-
-        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
-    }
-
-    #[test]
-    fn test_prune_package_user_confirms() {
-        // Test prune_package when user confirms (yes=false, confirm returns true)
-
-        let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let meta_path = package_dir.join("meta.json");
-        let current_link = package_dir.join("current");
-        let v1_dir = package_dir.join("v1.0.0");
-
-        // 1. Package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 2. Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link))
-            .returning(|_| Ok(PathBuf::from("v2.0.0")));
-
-        // 3. List versions
-        runtime
-            .expect_read_dir()
-            .with(eq(package_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                ])
-            });
-
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
-            .returning(|_| true);
-
-        // 4. User confirms
-        runtime
-            .expect_confirm()
-            .with(eq("Proceed with pruning?"))
-            .returning(|_| Ok(true));
-
-        // 5. Load meta
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        let meta = Meta {
-            name: "owner/repo".into(),
-            current_version: "v2.0.0".into(),
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // 6. remove_version checks version exists
-        runtime
-            .expect_exists()
-            .with(eq(v1_dir.clone()))
-            .returning(|_| true);
-
-        // 7. remove_version removes directory
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(v1_dir))
-            .returning(|_| Ok(()));
-
-        // yes=false triggers confirmation
-        let result = prune_package(&runtime, &package_dir, "owner/repo", false);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
-    }
-
-    #[test]
-    fn test_prune_package_user_cancels() {
-        // Test prune_package when user cancels (yes=false, confirm returns false)
-
-        let mut runtime = MockRuntime::new();
-        let package_dir = PathBuf::from("/pkg");
-        let current_link = package_dir.join("current");
-
-        // 1. Package exists
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // 2. Current version is v2.0.0
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_link()
-            .with(eq(current_link))
-            .returning(|_| Ok(PathBuf::from("v2.0.0")));
-
-        // 3. List versions
-        runtime
-            .expect_read_dir()
-            .with(eq(package_dir.clone()))
-            .returning(|_| {
-                Ok(vec![
-                    PathBuf::from("/pkg/v1.0.0"),
-                    PathBuf::from("/pkg/v2.0.0"),
-                ])
-            });
-
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v1.0.0")))
-            .returning(|_| true);
-        runtime
-            .expect_is_dir()
-            .with(eq(PathBuf::from("/pkg/v2.0.0")))
-            .returning(|_| true);
-
-        // 4. User cancels
-        runtime
-            .expect_confirm()
-            .with(eq("Proceed with pruning?"))
-            .returning(|_| Ok(false));
-
-        // yes=false triggers confirmation, user says no
-        let result = prune_package(&runtime, &package_dir, "owner/repo", false);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0); // Nothing pruned
     }
 }

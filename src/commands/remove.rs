@@ -46,14 +46,22 @@ pub fn remove<R: Runtime>(
 
         // Show removal plan and confirm
         if !yes {
-            show_version_removal_plan(&runtime, &spec.repo, &package_dir, version, meta.as_ref())?;
+            show_version_removal_plan(&runtime, &pkg_repo, &spec.repo, version, meta.as_ref())?;
             if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
         }
 
-        remove_version(&runtime, &package_dir, version, meta.as_ref(), force)?;
+        remove_version(
+            &runtime,
+            &pkg_repo,
+            &spec.repo.owner,
+            &spec.repo.repo,
+            version,
+            meta.as_ref(),
+            force,
+        )?;
     } else {
         // Remove entire package
         debug!("Removing entire package");
@@ -148,25 +156,16 @@ fn show_package_removal_plan<R: Runtime>(
 
 fn show_version_removal_plan<R: Runtime>(
     runtime: &R,
+    pkg_repo: &PackageRepository<'_, R>,
     repo: &crate::github::GitHubRepo,
-    package_dir: &Path,
     version: &str,
     meta: Option<&Meta>,
 ) -> Result<()> {
+    let package_dir = pkg_repo.package_dir(&repo.owner, &repo.repo);
     let version_dir = package_dir.join(version);
-    let current_link = package_dir.join("current");
 
     // Check if this is the current version
-    let is_current = if runtime.is_symlink(&current_link) {
-        if let Ok(target) = runtime.read_link(&current_link) {
-            let target_version = target.file_name().and_then(|s| s.to_str());
-            target_version == Some(version)
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let is_current = pkg_repo.is_current_version(&repo.owner, &repo.repo, version);
 
     println!();
     println!("=== Removal Plan ===");
@@ -245,30 +244,23 @@ fn show_version_removal_plan<R: Runtime>(
 /// Remove a specific version of a package
 pub(crate) fn remove_version<R: Runtime>(
     runtime: &R,
-    package_dir: &Path,
+    pkg_repo: &PackageRepository<'_, R>,
+    owner: &str,
+    repo: &str,
     version: &str,
     meta: Option<&Meta>,
     force: bool,
 ) -> Result<()> {
+    let package_dir = pkg_repo.package_dir(owner, repo);
     let version_dir = package_dir.join(version);
     debug!("Version directory: {:?}", version_dir);
 
-    if !runtime.exists(&version_dir) {
+    if !pkg_repo.is_version_installed(owner, repo, version) {
         anyhow::bail!("Version {} is not installed.", version);
     }
 
     // Check if this is the current version
-    let current_link = package_dir.join("current");
-    let is_current = if runtime.is_symlink(&current_link) {
-        if let Ok(target) = runtime.read_link(&current_link) {
-            let target_version = target.file_name().and_then(|s| s.to_str());
-            target_version == Some(version)
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let is_current = pkg_repo.is_current_version(owner, repo, version);
 
     if is_current && !force {
         anyhow::bail!(
@@ -293,32 +285,29 @@ pub(crate) fn remove_version<R: Runtime>(
     }
 
     // Update meta.json to remove versioned_links for this version
-    let meta_path = package_dir.join("meta.json");
-    if runtime.exists(&meta_path)
-        && let Ok(mut meta) = Meta::load(runtime, &meta_path)
-    {
-        let original_len = meta.versioned_links.len();
-        meta.versioned_links.retain(|l| l.version != version);
-        if meta.versioned_links.len() != original_len {
+    if let Ok(Some(mut updated_meta)) = pkg_repo.load(owner, repo) {
+        let original_len = updated_meta.versioned_links.len();
+        updated_meta
+            .versioned_links
+            .retain(|l| l.version != version);
+        if updated_meta.versioned_links.len() != original_len {
             debug!(
                 "Removed {} versioned link(s) from meta.json",
-                original_len - meta.versioned_links.len()
+                original_len - updated_meta.versioned_links.len()
             );
-            let json = serde_json::to_string_pretty(&meta)?;
-            let tmp_path = meta_path.with_extension("json.tmp");
-            runtime.write(&tmp_path, json.as_bytes())?;
-            runtime.rename(&tmp_path, &meta_path)?;
+            pkg_repo.save(owner, repo, &updated_meta)?;
         }
     }
 
     // Remove the version directory
     debug!("Removing version directory {:?}", version_dir);
-    runtime.remove_dir_all(&version_dir)?;
+    pkg_repo.remove_version_dir(owner, repo, version)?;
     println!("Removed version {} from {}", version, package_dir.display());
 
     // If this was the current version, remove the current symlink
     if is_current {
         debug!("Removing current symlink");
+        let current_link = pkg_repo.current_link(owner, repo);
         let _ = link_manager.remove_link(&current_link);
         println!("Warning: Removed current version symlink. No version is now active.");
     }
@@ -543,21 +532,17 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Check Version Exists ---
+        // --- 3. Check Version Exists (is_version_installed uses is_dir) ---
 
         // Directory exists: /home/user/.ghri/owner/repo/v1 -> true
         runtime
-            .expect_exists()
+            .expect_is_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
         // --- 4. Check if v1 is Current Version ---
 
         // Read current symlink: -> v2 (not v1, so safe to remove)
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link.clone()))
@@ -575,7 +560,13 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(move |_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")));
 
-        // --- 6. Remove Version Directory ---
+        // --- 6. Remove Version Directory (remove_version_dir checks exists then removes) ---
+
+        // Check exists for remove_version_dir
+        runtime
+            .expect_exists()
+            .with(eq(version_dir.clone()))
+            .returning(|_| true);
 
         // Remove /home/user/.ghri/owner/repo/v1
         runtime
@@ -641,21 +632,17 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Check Version Exists ---
+        // --- 3. Check Version Exists (is_version_installed uses is_dir) ---
 
         // Directory exists: /home/user/.ghri/owner/repo/v1 -> true
         runtime
-            .expect_exists()
+            .expect_is_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
         // --- 4. Check if v1 is Current Version ---
 
         // Current symlink points to v1 (same as being removed!)
-        runtime
-            .expect_is_symlink()
-            .with(eq(current_link.clone()))
-            .returning(|_| true);
         runtime
             .expect_read_link()
             .with(eq(current_link.clone()))

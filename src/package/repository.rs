@@ -179,6 +179,14 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
             })
     }
 
+    /// Check if the given version is the current version.
+    ///
+    /// Returns `true` if the 'current' symlink points to the given version.
+    pub fn is_current_version(&self, owner: &str, repo: &str, version: &str) -> bool {
+        self.current_version(owner, repo)
+            .is_some_and(|current| current == version)
+    }
+
     /// Remove a specific version directory.
     ///
     /// Does not update the 'current' symlink or metadata.
@@ -387,5 +395,49 @@ mod tests {
         let versions = repo.installed_versions("owner", "repo").unwrap();
 
         assert!(versions.is_empty());
+    }
+
+    #[test]
+    fn test_is_current_version_true() {
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("/root/owner/repo/v1.2.3")));
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        assert!(repo.is_current_version("owner", "repo", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_current_version_false_different_version() {
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("/root/owner/repo/v2.0.0")));
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        assert!(!repo.is_current_version("owner", "repo", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_current_version_false_no_link() {
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        assert!(!repo.is_current_version("owner", "repo", "v1.2.3"));
     }
 }

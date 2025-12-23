@@ -89,7 +89,6 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
         );
 
         // Install the new version using saved filters from meta
-        let package_dir = config.package_dir(&repo.owner, &repo.repo);
         let install_options = InstallOptions {
             filters: vec![], // Empty filters - installer will use saved filters from meta
             pre: options.pre,
@@ -107,8 +106,13 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
 
             // Prune old versions if requested
             if options.prune
-                && let Err(e) =
-                    prune_package_dir(&installer.runtime, &package_dir, &repo.to_string())
+                && let Err(e) = prune_package_dir(
+                    &installer.runtime,
+                    &config.install_root,
+                    &repo.owner,
+                    &repo.repo,
+                    &repo.to_string(),
+                )
             {
                 eprintln!("   warning: failed to prune {}: {}", repo, e);
             }
