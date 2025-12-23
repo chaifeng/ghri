@@ -108,6 +108,30 @@ impl Config {
     }
 }
 
+/// Options for the install command (behavior parameters)
+#[derive(Debug, Default, Clone)]
+pub struct InstallOptions {
+    /// Asset name filters (e.g., ["*linux*", "*x86_64*"])
+    pub filters: Vec<String>,
+    /// Allow installing pre-release versions
+    pub pre: bool,
+    /// Skip confirmation prompts
+    pub yes: bool,
+    /// Prune old versions after installation
+    pub prune: bool,
+}
+
+/// Options for the upgrade command (behavior parameters)
+#[derive(Debug, Default, Clone)]
+pub struct UpgradeOptions {
+    /// Allow upgrading to pre-release versions
+    pub pre: bool,
+    /// Skip confirmation prompts
+    pub yes: bool,
+    /// Prune old versions after upgrade
+    pub prune: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

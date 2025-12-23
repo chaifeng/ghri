@@ -900,10 +900,7 @@ mod tests {
             runtime,
             services,
             "invalid",
-            vec![],
-            false,
-            true,
-            false,
+            super::super::super::config::InstallOptions::default(),
         )
         .await;
         assert!(result.is_err());
@@ -1163,10 +1160,10 @@ mod tests {
             runtime,
             services,
             "o/r",
-            vec![],
-            false,
-            true,
-            false,
+            super::super::super::config::InstallOptions {
+                yes: true,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

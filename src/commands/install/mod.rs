@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::path::PathBuf;
 
 use crate::{
     archive::Extractor,
@@ -8,7 +7,7 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::config::{Config, ConfigOverrides};
+use super::config::{Config, ConfigOverrides, InstallOptions};
 use super::prune::prune_package_dir;
 use super::services::Services;
 
@@ -18,48 +17,30 @@ mod installer;
 
 pub use installer::Installer;
 
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(runtime, install_root, api_url, filters))]
+#[tracing::instrument(skip(runtime, overrides, options))]
 pub async fn install<R: Runtime + 'static>(
     runtime: R,
     repo_str: &str,
-    install_root: Option<PathBuf>,
-    api_url: Option<String>,
-    filters: Vec<String>,
-    pre: bool,
-    yes: bool,
-    prune: bool,
+    overrides: ConfigOverrides,
+    options: InstallOptions,
 ) -> Result<()> {
     // Load configuration
-    let config = Config::load(
-        &runtime,
-        ConfigOverrides {
-            install_root,
-            api_url,
-        },
-    )?;
+    let config = Config::load(&runtime, overrides)?;
 
     // Build services from config
     let services = Services::from_config(&config)?;
 
     // Run installation
-    run(
-        &config, runtime, services, repo_str, filters, pre, yes, prune,
-    )
-    .await
+    run(&config, runtime, services, repo_str, options).await
 }
 
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(config, runtime, services, filters))]
+#[tracing::instrument(skip(config, runtime, services, options))]
 pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
     config: &Config,
     runtime: R,
     services: Services<G, D, E>,
     repo_str: &str,
-    filters: Vec<String>,
-    pre: bool,
-    yes: bool,
-    prune: bool,
+    options: InstallOptions,
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
 
@@ -74,14 +55,14 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Download
             config,
             &spec.repo,
             spec.version.as_deref(),
-            filters,
-            pre,
-            yes,
+            options.filters,
+            options.pre,
+            options.yes,
         )
         .await?;
 
     // Prune old versions if requested
-    if prune {
+    if options.prune {
         let package_dir = config.package_dir(&spec.repo.owner, &spec.repo.repo);
         prune_package_dir(&installer.runtime, &package_dir, &spec.repo.to_string())?;
     }

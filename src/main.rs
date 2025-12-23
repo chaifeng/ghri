@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use ghri::commands::install;
+use ghri::commands::{ConfigOverrides, InstallOptions, UpgradeOptions, install};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -203,27 +203,43 @@ async fn main() -> Result<()> {
             install(
                 runtime,
                 &args.repo,
-                cli.install_root,
-                args.api_url,
-                args.filters,
-                args.pre,
-                args.yes,
-                args.prune,
+                ConfigOverrides {
+                    install_root: cli.install_root,
+                    api_url: args.api_url,
+                },
+                InstallOptions {
+                    filters: args.filters,
+                    pre: args.pre,
+                    yes: args.yes,
+                    prune: args.prune,
+                },
             )
             .await?
         }
         Commands::Update(args) => {
-            ghri::commands::update(runtime, cli.install_root, None, args.repos).await?
+            ghri::commands::update(
+                runtime,
+                ConfigOverrides {
+                    install_root: cli.install_root,
+                    api_url: None,
+                },
+                args.repos,
+            )
+            .await?
         }
         Commands::Upgrade(args) => {
             ghri::commands::upgrade(
                 runtime,
-                cli.install_root,
-                None,
+                ConfigOverrides {
+                    install_root: cli.install_root,
+                    api_url: None,
+                },
                 args.repos,
-                args.pre,
-                args.yes,
-                args.prune,
+                UpgradeOptions {
+                    pre: args.pre,
+                    yes: args.yes,
+                    prune: args.prune,
+                },
             )
             .await?
         }

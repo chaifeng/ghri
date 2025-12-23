@@ -14,7 +14,7 @@ mod unlink;
 mod update;
 mod upgrade;
 
-pub use config::{Config, ConfigOverrides};
+pub use config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 pub use install::{Installer, install, run};
 pub(crate) use link::determine_link_target;
 pub use link::link;

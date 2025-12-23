@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use log::warn;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::archive::Extractor;
 use crate::download::Downloader;
@@ -12,20 +12,13 @@ use super::config::{Config, ConfigOverrides};
 use super::install::Installer;
 use super::services::Services;
 
-#[tracing::instrument(skip(runtime, install_root, api_url, repos))]
+#[tracing::instrument(skip(runtime, overrides, repos))]
 pub async fn update<R: Runtime + 'static>(
     runtime: R,
-    install_root: Option<PathBuf>,
-    api_url: Option<String>,
+    overrides: ConfigOverrides,
     repos: Vec<String>,
 ) -> Result<()> {
-    let config = Config::load(
-        &runtime,
-        ConfigOverrides {
-            install_root,
-            api_url,
-        },
-    )?;
+    let config = Config::load(&runtime, overrides)?;
     let services = Services::from_config(&config)?;
     run_update(&config, runtime, services, repos).await
 }
@@ -224,7 +217,9 @@ mod tests {
 
         // --- Execute ---
 
-        update(runtime, None, None, vec![]).await.unwrap();
+        update(runtime, ConfigOverrides::default(), vec![])
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

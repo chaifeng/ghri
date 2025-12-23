@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::path::PathBuf;
 
 use crate::archive::Extractor;
 use crate::download::Downloader;
@@ -7,42 +6,30 @@ use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
 
-use super::config::{Config, ConfigOverrides};
+use super::config::{Config, ConfigOverrides, UpgradeOptions};
 use super::install::Installer;
 use super::prune::prune_package_dir;
 use super::services::Services;
 
-#[tracing::instrument(skip(runtime, install_root, api_url, repos))]
+#[tracing::instrument(skip(runtime, overrides, repos, options))]
 pub async fn upgrade<R: Runtime + 'static>(
     runtime: R,
-    install_root: Option<PathBuf>,
-    api_url: Option<String>,
+    overrides: ConfigOverrides,
     repos: Vec<String>,
-    pre: bool,
-    yes: bool,
-    prune: bool,
+    options: UpgradeOptions,
 ) -> Result<()> {
-    let config = Config::load(
-        &runtime,
-        ConfigOverrides {
-            install_root,
-            api_url,
-        },
-    )?;
+    let config = Config::load(&runtime, overrides)?;
     let services = Services::from_config(&config)?;
-    run_upgrade(&config, runtime, services, repos, pre, yes, prune).await
+    run_upgrade(&config, runtime, services, repos, options).await
 }
 
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip(config, runtime, services, repos))]
+#[tracing::instrument(skip(config, runtime, services, repos, options))]
 async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader>(
     config: &Config,
     runtime: R,
     services: Services<G, D, E>,
     repos: Vec<String>,
-    pre: bool,
-    yes: bool,
-    prune: bool,
+    options: UpgradeOptions,
 ) -> Result<()> {
     let meta_files = find_all_packages(&runtime, &config.install_root)?;
     if meta_files.is_empty() {
@@ -76,7 +63,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
         }
 
         // Get the latest version from cached release info
-        let latest = if pre {
+        let latest = if options.pre {
             meta.get_latest_release()
         } else {
             meta.get_latest_stable_release()
@@ -108,8 +95,8 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
                 &repo,
                 Some(&latest.version),
                 vec![], // Empty filters - installer will use saved filters from meta
-                pre,
-                yes,
+                options.pre,
+                options.yes,
             )
             .await
         {
@@ -118,7 +105,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
             upgraded_count += 1;
 
             // Prune old versions if requested
-            if prune
+            if options.prune
                 && let Err(e) =
                     prune_package_dir(&installer.runtime, &package_dir, &repo.to_string())
             {
@@ -216,7 +203,17 @@ mod tests {
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
         };
-        let result = run_upgrade(&config, runtime, services, vec![], false, true, false).await;
+        let result = run_upgrade(
+            &config,
+            runtime,
+            services,
+            vec![],
+            UpgradeOptions {
+                yes: true,
+                ..Default::default()
+            },
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -295,7 +292,17 @@ mod tests {
             downloader: MockDownloader::new(),
             extractor: MockExtractor::new(),
         };
-        let result = run_upgrade(&config, runtime, services, vec![], false, true, false).await;
+        let result = run_upgrade(
+            &config,
+            runtime,
+            services,
+            vec![],
+            UpgradeOptions {
+                yes: true,
+                ..Default::default()
+            },
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -406,9 +413,10 @@ mod tests {
             runtime,
             services,
             vec!["owner1/repo1".to_string()],
-            false,
-            true,
-            false,
+            UpgradeOptions {
+                yes: true,
+                ..Default::default()
+            },
         )
         .await;
         assert!(result.is_ok());
@@ -428,8 +436,16 @@ mod tests {
 
         // --- Execute ---
 
-        upgrade(runtime, None, None, vec![], false, true, false)
-            .await
-            .unwrap();
+        upgrade(
+            runtime,
+            ConfigOverrides::default(),
+            vec![],
+            UpgradeOptions {
+                yes: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     }
 }
