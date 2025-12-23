@@ -4,12 +4,14 @@
 //! including metadata storage, discovery, and version tracking.
 
 mod discovery;
+mod link;
 mod link_rule;
 mod meta;
 mod repository;
 mod version;
 
 pub use discovery::find_all_packages;
+pub use link::{CheckedLink, LinkManager, LinkStatus, LinkValidation};
 pub use link_rule::{LinkRule, VersionedLink};
 pub use meta::{Meta, MetaAsset, MetaRelease};
 pub use repository::PackageRepository;
