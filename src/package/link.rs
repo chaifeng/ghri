@@ -178,6 +178,36 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
         (valid, invalid)
     }
 
+    /// Check versioned links for a specific version.
+    pub fn check_versioned_links_for_version(
+        &self,
+        links: &[VersionedLink],
+        version: &str,
+        expected_prefix: &Path,
+    ) -> (Vec<CheckedLink>, Vec<CheckedLink>) {
+        let filtered: Vec<_> = links.iter().filter(|l| l.version == version).collect();
+
+        let mut valid = Vec::new();
+        let mut invalid = Vec::new();
+
+        for link in filtered {
+            let status = self.check_link(&link.dest, expected_prefix);
+            let checked = CheckedLink {
+                dest: link.dest.clone(),
+                status: status.clone(),
+                path: link.path.clone(),
+            };
+
+            if status.is_valid() || status.is_creatable() {
+                valid.push(checked);
+            } else {
+                invalid.push(checked);
+            }
+        }
+
+        (valid, invalid)
+    }
+
     /// Validate a link rule for creation.
     ///
     /// Checks if the link can be created and whether any cleanup is needed.
@@ -308,10 +338,7 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
         }
 
         if !self.runtime.is_symlink(dest) {
-            anyhow::bail!(
-                "Destination {:?} already exists and is not a symlink",
-                dest
-            );
+            anyhow::bail!("Destination {:?} already exists and is not a symlink", dest);
         }
 
         // It's a symlink, check where it points

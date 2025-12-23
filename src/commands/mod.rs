@@ -1,7 +1,6 @@
 pub mod config;
 mod install;
 mod link;
-mod link_check;
 mod links;
 mod list;
 mod paths;

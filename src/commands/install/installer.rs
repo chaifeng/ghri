@@ -8,12 +8,11 @@ use crate::{
     cleanup::CleanupContext,
     download::Downloader,
     github::{GetReleases, GitHubRepo, Release},
-    package::Meta,
+    package::{LinkManager, Meta},
     runtime::Runtime,
 };
 
 use crate::commands::config::{Config, InstallOptions};
-use crate::commands::link_check::{LinkStatus, check_links};
 use crate::commands::symlink::update_current_symlink;
 
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
@@ -232,7 +231,8 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         if !meta.links.is_empty()
             && let Some(package_dir) = target_dir.parent()
         {
-            let (valid_links, invalid_links) = check_links(&self.runtime, &meta.links, package_dir);
+            let link_manager = LinkManager::new(&self.runtime);
+            let (valid_links, invalid_links) = link_manager.check_links(&meta.links, package_dir);
 
             // Show valid links (existing or to be created)
             if !valid_links.is_empty() {
@@ -244,26 +244,22 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
                         .as_ref()
                         .map(|p| format!(":{}", p))
                         .unwrap_or_default();
-                    match link.status {
-                        LinkStatus::Valid => {
-                            println!(
-                                "  [LINK] {} -> {}{}/{}",
-                                link.dest.display(),
-                                repo,
-                                source,
-                                release.tag_name
-                            );
-                        }
-                        LinkStatus::NotExists => {
-                            println!(
-                                "  [NEW]  {} -> {}{}/{}",
-                                link.dest.display(),
-                                repo,
-                                source,
-                                release.tag_name
-                            );
-                        }
-                        _ => {}
+                    if link.status.is_valid() {
+                        println!(
+                            "  [LINK] {} -> {}{}/{}",
+                            link.dest.display(),
+                            repo,
+                            source,
+                            release.tag_name
+                        );
+                    } else if link.status.is_creatable() {
+                        println!(
+                            "  [NEW]  {} -> {}{}/{}",
+                            link.dest.display(),
+                            repo,
+                            source,
+                            release.tag_name
+                        );
                     }
                 }
             }

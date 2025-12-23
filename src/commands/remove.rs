@@ -8,7 +8,6 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::link_check::{check_links, check_versioned_links, check_versioned_links_for_version};
 use super::paths::default_install_root;
 
 /// Remove a package or specific version
@@ -100,12 +99,14 @@ fn show_package_removal_plan<R: Runtime>(
     println!("  [DEL] {}", package_dir.display());
 
     if let Some(meta) = meta {
+        let link_manager = LinkManager::new(runtime);
+
         // Check regular links
-        let (valid_links, invalid_links) = check_links(runtime, &meta.links, package_dir);
+        let (valid_links, invalid_links) = link_manager.check_links(&meta.links, package_dir);
 
         // Check versioned links
         let (valid_versioned, invalid_versioned) =
-            check_versioned_links(runtime, &meta.versioned_links, package_dir);
+            link_manager.check_versioned_links(&meta.versioned_links, package_dir);
 
         // Combine valid links (only those that actually exist and point to package)
         let all_valid: Vec<_> = valid_links
@@ -118,12 +119,8 @@ fn show_package_removal_plan<R: Runtime>(
         let all_invalid: Vec<_> = invalid_links
             .iter()
             .chain(invalid_versioned.iter())
-            .chain(valid_links.iter().filter(|l| l.status.will_be_created()))
-            .chain(
-                valid_versioned
-                    .iter()
-                    .filter(|l| l.status.will_be_created()),
-            )
+            .chain(valid_links.iter().filter(|l| l.status.is_creatable()))
+            .chain(valid_versioned.iter().filter(|l| l.status.is_creatable()))
             .collect();
 
         if !all_valid.is_empty() {
@@ -192,13 +189,14 @@ fn show_version_removal_plan<R: Runtime>(
 
     // Show links that will be removed
     if let Some(meta) = meta {
+        let link_manager = LinkManager::new(runtime);
+
         // Check regular links pointing to this version
-        let (valid_links, _) = check_links(runtime, &meta.links, &version_dir);
+        let (valid_links, _) = link_manager.check_links(&meta.links, &version_dir);
         let regular_valid: Vec<_> = valid_links.iter().filter(|l| l.status.is_valid()).collect();
 
         // Check versioned links for this version
-        let (valid_versioned, invalid_versioned) = check_versioned_links_for_version(
-            runtime,
+        let (valid_versioned, invalid_versioned) = link_manager.check_versioned_links_for_version(
             &meta.versioned_links,
             version,
             &version_dir,
@@ -224,11 +222,7 @@ fn show_version_removal_plan<R: Runtime>(
         // Show invalid versioned links (only versioned links matter here, regular links pointing elsewhere are fine)
         let all_invalid: Vec<_> = invalid_versioned
             .iter()
-            .chain(
-                valid_versioned
-                    .iter()
-                    .filter(|l| l.status.will_be_created()),
-            )
+            .chain(valid_versioned.iter().filter(|l| l.status.is_creatable()))
             .collect();
 
         if !all_invalid.is_empty() {
