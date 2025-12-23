@@ -1,24 +1,20 @@
 use anyhow::Result;
 use log::debug;
-use std::path::PathBuf;
 
 use crate::{github::RepoSpec, package::PackageRepository, runtime::Runtime};
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 use super::{print_links, print_versioned_links};
 
 /// Show detailed information about a package
-#[tracing::instrument(skip(runtime, install_root))]
-pub fn show<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
+#[tracing::instrument(skip(runtime, overrides))]
+pub fn show<R: Runtime>(runtime: R, repo_str: &str, overrides: ConfigOverrides) -> Result<()> {
     debug!("Showing info for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
-    debug!("Using install root: {:?}", root);
+    let config = Config::load(&runtime, overrides)?;
+    debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, root);
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
     let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
     debug!("Package directory: {:?}", package_dir);
 
@@ -265,7 +261,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -290,7 +293,14 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -351,7 +361,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -440,7 +457,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -506,7 +530,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -598,7 +629,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -717,7 +755,14 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(runtime, "owner/repo", Some(root));
+        let result = show(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 }

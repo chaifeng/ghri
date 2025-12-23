@@ -3,7 +3,6 @@ mod install;
 mod link;
 mod links;
 mod list;
-mod paths;
 mod prune;
 mod remove;
 pub mod services;

@@ -244,20 +244,54 @@ async fn main() -> Result<()> {
             )
             .await?
         }
-        Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
+        Commands::List(_args) => {
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::list(runtime, overrides)?
+        }
         Commands::Link(args) => {
-            ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::link(runtime, &args.repo, args.dest, overrides)?
         }
         Commands::Unlink(args) => {
-            ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, overrides)?
         }
-        Commands::Links(args) => ghri::commands::links(runtime, &args.repo, cli.install_root)?,
+        Commands::Links(args) => {
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::links(runtime, &args.repo, overrides)?
+        }
         Commands::Remove(args) => {
-            ghri::commands::remove(runtime, &args.repo, args.force, args.yes, cli.install_root)?
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::remove(runtime, &args.repo, args.force, args.yes, overrides)?
         }
-        Commands::Show(args) => ghri::commands::show(runtime, &args.repo, cli.install_root)?,
+        Commands::Show(args) => {
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::show(runtime, &args.repo, overrides)?
+        }
         Commands::Prune(args) => {
-            ghri::commands::prune(runtime, args.repos, args.yes, cli.install_root)?
+            let overrides = ConfigOverrides {
+                install_root: cli.install_root,
+                ..Default::default()
+            };
+            ghri::commands::prune(runtime, args.repos, args.yes, overrides)?
         }
     }
     Ok(())

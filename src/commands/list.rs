@@ -1,22 +1,18 @@
 use anyhow::Result;
 use log::debug;
-use std::path::PathBuf;
 
 use crate::{package::PackageRepository, runtime::Runtime};
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 
 /// List all installed packages
-#[tracing::instrument(skip(runtime, install_root))]
-pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()> {
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
+#[tracing::instrument(skip(runtime, overrides))]
+pub fn list<R: Runtime>(runtime: R, overrides: ConfigOverrides) -> Result<()> {
+    let config = Config::load(&runtime, overrides)?;
 
-    debug!("Listing packages from {:?}", root);
+    debug!("Listing packages from {:?}", config.install_root);
 
-    let repo = PackageRepository::new(&runtime, root);
+    let repo = PackageRepository::new(&runtime, config.install_root);
     let packages = repo.find_all_with_meta()?;
 
     if packages.is_empty() {
@@ -44,6 +40,7 @@ mod tests {
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_list_no_packages() {
@@ -60,6 +57,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Find All Packages ---
 
@@ -77,7 +78,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = list(runtime, None);
+        let result = list(runtime, ConfigOverrides::default());
         assert!(result.is_ok());
     }
 
@@ -99,6 +100,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Find All Packages ---
 
@@ -154,7 +159,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(runtime, None);
+        let result = list(runtime, ConfigOverrides::default());
         assert!(result.is_ok());
     }
 
@@ -166,6 +171,12 @@ mod tests {
 
         // --- Setup Paths ---
         let root = PathBuf::from("/custom/root");
+
+        // Config::load needs GITHUB_TOKEN
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 1. Find All Packages (using custom root) ---
 
@@ -183,7 +194,13 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(runtime, Some(PathBuf::from("/custom/root")));
+        let result = list(
+            runtime,
+            ConfigOverrides {
+                install_root: Some(PathBuf::from("/custom/root")),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -205,6 +222,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Find All Packages ---
 
@@ -268,7 +289,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(runtime, None);
+        let result = list(runtime, ConfigOverrides::default());
         assert!(result.is_ok());
     }
 
@@ -289,6 +310,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Find All Packages ---
 
@@ -339,7 +364,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // Should still succeed, just skip the failed package
-        let result = list(runtime, None);
+        let result = list(runtime, ConfigOverrides::default());
         assert!(result.is_ok());
     }
 }

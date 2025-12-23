@@ -8,27 +8,24 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 
 /// Remove a link rule and its symlink
-#[tracing::instrument(skip(runtime, install_root))]
+#[tracing::instrument(skip(runtime, overrides))]
 pub fn unlink<R: Runtime>(
     runtime: R,
     repo_str: &str,
     dest: Option<PathBuf>,
     all: bool,
-    install_root: Option<PathBuf>,
+    overrides: ConfigOverrides,
 ) -> Result<()> {
     debug!("Unlinking {} dest={:?} all={}", repo_str, dest, all);
     // Use LinkSpec to handle "owner/repo:path" format
     let spec = repo_str.parse::<LinkSpec>()?;
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
-    debug!("Using install root: {:?}", root);
+    let config = Config::load(&runtime, overrides)?;
+    debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, root);
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
     let link_mgr = LinkManager::new(&runtime);
     let owner = &spec.repo.owner;
     let repo = &spec.repo.repo;
@@ -327,7 +324,16 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            Some(link_dest),
+            false,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -438,7 +444,16 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = unlink(runtime, "owner/repo", None, true, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            None,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -502,7 +517,16 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            Some(link_dest),
+            false,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -549,7 +573,10 @@ mod tests {
             "owner/repo",
             Some(nonexistent_link),
             false,
-            Some(root),
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
         );
         assert!(result.is_err());
     }
@@ -590,7 +617,16 @@ mod tests {
         // --- Execute & Verify ---
 
         // Neither dest nor --all specified -> should fail
-        let result = unlink(runtime, "owner/repo", None, false, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            None,
+            false,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -627,7 +663,16 @@ mod tests {
         // --- Execute & Verify ---
 
         // Should succeed with message "No link rules" (no error)
-        let result = unlink(runtime, "owner/repo", None, true, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            None,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -703,7 +748,16 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = unlink(runtime, "owner/repo", Some(link_dest), false, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            Some(link_dest),
+            false,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
 
         // Should fail because symlink points to external path
         assert!(result.is_err());
@@ -821,7 +875,16 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute & Verify ---
-        let result = unlink(runtime, "owner/repo", None, true, Some(root));
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            None,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
 
         // Should succeed but with warning about skipped external symlink
         assert!(result.is_ok());

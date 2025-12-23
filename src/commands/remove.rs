@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::debug;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{
     github::RepoSpec,
@@ -8,26 +8,23 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 
 /// Remove a package or specific version
-#[tracing::instrument(skip(runtime, install_root))]
+#[tracing::instrument(skip(runtime, overrides))]
 pub fn remove<R: Runtime>(
     runtime: R,
     repo_str: &str,
     force: bool,
     yes: bool,
-    install_root: Option<PathBuf>,
+    overrides: ConfigOverrides,
 ) -> Result<()> {
     debug!("Removing {} force={}", repo_str, force);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
-    debug!("Using install root: {:?}", root);
+    let config = Config::load(&runtime, overrides)?;
+    debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, root.clone());
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
     let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
     debug!("Package directory: {:?}", package_dir);
 
@@ -476,7 +473,16 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -582,7 +588,16 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo@v1", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo@v1",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -645,7 +660,16 @@ mod tests {
         // --- Execute & Verify ---
 
         // Should fail without --force since v1 is the current version
-        let result = remove(runtime, "owner/repo@v1", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo@v1",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--force"));
     }
@@ -671,7 +695,16 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = remove(runtime, "owner/repo", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -768,7 +801,16 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -858,7 +900,16 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, true, Some(root));
+        let result = remove(
+            runtime,
+            "owner/repo",
+            false,
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 }

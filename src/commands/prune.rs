@@ -1,32 +1,29 @@
 use anyhow::Result;
 use log::{debug, info};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{github::RepoSpec, package::PackageRepository, runtime::Runtime};
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 use super::remove_version;
 
 /// Prune unused versions, keeping only the current version
-#[tracing::instrument(skip(runtime, install_root))]
+#[tracing::instrument(skip(runtime, overrides))]
 pub fn prune<R: Runtime>(
     runtime: R,
     repos: Vec<String>,
     yes: bool,
-    install_root: Option<PathBuf>,
+    overrides: ConfigOverrides,
 ) -> Result<()> {
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
-    debug!("Using install root: {:?}", root);
+    let config = Config::load(&runtime, overrides)?;
+    debug!("Using install root: {:?}", config.install_root);
 
     if repos.is_empty() {
         // Prune all packages
-        prune_all(&runtime, &root, yes)
+        prune_all(&runtime, &config.install_root, yes)
     } else {
         // Prune specific packages
-        let pkg_repo = PackageRepository::new(&runtime, root.clone());
+        let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
         for repo_str in &repos {
             let spec = repo_str.parse::<RepoSpec>()?;
             prune_package(
@@ -497,6 +494,12 @@ mod tests {
         let package_dir = root.join("owner/repo");
         let current_link = package_dir.join("current");
 
+        // Config::load needs GITHUB_TOKEN
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
         // Package exists
         runtime
             .expect_exists()
@@ -511,7 +514,15 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
             });
 
-        let result = prune(runtime, vec!["owner/repo".to_string()], true, Some(root));
+        let result = prune(
+            runtime,
+            vec!["owner/repo".to_string()],
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -609,6 +620,12 @@ mod tests {
         let mut runtime = MockRuntime::new();
         let root = PathBuf::from("/root");
 
+        // Config::load needs GITHUB_TOKEN
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
         // Root exists but is empty - no packages
         runtime
             .expect_exists()
@@ -619,7 +636,15 @@ mod tests {
             .with(eq(root.clone()))
             .returning(|_| Ok(vec![]));
 
-        let result = prune(runtime, vec![], true, Some(root));
+        let result = prune(
+            runtime,
+            vec![],
+            true,
+            ConfigOverrides {
+                install_root: Some(root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -645,7 +670,7 @@ mod tests {
             .with(eq(root))
             .returning(|_| Ok(vec![]));
 
-        let result = prune(runtime, vec![], true, None); // None triggers default_install_root
+        let result = prune(runtime, vec![], true, ConfigOverrides::default()); // None triggers default_install_root
         assert!(result.is_ok());
     }
 }

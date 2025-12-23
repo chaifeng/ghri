@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::debug;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{
     github::RepoSpec,
@@ -8,7 +8,7 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::paths::default_install_root;
+use super::config::{Config, ConfigOverrides};
 
 /// Convert LinkManager's LinkStatus to display string
 fn format_link_status(status: &LinkStatus) -> String {
@@ -80,17 +80,14 @@ pub(crate) fn print_versioned_links<R: Runtime>(
 }
 
 /// Show link rules for a package
-#[tracing::instrument(skip(runtime, install_root))]
-pub fn links<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBuf>) -> Result<()> {
+#[tracing::instrument(skip(runtime, overrides))]
+pub fn links<R: Runtime>(runtime: R, repo_str: &str, overrides: ConfigOverrides) -> Result<()> {
     debug!("Showing link rules for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let root = match install_root {
-        Some(path) => path,
-        None => default_install_root(&runtime)?,
-    };
-    debug!("Using install root: {:?}", root);
+    let config = Config::load(&runtime, overrides)?;
+    debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, root);
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
 
     if !pkg_repo.is_installed(&spec.repo.owner, &spec.repo.repo) {
         debug!("Package not installed");
@@ -136,6 +133,7 @@ mod tests {
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_format_link_status() {
@@ -204,6 +202,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Check Package Exists (is_installed checks meta.json) ---
 
@@ -215,7 +217,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = links(runtime, "owner/repo", None);
+        let result = links(runtime, "owner/repo", ConfigOverrides::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -235,6 +237,10 @@ mod tests {
         runtime
             .expect_home_dir()
             .returning(|| Some(PathBuf::from("/home/user")));
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 2. Check Package Exists (is_installed) ---
 
@@ -262,7 +268,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = links(runtime, "owner/repo", None);
+        let result = links(runtime, "owner/repo", ConfigOverrides::default());
         assert!(result.is_ok());
     }
 
@@ -276,6 +282,12 @@ mod tests {
         let install_root = PathBuf::from("/custom/root");
         let meta_path = install_root.join("owner/repo/meta.json"); // /custom/root/owner/repo/meta.json
 
+        // Config::load needs GITHUB_TOKEN
+        runtime
+            .expect_env_var()
+            .with(eq("GITHUB_TOKEN"))
+            .returning(|_| Err(std::env::VarError::NotPresent));
+
         // --- 1. Check Package Exists (is_installed) ---
 
         // File exists: /custom/root/owner/repo/meta.json -> false (not installed)
@@ -286,7 +298,14 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = links(runtime, "owner/repo", Some(install_root));
+        let result = links(
+            runtime,
+            "owner/repo",
+            ConfigOverrides {
+                install_root: Some(install_root),
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
