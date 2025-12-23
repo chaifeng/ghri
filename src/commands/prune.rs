@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{debug, info};
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -154,18 +153,9 @@ fn prune_package<R: Runtime>(
     }
 
     // Confirm
-    if !yes {
-        print!("Proceed with pruning? [y/N] ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        let response = input.trim().to_lowercase();
-        if response != "y" && response != "yes" {
-            println!("Skipped.");
-            return Ok(0);
-        }
+    if !yes && !runtime.confirm("Proceed with pruning?")? {
+        println!("Skipped.");
+        return Ok(0);
     }
 
     // Load meta for remove_version
@@ -925,5 +915,146 @@ mod tests {
         let result = prune_package(&runtime, &package_dir, "owner/repo", true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    fn test_prune_package_user_confirms() {
+        // Test prune_package when user confirms (yes=false, confirm returns true)
+
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/pkg");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+        let v1_dir = package_dir.join("v1.0.0");
+
+        // 1. Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // 2. Current version is v2.0.0
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        // 3. List versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(|_| {
+                Ok(vec![
+                    PathBuf::from("/pkg/v1.0.0"),
+                    PathBuf::from("/pkg/v2.0.0"),
+                ])
+            });
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v2.0.0")))
+            .returning(|_| true);
+
+        // 4. User confirms
+        runtime
+            .expect_confirm()
+            .with(eq("Proceed with pruning?"))
+            .returning(|_| Ok(true));
+
+        // 5. Load meta
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v2.0.0".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // 6. remove_version checks version exists
+        runtime
+            .expect_exists()
+            .with(eq(v1_dir.clone()))
+            .returning(|_| true);
+
+        // 7. remove_version removes directory
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(v1_dir))
+            .returning(|_| Ok(()));
+
+        // yes=false triggers confirmation
+        let result = prune_package(&runtime, &package_dir, "owner/repo", false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    fn test_prune_package_user_cancels() {
+        // Test prune_package when user cancels (yes=false, confirm returns false)
+
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/pkg");
+        let current_link = package_dir.join("current");
+
+        // 1. Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // 2. Current version is v2.0.0
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        // 3. List versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(|_| {
+                Ok(vec![
+                    PathBuf::from("/pkg/v1.0.0"),
+                    PathBuf::from("/pkg/v2.0.0"),
+                ])
+            });
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v2.0.0")))
+            .returning(|_| true);
+
+        // 4. User cancels
+        runtime
+            .expect_confirm()
+            .with(eq("Proceed with pruning?"))
+            .returning(|_| Ok(false));
+
+        // yes=false triggers confirmation, user says no
+        let result = prune_package(&runtime, &package_dir, "owner/repo", false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0); // Nothing pruned
     }
 }

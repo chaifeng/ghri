@@ -126,6 +126,10 @@ pub trait Runtime: Send + Sync {
 
     // Privilege
     fn is_privileged(&self) -> bool;
+
+    // User interaction
+    /// Prompt user for confirmation. Returns true if user confirms (y/yes), false otherwise.
+    fn confirm(&self, prompt: &str) -> Result<bool>;
 }
 
 pub struct RealRuntime;
@@ -402,6 +406,18 @@ impl Runtime for RealRuntime {
 
         #[cfg(windows)]
         return is_elevated::is_elevated();
+    }
+
+    fn confirm(&self, prompt: &str) -> Result<bool> {
+        use std::io::{self, Write};
+        print!("{} [y/N] ", prompt);
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        let response = input.trim().to_lowercase();
+        Ok(response == "y" || response == "yes")
     }
 }
 
