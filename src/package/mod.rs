@@ -7,8 +7,10 @@ mod discovery;
 mod link_rule;
 mod meta;
 mod repository;
+mod version;
 
 pub use discovery::find_all_packages;
 pub use link_rule::{LinkRule, VersionedLink};
 pub use meta::{Meta, MetaAsset, MetaRelease};
 pub use repository::PackageRepository;
+pub use version::{VersionConstraint, VersionResolver};
