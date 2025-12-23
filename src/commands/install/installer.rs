@@ -12,7 +12,7 @@ use crate::{
     runtime::Runtime,
 };
 
-use crate::commands::config::Config;
+use crate::commands::config::{Config, InstallOptions};
 use crate::commands::link_check::{LinkStatus, check_links};
 use crate::commands::symlink::update_current_symlink;
 
@@ -37,26 +37,23 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         }
     }
 
-    #[tracing::instrument(skip(self, config, repo, version, filters, original_args))]
+    #[tracing::instrument(skip(self, config, repo, version, options))]
     pub async fn install(
         &self,
         config: &Config,
         repo: &GitHubRepo,
         version: Option<&str>,
-        filters: Vec<String>,
-        pre: bool,
-        yes: bool,
-        original_args: &[String],
+        options: &InstallOptions,
     ) -> Result<()> {
         println!("   resolving {}", repo);
         let (mut meta, meta_path, needs_save) = self.get_or_fetch_meta(config, repo).await?;
 
         // Use saved filters from meta if user didn't provide any
-        let effective_filters = if filters.is_empty() && !meta.filters.is_empty() {
+        let effective_filters = if options.filters.is_empty() && !meta.filters.is_empty() {
             info!("Using saved filters from meta: {:?}", meta.filters);
             meta.filters.clone()
         } else {
-            filters
+            options.filters.clone()
         };
 
         let meta_release = if let Some(ver) = version {
@@ -81,7 +78,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
                             .join(", ")
                     )
                 })?
-        } else if pre {
+        } else if options.pre {
             // Get latest release including pre-releases
             meta.get_latest_release()
                 .ok_or_else(|| anyhow::anyhow!("No release found for {}.", repo))?
@@ -105,7 +102,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
         // Get download plan and show confirmation
         let plan = get_download_plan(&release, &effective_filters)?;
 
-        if !yes {
+        if !options.yes {
             self.show_install_plan(
                 repo,
                 &release,
@@ -143,7 +140,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Downloader> Installe
             &self.extractor,
             Arc::clone(&cleanup_ctx),
             &effective_filters,
-            original_args,
+            &options.original_args,
         )
         .await;
 
@@ -387,6 +384,16 @@ mod tests {
         }
     }
 
+    fn default_install_options() -> InstallOptions {
+        InstallOptions {
+            filters: vec![],
+            pre: false,
+            yes: true,
+            prune: false,
+            original_args: vec![],
+        }
+    }
+
     // Tests for get_target_dir and update_current_symlink are now in paths.rs and symlink.rs
 
     #[cfg(not(windows))]
@@ -535,7 +542,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, extractor);
         installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -676,7 +683,7 @@ mod tests {
 
         // Should fail because no stable release found
         let result = installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await;
         assert!(result.is_err());
         assert!(
@@ -737,7 +744,7 @@ mod tests {
 
         // Try to install version "v999.0.0" which doesn't exist
         let result = installer
-            .install(&config, &repo, Some("v999.0.0"), vec![], false, true, &[])
+            .install(&config, &repo, Some("v999.0.0"), &default_install_options())
             .await;
 
         // Should fail because requested version not found
@@ -846,9 +853,11 @@ mod tests {
         let installer = Installer::new(runtime, github, downloader, extractor);
 
         // With pre=true, should succeed and install the pre-release
-        let result = installer
-            .install(&config, &repo, None, vec![], true, true, &[])
-            .await;
+        let options = InstallOptions {
+            pre: true,
+            ..default_install_options()
+        };
+        let result = installer.install(&config, &repo, None, &options).await;
         assert!(result.is_ok());
     }
 
@@ -1021,7 +1030,7 @@ mod tests {
 
         // Should succeed despite metadata save failure (it's just a warning)
         let result = installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await;
         assert!(result.is_ok());
     }
@@ -1135,7 +1144,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
         installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -1336,16 +1345,12 @@ mod tests {
         let installer = Installer::new(runtime, github, downloader, MockExtractor::new());
 
         // User provides NEW filter, should override saved "*old-filter*"
+        let options = InstallOptions {
+            filters: vec!["*new-user-filter*".to_string()],
+            ..default_install_options()
+        };
         installer
-            .install(
-                &config,
-                &repo,
-                None,
-                vec!["*new-user-filter*".to_string()],
-                false,
-                true,
-                &[],
-            )
+            .install(&config, &repo, None, &options)
             .await
             .unwrap();
     }
@@ -1432,7 +1437,7 @@ mod tests {
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -1513,7 +1518,7 @@ mod tests {
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer
-            .install(&config, &repo, None, vec![], false, true, &[])
+            .install(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }

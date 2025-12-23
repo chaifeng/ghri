@@ -51,15 +51,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Download
         services.extractor,
     );
     installer
-        .install(
-            config,
-            &spec.repo,
-            spec.version.as_deref(),
-            options.filters,
-            options.pre,
-            options.yes,
-            &options.original_args,
-        )
+        .install(config, &spec.repo, spec.version.as_deref(), &options)
         .await?;
 
     // Prune old versions if requested

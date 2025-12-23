@@ -6,7 +6,7 @@ use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, find_all_packages};
 use crate::runtime::Runtime;
 
-use super::config::{Config, ConfigOverrides, UpgradeOptions};
+use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 use super::install::Installer;
 use super::prune::prune_package_dir;
 use super::services::Services;
@@ -89,16 +89,15 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: Extractor, D: Down
 
         // Install the new version using saved filters from meta
         let package_dir = config.package_dir(&repo.owner, &repo.repo);
+        let install_options = InstallOptions {
+            filters: vec![], // Empty filters - installer will use saved filters from meta
+            pre: options.pre,
+            yes: options.yes,
+            prune: false,          // Handle prune separately below
+            original_args: vec![], // No original args needed for upgrade
+        };
         if let Err(e) = installer
-            .install(
-                config,
-                &repo,
-                Some(&latest.version),
-                vec![], // Empty filters - installer will use saved filters from meta
-                options.pre,
-                options.yes,
-                &[], // No original args needed for upgrade
-            )
+            .install(config, &repo, Some(&latest.version), &install_options)
             .await
         {
             eprintln!("   failed to upgrade {}: {}", repo, e);

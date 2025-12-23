@@ -1,9 +1,9 @@
 pub mod archive;
-pub mod asset;
 pub mod cleanup;
 pub mod commands;
 pub mod download;
 pub mod github;
 pub mod http;
 pub mod package;
+pub mod platform;
 pub mod runtime;
