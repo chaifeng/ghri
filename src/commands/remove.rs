@@ -9,6 +9,7 @@ use crate::{
     runtime::{is_path_under, Runtime},
 };
 
+use super::link_check::{check_links, check_versioned_links, check_versioned_links_for_version};
 use super::paths::default_install_root;
 
 /// Remove a package or specific version
@@ -68,7 +69,7 @@ pub fn remove<R: Runtime>(
         
         // Show removal plan and confirm
         if !yes {
-            show_package_removal_plan(&spec.repo, &package_dir, meta.as_ref());
+            show_package_removal_plan(&runtime, &spec.repo, &package_dir, meta.as_ref());
             if !confirm_remove()? {
                 println!("Removal cancelled.");
                 return Ok(());
@@ -91,7 +92,7 @@ pub fn remove<R: Runtime>(
     Ok(())
 }
 
-fn show_package_removal_plan(repo: &crate::github::GitHubRepo, package_dir: &Path, meta: Option<&Meta>) {
+fn show_package_removal_plan<R: Runtime>(runtime: &R, repo: &crate::github::GitHubRepo, package_dir: &Path, meta: Option<&Meta>) {
     println!();
     println!("=== Removal Plan ===");
     println!();
@@ -102,14 +103,40 @@ fn show_package_removal_plan(repo: &crate::github::GitHubRepo, package_dir: &Pat
     println!("  [DEL] {}", package_dir.display());
     
     if let Some(meta) = meta {
-        if !meta.links.is_empty() || !meta.versioned_links.is_empty() {
+        // Check regular links
+        let (valid_links, invalid_links) = check_links(runtime, &meta.links, package_dir);
+        
+        // Check versioned links
+        let (valid_versioned, invalid_versioned) = check_versioned_links(runtime, &meta.versioned_links, package_dir);
+        
+        // Combine valid links (only those that actually exist and point to package)
+        let all_valid: Vec<_> = valid_links
+            .iter()
+            .chain(valid_versioned.iter())
+            .filter(|l| l.status.is_valid())
+            .collect();
+        
+        // Combine invalid links
+        let all_invalid: Vec<_> = invalid_links
+            .iter()
+            .chain(invalid_versioned.iter())
+            .chain(valid_links.iter().filter(|l| l.status.will_be_created()))
+            .chain(valid_versioned.iter().filter(|l| l.status.will_be_created()))
+            .collect();
+        
+        if !all_valid.is_empty() {
             println!();
             println!("Symlinks to remove:");
-            for link in &meta.links {
+            for link in &all_valid {
                 println!("  [DEL] {}", link.dest.display());
             }
-            for link in &meta.versioned_links {
-                println!("  [DEL] {}", link.dest.display());
+        }
+        
+        if !all_invalid.is_empty() {
+            println!();
+            println!("Symlinks to skip (will not be removed):");
+            for link in &all_invalid {
+                println!("  [SKIP] {} ({})", link.dest.display(), link.status.reason());
             }
         }
     }
@@ -159,33 +186,43 @@ fn show_version_removal_plan<R: Runtime>(
     
     // Show links that will be removed
     if let Some(meta) = meta {
-        let mut links_to_remove = Vec::new();
-        
         // Check regular links pointing to this version
-        for rule in &meta.links {
-            if runtime.is_symlink(&rule.dest) {
-                if let Ok(resolved_target) = runtime.resolve_link(&rule.dest) {
-                    if is_path_under(&resolved_target, &version_dir) {
-                        links_to_remove.push(rule.dest.clone());
-                    }
-                }
-            }
-        }
+        let (valid_links, _) = check_links(runtime, &meta.links, &version_dir);
+        let regular_valid: Vec<_> = valid_links.iter().filter(|l| l.status.is_valid()).collect();
         
         // Check versioned links for this version
-        for link in &meta.versioned_links {
-            if link.version == version {
-                links_to_remove.push(link.dest.clone());
-            }
-        }
+        let (valid_versioned, invalid_versioned) = check_versioned_links_for_version(
+            runtime,
+            &meta.versioned_links,
+            version,
+            &version_dir,
+        );
+        let versioned_valid: Vec<_> = valid_versioned.iter().filter(|l| l.status.is_valid()).collect();
         
-        if !links_to_remove.is_empty() {
+        // Combine all valid links
+        let all_valid: Vec<_> = regular_valid.iter().chain(versioned_valid.iter()).collect();
+        
+        if !all_valid.is_empty() {
             if !is_current {
                 println!();
                 println!("Symlinks to remove:");
             }
-            for dest in &links_to_remove {
-                println!("  [DEL] {}", dest.display());
+            for link in &all_valid {
+                println!("  [DEL] {}", link.dest.display());
+            }
+        }
+        
+        // Show invalid versioned links (only versioned links matter here, regular links pointing elsewhere are fine)
+        let all_invalid: Vec<_> = invalid_versioned
+            .iter()
+            .chain(valid_versioned.iter().filter(|l| l.status.will_be_created()))
+            .collect();
+        
+        if !all_invalid.is_empty() {
+            println!();
+            println!("Symlinks to skip (will not be removed):");
+            for link in &all_invalid {
+                println!("  [SKIP] {} ({})", link.dest.display(), link.status.reason());
             }
         }
     }
