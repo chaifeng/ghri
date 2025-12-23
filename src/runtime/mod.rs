@@ -75,6 +75,7 @@ pub trait Runtime: Send + Sync {
     // Directories
     fn home_dir(&self) -> Option<PathBuf>;
     fn config_dir(&self) -> Option<PathBuf>;
+    fn temp_dir(&self) -> PathBuf;
 
     // Privilege
     fn is_privileged(&self) -> bool;
@@ -187,6 +188,10 @@ impl Runtime for RealRuntime {
 
     fn config_dir(&self) -> Option<PathBuf> {
         self.config_dir_impl()
+    }
+
+    fn temp_dir(&self) -> PathBuf {
+        self.temp_dir_impl()
     }
 
     fn is_privileged(&self) -> bool {

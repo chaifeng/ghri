@@ -22,6 +22,11 @@ impl RealRuntime {
     }
 
     #[tracing::instrument(skip(self))]
+    pub(crate) fn temp_dir_impl(&self) -> PathBuf {
+        env::temp_dir()
+    }
+
+    #[tracing::instrument(skip(self))]
     pub(crate) fn is_privileged_impl(&self) -> bool {
         #[cfg(unix)]
         return nix::unistd::geteuid().as_raw() == 0;
@@ -45,6 +50,10 @@ mod tests {
         // Test home_dir - should exist for most systems
         let home = runtime.home_dir();
         assert!(home.is_some() || cfg!(target_os = "linux")); // CI might not have home
+
+        // Test temp_dir - should always return a valid path
+        let temp = runtime.temp_dir();
+        assert!(temp.is_absolute() || cfg!(windows));
 
         // Test is_privileged - should work without panic
         let _ = runtime.is_privileged();

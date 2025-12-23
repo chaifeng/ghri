@@ -395,6 +395,9 @@ mod tests {
         let url = server.url();
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup Paths ---
         let root = PathBuf::from("/home/user/.ghri");
@@ -539,6 +542,9 @@ mod tests {
     async fn test_get_or_fetch_meta_invalid_on_disk() {
         // Test that invalid meta.json on disk triggers re-fetch from GitHub API
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -614,6 +620,9 @@ mod tests {
     async fn test_install_no_stable_release() {
         // Test that install fails when only pre-release versions are available
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- 1. Fetch Metadata (no cached meta) ---
 
@@ -681,6 +690,9 @@ mod tests {
         // Test that install fails with descriptive error when specified version doesn't exist
         // Simplified: mock cached meta.json instead of GitHub API
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Mock cached meta.json with available versions ---
 
@@ -751,6 +763,9 @@ mod tests {
         // Test that --pre flag allows selecting pre-release when no stable release exists
         // This test verifies that with pre=true, get_latest_release() is used instead of get_latest_stable_release()
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup Runtime Mocks ---
 
@@ -845,6 +860,9 @@ mod tests {
     async fn test_get_or_fetch_meta_fetch_fail() {
         // Test that get_or_fetch_meta fails when GitHub API returns error
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- 1. Check for Existing Metadata ---
 
@@ -918,6 +936,9 @@ mod tests {
         let url = server.url();
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- 1. Fetch Metadata (no cached meta) ---
 
@@ -1009,6 +1030,9 @@ mod tests {
     async fn test_get_or_fetch_meta_exists_interaction() {
         // Test that valid cached meta.json is used without fetching from API
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1045,6 +1069,9 @@ mod tests {
     async fn test_install_uses_existing_meta() {
         // Test that install uses cached metadata and skips API fetch
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let github = MockGetReleases::new();
 
         // --- 1. Load Existing Metadata (cache hit) ---
@@ -1115,6 +1142,9 @@ mod tests {
     async fn test_run() {
         // Test the run() entry point with cached metadata
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1175,6 +1205,9 @@ mod tests {
     async fn test_update_atomic_safety() {
         // Test that metadata is saved atomically (write to .tmp then rename)
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup Write Sequence ---
         // Must write to .tmp file FIRST, then rename to final .json file
@@ -1223,6 +1256,9 @@ mod tests {
         // Test that user-provided --filter args completely override saved filters in meta.json
         // When user specifies filters, meta.json filters should be ignored
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let github = MockGetReleases::new();
 
         // --- Setup Paths ---
@@ -1315,6 +1351,9 @@ mod tests {
     async fn test_install_uses_saved_filters_when_user_provides_none() {
         // Test that saved filters from meta.json are used when user doesn't provide any
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let github = MockGetReleases::new();
 
         // --- Setup Paths ---
@@ -1402,6 +1441,9 @@ mod tests {
         // "user wants to clear filters". This test documents the current behavior where
         // empty filters from user will use saved filters.
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let github = MockGetReleases::new();
 
         // --- Setup Paths ---

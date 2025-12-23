@@ -8,7 +8,11 @@ use std::io::{self, BufRead, Write};
 
 /// Core, testable implementation that reads from any BufRead and writes to any Write.
 /// This is intentionally free-standing so tests can exercise it without needing a RealRuntime.
-pub(crate) fn confirm_with_io<R: BufRead, W: Write>(prompt: &str, input: &mut R, output: &mut W) -> Result<bool> {
+pub(crate) fn confirm_with_io<R: BufRead, W: Write>(
+    prompt: &str,
+    input: &mut R,
+    output: &mut W,
+) -> Result<bool> {
     write!(output, "{} [y/N] ", prompt)?;
     output.flush()?;
 

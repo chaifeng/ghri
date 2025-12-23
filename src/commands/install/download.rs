@@ -218,7 +218,7 @@ async fn download_and_extract_tarball<R: Runtime + 'static, E: Extractor, D: Dow
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = runtime.temp_dir();
     let temp_file_path = temp_dir.join(format!("{}-{}.tar.gz", repo.repo, release.tag_name));
 
     println!(" downloading {} {} (source)", &repo, release.tag_name);
@@ -384,7 +384,7 @@ async fn download_all_assets<R: Runtime + 'static, E: Extractor, D: Downloader>(
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
 ) -> Result<()> {
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = runtime.temp_dir();
     let mut temp_files: Vec<PathBuf> = Vec::new();
 
     let assets_count: usize = release.assets.len();
@@ -630,6 +630,9 @@ mod tests {
         // Test successful installation: creates directory, downloads, and extracts
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target"); // Installation target directory
@@ -710,6 +713,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let repo = GitHubRepo {
@@ -794,6 +800,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let repo = GitHubRepo {
@@ -863,6 +872,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let repo = GitHubRepo {
@@ -954,6 +966,9 @@ mod tests {
         // Test that installation is skipped when target directory already exists
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -997,6 +1012,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -1113,6 +1131,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -1205,6 +1226,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -1305,6 +1329,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -1390,6 +1417,9 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target");
@@ -1495,6 +1525,9 @@ mod tests {
         // instead of falling back to downloading source tarball
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target"); // Installation target directory
@@ -1570,6 +1603,9 @@ mod tests {
         // the error message includes a hint to use wildcards
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
 
         // --- Setup ---
         let target = PathBuf::from("/target"); // Installation target directory
@@ -1654,6 +1690,9 @@ mod tests {
         // Uses a minimal valid ELF64 header
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal valid ELF64 header (64 bytes)
@@ -1686,6 +1725,9 @@ mod tests {
         // Even though it's a valid binary, it's for macOS, not Linux
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal Mach-O 64-bit header (32 bytes)
@@ -1716,6 +1758,9 @@ mod tests {
         // Uses a minimal valid Mach-O 64-bit header
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal Mach-O 64-bit header (32 bytes)
@@ -1745,6 +1790,9 @@ mod tests {
         // Uses a minimal valid Fat binary header
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal Fat binary header (8 bytes + arch entries)
@@ -1774,6 +1822,9 @@ mod tests {
         // Even though it's a valid binary, it's for Linux, not macOS
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal valid ELF64 header (64 bytes)
@@ -1807,6 +1858,9 @@ mod tests {
         // Script starts with "#!" which should not be treated as native binary
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/script.sh");
 
         // Shebang for shell script
@@ -1825,6 +1879,9 @@ mod tests {
         // Test that plain text files are NOT detected as native executables
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/readme.txt");
 
         let text_content = b"This is a readme file".to_vec();
@@ -1842,6 +1899,9 @@ mod tests {
         // Test that empty files are NOT detected as native executables
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/empty");
 
         // Empty file (read_exact will fail)
@@ -1860,6 +1920,9 @@ mod tests {
         // Test that non-existent files return false (not an error)
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/nonexistent");
 
         runtime
@@ -1876,6 +1939,9 @@ mod tests {
         // Test that set_executable_if_binary sets 0o755 for ELF binaries on Linux
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal valid ELF64 header (64 bytes)
@@ -1915,6 +1981,9 @@ mod tests {
         // Test that set_executable_if_binary sets 0o755 for Mach-O binaries on macOS
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal Mach-O 64-bit header (32 bytes)
@@ -1952,6 +2021,9 @@ mod tests {
         // ELF is not native to macOS, so no executable permission should be set
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal valid ELF64 header (64 bytes)
@@ -1988,6 +2060,9 @@ mod tests {
         // Mach-O is not native to Linux, so no executable permission should be set
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/binary");
 
         // Minimal Mach-O 64-bit header (32 bytes)
@@ -2020,6 +2095,9 @@ mod tests {
         // Test that set_executable_if_binary does NOT set permission for text files
 
         let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
         let path = PathBuf::from("/test/readme.txt");
 
         let text_content = b"plain text".to_vec();
