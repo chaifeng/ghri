@@ -135,6 +135,10 @@ pub struct RemoveArgs {
     /// Force removal without confirmation
     #[arg(long, short)]
     pub force: bool,
+
+    /// Skip confirmation prompt
+    #[arg(long = "yes", short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -163,7 +167,7 @@ async fn main() -> Result<()> {
         Commands::Link(args) => ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?,
         Commands::Unlink(args) => ghri::commands::unlink(runtime, &args.repo, args.dest, args.all, cli.install_root)?,
         Commands::Links(args) => ghri::commands::links(runtime, &args.repo, cli.install_root)?,
-        Commands::Remove(args) => ghri::commands::remove(runtime, &args.repo, args.force, cli.install_root)?,
+        Commands::Remove(args) => ghri::commands::remove(runtime, &args.repo, args.force, args.yes, cli.install_root)?,
         Commands::Show(args) => ghri::commands::show(runtime, &args.repo, cli.install_root)?,
     }
     Ok(())

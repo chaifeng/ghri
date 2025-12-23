@@ -1,5 +1,6 @@
 use anyhow::Result;
 use log::{debug, info};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -16,6 +17,7 @@ pub fn remove<R: Runtime>(
     runtime: R,
     repo_str: &str,
     force: bool,
+    yes: bool,
     install_root: Option<PathBuf>,
 ) -> Result<()> {
     debug!("Removing {} force={}", repo_str, force);
@@ -49,10 +51,30 @@ pub fn remove<R: Runtime>(
     if let Some(ref version) = spec.version {
         // Remove specific version only
         debug!("Removing specific version: {}", version);
+        
+        // Show removal plan and confirm
+        if !yes {
+            show_version_removal_plan(&runtime, &spec.repo, &package_dir, version, meta.as_ref())?;
+            if !confirm_remove()? {
+                println!("Removal cancelled.");
+                return Ok(());
+            }
+        }
+        
         remove_version(&runtime, &package_dir, version, meta.as_ref(), force)?;
     } else {
         // Remove entire package
         debug!("Removing entire package");
+        
+        // Show removal plan and confirm
+        if !yes {
+            show_package_removal_plan(&spec.repo, &package_dir, meta.as_ref());
+            if !confirm_remove()? {
+                println!("Removal cancelled.");
+                return Ok(());
+            }
+        }
+        
         remove_package(&runtime, &package_dir, meta.as_ref(), force)?;
     }
 
@@ -67,6 +89,120 @@ pub fn remove<R: Runtime>(
     }
 
     Ok(())
+}
+
+fn show_package_removal_plan(repo: &crate::github::GitHubRepo, package_dir: &Path, meta: Option<&Meta>) {
+    println!();
+    println!("=== Removal Plan ===");
+    println!();
+    println!("Package: {}", repo);
+    println!();
+    
+    println!("Directories to remove:");
+    println!("  [DEL] {}", package_dir.display());
+    
+    if let Some(meta) = meta {
+        if !meta.links.is_empty() || !meta.versioned_links.is_empty() {
+            println!();
+            println!("Symlinks to remove:");
+            for link in &meta.links {
+                println!("  [DEL] {}", link.dest.display());
+            }
+            for link in &meta.versioned_links {
+                println!("  [DEL] {}", link.dest.display());
+            }
+        }
+    }
+    println!();
+}
+
+fn show_version_removal_plan<R: Runtime>(
+    runtime: &R,
+    repo: &crate::github::GitHubRepo,
+    package_dir: &Path,
+    version: &str,
+    meta: Option<&Meta>,
+) -> Result<()> {
+    let version_dir = package_dir.join(version);
+    let current_link = package_dir.join("current");
+    
+    // Check if this is the current version
+    let is_current = if runtime.is_symlink(&current_link) {
+        if let Ok(target) = runtime.read_link(&current_link) {
+            let target_version = target.file_name().and_then(|s| s.to_str());
+            target_version == Some(version)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    
+    println!();
+    println!("=== Removal Plan ===");
+    println!();
+    println!("Package: {}", repo);
+    println!("Version: {}", version);
+    if is_current {
+        println!("  (This is the current version!)");
+    }
+    println!();
+    
+    println!("Directories to remove:");
+    println!("  [DEL] {}", version_dir.display());
+    
+    if is_current {
+        println!();
+        println!("Symlinks to remove:");
+        println!("  [DEL] {}/current", package_dir.display());
+    }
+    
+    // Show links that will be removed
+    if let Some(meta) = meta {
+        let mut links_to_remove = Vec::new();
+        
+        // Check regular links pointing to this version
+        for rule in &meta.links {
+            if runtime.is_symlink(&rule.dest) {
+                if let Ok(resolved_target) = runtime.resolve_link(&rule.dest) {
+                    if is_path_under(&resolved_target, &version_dir) {
+                        links_to_remove.push(rule.dest.clone());
+                    }
+                }
+            }
+        }
+        
+        // Check versioned links for this version
+        for link in &meta.versioned_links {
+            if link.version == version {
+                links_to_remove.push(link.dest.clone());
+            }
+        }
+        
+        if !links_to_remove.is_empty() {
+            if !is_current {
+                println!();
+                println!("Symlinks to remove:");
+            }
+            for dest in &links_to_remove {
+                println!("  [DEL] {}", dest.display());
+            }
+        }
+    }
+    
+    println!();
+    Ok(())
+}
+
+fn confirm_remove() -> Result<bool> {
+    print!("Proceed with removal? [y/N] ");
+    io::stdout().flush()?;
+    
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    
+    let response = input.trim().to_lowercase();
+    Ok(response == "y" || response == "yes")
 }
 
 /// Remove a specific version of a package
@@ -324,7 +460,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, Some(root));
+        let result = remove(runtime, "owner/repo", false, true, Some(root));
         assert!(result.is_ok());
     }
 
@@ -428,7 +564,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo@v1", false, Some(root));
+        let result = remove(runtime, "owner/repo@v1", false, true, Some(root));
         assert!(result.is_ok());
     }
 
@@ -495,7 +631,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // Should fail without --force since v1 is the current version
-        let result = remove(runtime, "owner/repo@v1", false, Some(root));
+        let result = remove(runtime, "owner/repo@v1", false, true, Some(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--force"));
     }
@@ -521,7 +657,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = remove(runtime, "owner/repo", false, Some(root));
+        let result = remove(runtime, "owner/repo", false, true, Some(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -603,7 +739,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, Some(root));
+        let result = remove(runtime, "owner/repo", false, true, Some(root));
         assert!(result.is_ok());
     }
 
@@ -684,7 +820,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(runtime, "owner/repo", false, Some(root));
+        let result = remove(runtime, "owner/repo", false, true, Some(root));
         assert!(result.is_ok());
     }
 }

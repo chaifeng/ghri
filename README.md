@@ -242,12 +242,15 @@ ghri links chaifeng/zidr
 
 Remove an installed package or a specific version.
 
+Before removing, ghri shows you what files and directories will be deleted. You need to confirm before proceeding.
+
 ```bash
 ghri remove <OWNER/REPO[@VERSION]> [OPTIONS]
 ```
 
 **Options:**
-- `-f, --force` - Force removal without confirmation
+- `-f, --force` - Force removal of current version
+- `-y, --yes` - Skip confirmation prompt
 
 **Examples:**
 
@@ -258,8 +261,11 @@ ghri remove chaifeng/zidr
 # Remove a specific version
 ghri remove chaifeng/zidr@v0.1.0
 
-# Force remove
-ghri remove bach-sh/bach --force
+# Force remove current version
+ghri remove chaifeng/zidr@v0.1.0 --force
+
+# Skip confirmation (useful for scripts)
+ghri remove bach-sh/bach -y
 ```
 
 ## ⚙️ Configuration

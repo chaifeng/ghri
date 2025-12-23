@@ -896,7 +896,7 @@ fn test_remove_package() {
 
     // Remove package
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove")
+        .arg("remove").arg("-y")
         .arg("test/removeme")
         .arg("--root")
         .arg(install_root)
@@ -984,7 +984,7 @@ fn test_remove_specific_version() {
 
     // Remove v1 (not current, should work without --force)
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove")
+        .arg("remove").arg("-y")
         .arg("test/multiversion@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -1042,7 +1042,7 @@ fn test_remove_current_version_requires_force() {
 
     // Try to remove current version without --force
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove")
+        .arg("remove").arg("-y")
         .arg("test/forceme@v1.0.0")
         .arg("--root")
         .arg(install_root)
@@ -1052,7 +1052,7 @@ fn test_remove_current_version_requires_force() {
 
     // Remove with --force
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove")
+        .arg("remove").arg("-y")
         .arg("test/forceme@v1.0.0")
         .arg("--force")
         .arg("--root")
@@ -1070,7 +1070,7 @@ fn test_remove_nonexistent_package_fails() {
     let install_root = root_dir.path();
 
     Command::new(cargo::cargo_bin!("ghri"))
-        .arg("remove")
+        .arg("remove").arg("-y")
         .arg("nonexistent/package")
         .arg("--root")
         .arg(install_root)
