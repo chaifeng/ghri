@@ -365,6 +365,79 @@ ghri install chaifeng/zidr@v0.2.0
 ghri install chaifeng/zidr@v0.1.0
 ```
 
+## 👨‍💻 Development
+
+### Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to ensure code quality. The hooks verify:
+- ✅ Code compiles without warnings
+- ✅ Clippy lints pass
+- ✅ Code formatting is correct
+- ✅ Tests pass
+
+#### Setup
+
+1. Install pre-commit:
+   ```bash
+   # macOS
+   brew install pre-commit
+   
+   # or using pip
+   pip install pre-commit
+   ```
+
+2. Install the git hooks:
+   ```bash
+   pre-commit install
+   ```
+
+3. (Optional) Run hooks manually on all files:
+   ```bash
+   pre-commit run --all-files
+   ```
+
+Now, every time you `git commit`, the hooks will run automatically. If any check fails, the commit will be blocked until you fix the issues.
+
+#### What Each Hook Does
+
+- **cargo check** - Compiles with `-D warnings` to treat all warnings as errors
+- **cargo clippy** - Runs Rust linter with `-D warnings`
+- **cargo fmt** - Checks code formatting
+- **cargo test** - Runs all tests
+
+#### Skip Specific Hooks
+
+To temporarily skip specific hooks during commit:
+
+```bash
+# Skip only cargo-clippy and cargo-fmt
+SKIP=cargo-clippy,cargo-fmt git commit -m "your message"
+
+# Skip only cargo-test (useful for quick WIP commits)
+SKIP=cargo-test git commit -m "WIP: work in progress"
+
+# Skip all pre-commit hooks (not recommended)
+git commit --no-verify -m "your message"
+```
+
+### Manual Verification
+
+If you prefer not to use pre-commit, ensure your code passes these checks before committing:
+
+```bash
+# Check compilation without warnings
+RUSTFLAGS="-D warnings" cargo check --all-targets --all-features
+
+# Run clippy
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Check formatting
+cargo fmt --all -- --check
+
+# Run tests
+cargo test --all-features
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! Feel free to open issues or pull requests.

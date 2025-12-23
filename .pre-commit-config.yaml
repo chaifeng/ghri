@@ -1,0 +1,39 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+repos:
+  # Rust formatting and linting
+  - repo: local
+    hooks:
+      # Check that code compiles without warnings
+      - id: cargo-check-no-warnings
+        name: cargo check (no warnings)
+        entry: bash -c 'RUSTFLAGS="-D warnings" cargo check --all-targets --all-features'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        
+      # Run cargo clippy with warnings as errors
+      - id: cargo-clippy
+        name: cargo clippy (no warnings)
+        entry: bash -c 'cargo clippy --all-targets --all-features -- -D warnings'
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # Format check
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+        args: ['--check']
+
+      # Run tests
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
