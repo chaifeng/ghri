@@ -40,6 +40,9 @@ enum Commands {
     /// Update release information for all installed packages
     Update(UpdateArgs),
 
+    /// Upgrade packages to the latest version
+    Upgrade(UpgradeArgs),
+
     /// List all installed packages
     List(ListArgs),
 
@@ -88,6 +91,21 @@ pub struct UpdateArgs {
     /// Packages to update (default: all installed packages)
     #[arg(value_name = "OWNER/REPO")]
     pub repos: Vec<String>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct UpgradeArgs {
+    /// Packages to upgrade (default: all installed packages)
+    #[arg(value_name = "OWNER/REPO")]
+    pub repos: Vec<String>,
+
+    /// Allow upgrading to pre-release versions
+    #[arg(long = "pre")]
+    pub pre: bool,
+
+    /// Skip confirmation prompt
+    #[arg(long = "yes", short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -174,6 +192,17 @@ async fn main() -> Result<()> {
         Commands::Update(args) => {
             ghri::commands::update(runtime, cli.install_root, None, args.repos).await?
         }
+        Commands::Upgrade(args) => {
+            ghri::commands::upgrade(
+                runtime,
+                cli.install_root,
+                None,
+                args.repos,
+                args.pre,
+                args.yes,
+            )
+            .await?
+        }
         Commands::List(_args) => ghri::commands::list(runtime, cli.install_root)?,
         Commands::Link(args) => {
             ghri::commands::link(runtime, &args.repo, args.dest, cli.install_root)?
@@ -212,6 +241,52 @@ mod tests {
     fn test_cli_update_parsing() {
         let cli = Cli::try_parse_from(["ghri", "update"]).unwrap();
         assert_eq!(cli.install_root, None);
+    }
+
+    #[test]
+    fn test_cli_upgrade_parsing() {
+        let cli = Cli::try_parse_from(["ghri", "upgrade"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => {
+                assert!(args.repos.is_empty());
+                assert!(!args.pre);
+                assert!(!args.yes);
+            }
+            _ => panic!("Expected Upgrade command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_upgrade_with_repos() {
+        let cli = Cli::try_parse_from(["ghri", "upgrade", "owner/repo"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => {
+                assert_eq!(args.repos, vec!["owner/repo"]);
+            }
+            _ => panic!("Expected Upgrade command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_upgrade_with_pre_flag() {
+        let cli = Cli::try_parse_from(["ghri", "upgrade", "--pre"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => {
+                assert!(args.pre);
+            }
+            _ => panic!("Expected Upgrade command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_upgrade_with_yes_flag() {
+        let cli = Cli::try_parse_from(["ghri", "upgrade", "-y"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => {
+                assert!(args.yes);
+            }
+            _ => panic!("Expected Upgrade command"),
+        }
     }
 
     #[test]

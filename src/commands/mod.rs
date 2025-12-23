@@ -10,6 +10,7 @@ mod show;
 mod symlink;
 mod unlink;
 mod update;
+mod upgrade;
 
 pub use install::{Installer, install, run};
 pub(crate) use link::determine_link_target;
@@ -21,3 +22,4 @@ pub use remove::remove;
 pub use show::show;
 pub use unlink::unlink;
 pub use update::update;
+pub use upgrade::upgrade;
