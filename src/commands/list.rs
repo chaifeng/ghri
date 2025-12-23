@@ -2,10 +2,7 @@ use anyhow::Result;
 use log::debug;
 use std::path::PathBuf;
 
-use crate::{
-    package::{Meta, find_all_packages},
-    runtime::Runtime,
-};
+use crate::{package::PackageRepository, runtime::Runtime};
 
 use super::paths::default_install_root;
 
@@ -19,28 +16,23 @@ pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()>
 
     debug!("Listing packages from {:?}", root);
 
-    let meta_files = find_all_packages(&runtime, &root)?;
-    if meta_files.is_empty() {
+    let repo = PackageRepository::new(&runtime, root);
+    let packages = repo.find_all_with_meta()?;
+
+    if packages.is_empty() {
         println!("No packages installed.");
         return Ok(());
     }
 
-    debug!("Found {} package(s)", meta_files.len());
+    debug!("Found {} package(s)", packages.len());
 
-    for meta_path in meta_files {
-        match Meta::load(&runtime, &meta_path) {
-            Ok(meta) => {
-                let version = if meta.current_version.is_empty() {
-                    "(unknown)".to_string()
-                } else {
-                    meta.current_version.clone()
-                };
-                println!("{} {}", meta.name, version);
-            }
-            Err(e) => {
-                debug!("Failed to load meta from {:?}: {}", meta_path, e);
-            }
-        }
+    for (_meta_path, meta) in packages {
+        let version = if meta.current_version.is_empty() {
+            "(unknown)".to_string()
+        } else {
+            meta.current_version.clone()
+        };
+        println!("{} {}", meta.name, version);
     }
 
     Ok(())
@@ -49,6 +41,7 @@ pub fn list<R: Runtime>(runtime: R, install_root: Option<PathBuf>) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
 
