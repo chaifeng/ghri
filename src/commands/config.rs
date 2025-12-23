@@ -101,11 +101,6 @@ impl Config {
     pub fn version_dir(&self, owner: &str, repo: &str, version: &str) -> PathBuf {
         self.package_dir(owner, repo).join(version)
     }
-
-    /// Get the meta.json path for a given repo
-    pub fn meta_path(&self, owner: &str, repo: &str) -> PathBuf {
-        self.package_dir(owner, repo).join("meta.json")
-    }
 }
 
 /// Options for the install command (behavior parameters)
@@ -231,10 +226,6 @@ mod tests {
         assert_eq!(
             config.version_dir("owner", "repo", "v1.0.0"),
             PathBuf::from("/root/owner/repo/v1.0.0")
-        );
-        assert_eq!(
-            config.meta_path("owner", "repo"),
-            PathBuf::from("/root/owner/repo/meta.json")
         );
     }
 }

@@ -311,7 +311,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         config: &Config,
         repo: &GitHubRepo,
     ) -> Result<(Meta, std::path::PathBuf, bool)> {
-        let meta_path = config.meta_path(&repo.owner, &repo.repo);
+        let meta_path = config.package_dir(&repo.owner, &repo.repo).join("meta.json");
 
         if self.runtime.exists(&meta_path) {
             match Meta::load(&self.runtime, &meta_path) {
