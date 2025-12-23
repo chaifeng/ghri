@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use crate::{
     github::LinkSpec,
-    package::{LinkManager, LinkRule, PackageRepository},
-    runtime::{Runtime, is_path_under},
+    package::{LinkManager, LinkRule, PackageRepository, RemoveLinkResult},
+    runtime::Runtime,
 };
 
 use super::paths::default_install_root;
@@ -126,77 +126,19 @@ pub fn unlink<R: Runtime>(
     for rule in &rules_to_remove {
         debug!("Processing rule: {:?}", rule);
 
-        // Try to remove the symlink
-        if runtime.exists(&rule.dest) || runtime.is_symlink(&rule.dest) {
-            if runtime.is_symlink(&rule.dest) {
-                // Security check: verify the symlink points to a path within the package directory
-                match runtime.resolve_link(&rule.dest) {
-                    Ok(target) => {
-                        if !is_path_under(&target, &package_dir) {
-                            // Symlink points outside the package directory - security risk
-                            if all {
-                                // When using --all, skip this symlink and continue
-                                warn!(
-                                    "Skipping symlink {:?} -> {:?}: points outside package directory {:?}",
-                                    rule.dest, target, package_dir
-                                );
-                                eprintln!(
-                                    "Warning: Skipping {:?} - points to external path {:?}",
-                                    rule.dest, target
-                                );
-                                skipped_external.push(rule.dest.clone());
-                                error_count += 1;
-                                continue; // Don't remove this rule from meta
-                            } else {
-                                // When specifying a single destination, fail with error
-                                anyhow::bail!(
-                                    "Cannot remove symlink {:?}: it points to external path {:?} which is outside the package directory {:?}",
-                                    rule.dest,
-                                    target,
-                                    package_dir
-                                );
-                            }
-                        }
-                        // Target is within package directory, safe to remove
-                        debug!("Removing symlink {:?} -> {:?}", rule.dest, target);
-                    }
-                    Err(e) => {
-                        warn!("Cannot resolve symlink target for {:?}: {}", rule.dest, e);
-                        if all {
-                            eprintln!(
-                                "Warning: Cannot verify symlink {:?}, skipping: {}",
-                                rule.dest, e
-                            );
-                            error_count += 1;
-                            continue;
-                        } else {
-                            anyhow::bail!(
-                                "Cannot remove symlink {:?}: unable to resolve target: {}",
-                                rule.dest,
-                                e
-                            );
-                        }
-                    }
-                }
-
-                debug!("Removing symlink {:?}", rule.dest);
-                match link_mgr.remove_link(&rule.dest) {
-                    Ok(true) => {
-                        info!("Removed symlink {:?}", rule.dest);
-                        println!("Removed symlink {:?}", rule.dest);
-                        removed_count += 1;
-                    }
-                    Ok(false) => {
-                        debug!("Symlink {:?} was not a symlink or didn't exist", rule.dest);
-                        removed_count += 1;
-                    }
-                    Err(e) => {
-                        warn!("Failed to remove symlink {:?}: {}", rule.dest, e);
-                        eprintln!("Warning: Failed to remove symlink {:?}: {}", rule.dest, e);
-                        error_count += 1;
-                    }
-                }
-            } else {
+        // Try to safely remove the symlink
+        match link_mgr.remove_link_safely(&rule.dest, &package_dir)? {
+            RemoveLinkResult::Removed => {
+                info!("Removed symlink {:?}", rule.dest);
+                println!("Removed symlink {:?}", rule.dest);
+                removed_count += 1;
+            }
+            RemoveLinkResult::NotExists => {
+                debug!("Symlink {:?} does not exist, removing rule only", rule.dest);
+                println!("Symlink {:?} does not exist, removing rule only", rule.dest);
+                removed_count += 1;
+            }
+            RemoveLinkResult::NotSymlink => {
                 warn!(
                     "Path {:?} exists but is not a symlink, skipping removal",
                     rule.dest
@@ -206,11 +148,47 @@ pub fn unlink<R: Runtime>(
                     rule.dest
                 );
                 error_count += 1;
+                continue; // Don't remove this rule from meta
             }
-        } else {
-            debug!("Symlink {:?} does not exist, removing rule only", rule.dest);
-            println!("Symlink {:?} does not exist, removing rule only", rule.dest);
-            removed_count += 1;
+            RemoveLinkResult::ExternalTarget => {
+                if all {
+                    // When using --all, skip this symlink and continue
+                    warn!(
+                        "Skipping symlink {:?}: points outside package directory {:?}",
+                        rule.dest, package_dir
+                    );
+                    eprintln!(
+                        "Warning: Skipping {:?} - points to external path",
+                        rule.dest
+                    );
+                    skipped_external.push(rule.dest.clone());
+                    error_count += 1;
+                    continue; // Don't remove this rule from meta
+                } else {
+                    // When specifying a single destination, fail with error
+                    anyhow::bail!(
+                        "Cannot remove symlink {:?}: it points to external path which is outside the package directory {:?}",
+                        rule.dest,
+                        package_dir
+                    );
+                }
+            }
+            RemoveLinkResult::Unresolvable => {
+                if all {
+                    warn!("Cannot resolve symlink target for {:?}, skipping", rule.dest);
+                    eprintln!(
+                        "Warning: Cannot verify symlink {:?}, skipping",
+                        rule.dest
+                    );
+                    error_count += 1;
+                    continue; // Don't remove this rule from meta
+                } else {
+                    anyhow::bail!(
+                        "Cannot remove symlink {:?}: unable to resolve target",
+                        rule.dest
+                    );
+                }
+            }
         }
 
         // Remove the rule from meta

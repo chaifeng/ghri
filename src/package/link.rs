@@ -25,6 +25,21 @@ pub enum LinkStatus {
     Unresolvable,
 }
 
+/// Result of a safe link removal operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoveLinkResult {
+    /// Link was successfully removed
+    Removed,
+    /// Link doesn't exist (nothing to remove)
+    NotExists,
+    /// Path exists but is not a symlink
+    NotSymlink,
+    /// Link points to external path (not under expected prefix)
+    ExternalTarget,
+    /// Cannot resolve the symlink target
+    Unresolvable,
+}
+
 impl LinkStatus {
     /// Get a human-readable reason for this status.
     pub fn reason(&self) -> &'static str {
@@ -321,6 +336,49 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
         }
 
         Ok(false)
+    }
+
+    /// Safely remove a symlink with detailed status reporting.
+    ///
+    /// This method checks:
+    /// - If the path exists
+    /// - If it's a symlink
+    /// - If it points to somewhere under `prefix`
+    ///
+    /// Returns a `RemoveLinkResult` indicating what happened:
+    /// - `Removed`: The symlink was successfully removed
+    /// - `NotExists`: The path doesn't exist (nothing to remove)
+    /// - `NotSymlink`: The path exists but is not a symlink
+    /// - `ExternalTarget`: The symlink points outside the expected prefix
+    /// - `Unresolvable`: Cannot resolve the symlink target
+    pub fn remove_link_safely(&self, dest: &Path, prefix: &Path) -> Result<RemoveLinkResult> {
+        // Check if path exists at all
+        if !self.runtime.exists(dest) && !self.runtime.is_symlink(dest) {
+            return Ok(RemoveLinkResult::NotExists);
+        }
+
+        // Check if it's a symlink
+        if !self.runtime.is_symlink(dest) {
+            return Ok(RemoveLinkResult::NotSymlink);
+        }
+
+        // Try to resolve the symlink target
+        match self.runtime.resolve_link(dest) {
+            Ok(target) => {
+                if is_path_under(&target, prefix) {
+                    // Safe to remove - points within expected prefix
+                    self.runtime.remove_symlink(dest)?;
+                    Ok(RemoveLinkResult::Removed)
+                } else {
+                    // Points outside expected prefix - don't remove
+                    Ok(RemoveLinkResult::ExternalTarget)
+                }
+            }
+            Err(_) => {
+                // Cannot resolve the symlink
+                Ok(RemoveLinkResult::Unresolvable)
+            }
+        }
     }
 
     /// Update the 'current' symlink in a package directory to point to a specific version.
