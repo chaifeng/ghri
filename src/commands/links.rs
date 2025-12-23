@@ -51,8 +51,9 @@ fn check_link_status<R: Runtime>(
     match runtime.resolve_link(link_dest) {
         Ok(resolved) => {
             // Canonicalize for accurate comparison (resolves actual filesystem paths)
-            let canonicalized = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-            let canonicalized_prefix = std::fs::canonicalize(expected_prefix)
+            let canonicalized = runtime.canonicalize(&resolved).unwrap_or(resolved);
+            let canonicalized_prefix = runtime
+                .canonicalize(expected_prefix)
                 .unwrap_or_else(|_| expected_prefix.to_path_buf());
 
             // Check if target is under expected prefix using safe path comparison

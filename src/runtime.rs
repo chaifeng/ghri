@@ -101,6 +101,10 @@ pub trait Runtime: Send + Sync {
     /// Unlike canonicalize, this does not follow nested symlinks.
     fn resolve_link(&self, path: &Path) -> Result<PathBuf>;
 
+    /// Canonicalize a path by resolving all symlinks and returning the canonical absolute path.
+    /// This recursively resolves all symlinks in the path.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf>;
+
     fn is_symlink(&self, path: &Path) -> bool;
     fn create_file(&self, path: &Path) -> Result<Box<dyn std::io::Write + Send>>;
     fn open(&self, path: &Path) -> Result<Box<dyn std::io::Read + Send>>;
@@ -260,6 +264,11 @@ impl Runtime for RealRuntime {
             // Normalize the path by processing . and .. components
             Ok(normalize_path(&resolved))
         }
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        fs::canonicalize(path).context("Failed to canonicalize path")
     }
 
     #[tracing::instrument(skip(self))]

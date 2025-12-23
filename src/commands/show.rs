@@ -304,6 +304,9 @@ mod tests {
                 ))
             });
 
+        // Canonicalize paths for link status check
+        runtime.expect_canonicalize().returning(|p| Ok(p.to_path_buf()));
+
         // --- Execute ---
 
         let result = show(runtime, "owner/repo", Some(root));
@@ -765,6 +768,9 @@ mod tests {
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0/tool")));
+
+        // Canonicalize paths for link status check
+        runtime.expect_canonicalize().returning(|p| Ok(p.to_path_buf()));
 
         // --- Execute ---
 
