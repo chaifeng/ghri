@@ -813,4 +813,117 @@ mod tests {
         let result = prune_all(&runtime, &root, true);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_prune_calls_prune_all_when_no_repos() {
+        // Test that prune() calls prune_all() when repos is empty
+
+        let mut runtime = MockRuntime::new();
+        let root = PathBuf::from("/root");
+
+        // Root exists but is empty - no packages
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root.clone()))
+            .returning(|_| Ok(vec![]));
+
+        let result = prune(runtime, vec![], true, Some(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_prune_with_default_install_root() {
+        // Test prune() uses default_install_root when install_root is None
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = PathBuf::from("/home/user/.ghri");
+
+        // Root exists but is empty - no packages
+        runtime
+            .expect_exists()
+            .with(eq(root.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_dir()
+            .with(eq(root))
+            .returning(|_| Ok(vec![]));
+
+        let result = prune(runtime, vec![], true, None); // None triggers default_install_root
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_prune_package_without_meta() {
+        // Test prune_package when meta.json doesn't exist
+
+        let mut runtime = MockRuntime::new();
+        let package_dir = PathBuf::from("/pkg");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+        let v1_dir = package_dir.join("v1.0.0");
+
+        // 1. Package exists
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // 2. Current version is v2.0.0
+        runtime
+            .expect_is_symlink()
+            .with(eq(current_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("v2.0.0")));
+
+        // 3. List versions
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(|_| {
+                Ok(vec![
+                    PathBuf::from("/pkg/v1.0.0"),
+                    PathBuf::from("/pkg/v2.0.0"),
+                ])
+            });
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v1.0.0")))
+            .returning(|_| true);
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/pkg/v2.0.0")))
+            .returning(|_| true);
+
+        // 4. meta.json doesn't exist
+        runtime
+            .expect_exists()
+            .with(eq(meta_path))
+            .returning(|_| false);
+
+        // 5. remove_version checks version exists
+        runtime
+            .expect_exists()
+            .with(eq(v1_dir.clone()))
+            .returning(|_| true);
+
+        // 6. remove_version removes directory
+        runtime
+            .expect_remove_dir_all()
+            .with(eq(v1_dir))
+            .returning(|_| Ok(()));
+
+        let result = prune_package(&runtime, &package_dir, "owner/repo", true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
 }
