@@ -7,3 +7,4 @@ pub mod http;
 pub mod package;
 pub mod platform;
 pub mod runtime;
+pub mod source;
