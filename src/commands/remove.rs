@@ -303,16 +303,13 @@ fn remove_version<R: Runtime>(
     if let Some(meta) = meta {
         for rule in &meta.links {
             // For regular links, only remove if pointing to this specific version
-            if runtime.is_symlink(&rule.dest) {
-                if let Ok(resolved_target) = runtime.resolve_link(&rule.dest) {
-                    // Check if link points to this version (using safe path comparison)
-                    if is_path_under(&resolved_target, &version_dir) {
-                        let _ = runtime.remove_symlink_if_target_under(
-                            &rule.dest,
-                            &version_dir,
-                            "link",
-                        );
-                    }
+            if runtime.is_symlink(&rule.dest)
+                && let Ok(resolved_target) = runtime.resolve_link(&rule.dest)
+            {
+                // Check if link points to this version (using safe path comparison)
+                if is_path_under(&resolved_target, &version_dir) {
+                    let _ =
+                        runtime.remove_symlink_if_target_under(&rule.dest, &version_dir, "link");
                 }
             }
         }
@@ -330,20 +327,20 @@ fn remove_version<R: Runtime>(
 
     // Update meta.json to remove versioned_links for this version
     let meta_path = package_dir.join("meta.json");
-    if runtime.exists(&meta_path) {
-        if let Ok(mut meta) = Meta::load(runtime, &meta_path) {
-            let original_len = meta.versioned_links.len();
-            meta.versioned_links.retain(|l| l.version != version);
-            if meta.versioned_links.len() != original_len {
-                debug!(
-                    "Removed {} versioned link(s) from meta.json",
-                    original_len - meta.versioned_links.len()
-                );
-                let json = serde_json::to_string_pretty(&meta)?;
-                let tmp_path = meta_path.with_extension("json.tmp");
-                runtime.write(&tmp_path, json.as_bytes())?;
-                runtime.rename(&tmp_path, &meta_path)?;
-            }
+    if runtime.exists(&meta_path)
+        && let Ok(mut meta) = Meta::load(runtime, &meta_path)
+    {
+        let original_len = meta.versioned_links.len();
+        meta.versioned_links.retain(|l| l.version != version);
+        if meta.versioned_links.len() != original_len {
+            debug!(
+                "Removed {} versioned link(s) from meta.json",
+                original_len - meta.versioned_links.len()
+            );
+            let json = serde_json::to_string_pretty(&meta)?;
+            let tmp_path = meta_path.with_extension("json.tmp");
+            runtime.write(&tmp_path, json.as_bytes())?;
+            runtime.rename(&tmp_path, &meta_path)?;
         }
     }
 

@@ -64,6 +64,7 @@ pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<Downlo
     cleanup_ctx,
     filters
 ))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn ensure_installed<R: Runtime + 'static, E: Extractor>(
     runtime: &R,
     target_dir: &Path,
@@ -327,6 +328,7 @@ fn is_archive(name: &str) -> bool {
 /// Returns true only for native executables matching the current platform:
 /// - Linux: ELF binaries only
 /// - macOS: Mach-O binaries only (including universal/fat binaries)
+///
 /// Scripts and binaries for other platforms are not considered native executables.
 #[cfg(unix)]
 fn is_native_executable<R: Runtime>(runtime: &R, path: &Path) -> bool {

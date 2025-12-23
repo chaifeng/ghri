@@ -212,10 +212,10 @@ fn determine_link_target_for_rule<R: Runtime>(
 /// Execute a validated link update
 fn execute_link_update<R: Runtime>(runtime: &R, validated: &ValidatedLink) -> Result<()> {
     // Create parent directory if needed
-    if validated.needs_parent_dir {
-        if let Some(parent) = validated.dest.parent() {
-            runtime.create_dir_all(parent)?;
-        }
+    if validated.needs_parent_dir
+        && let Some(parent) = validated.dest.parent()
+    {
+        runtime.create_dir_all(parent)?;
     }
 
     // Remove existing symlink if needed

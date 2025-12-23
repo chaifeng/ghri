@@ -123,7 +123,7 @@ pub fn show<R: Runtime>(runtime: R, repo_str: &str, install_root: Option<PathBuf
                     println!("  ... and {} more", meta.releases.len() - 10);
                     break;
                 }
-                let installed = versions.iter().any(|iv| *iv == release.version);
+                let installed = versions.contains(&release.version);
                 if installed {
                     println!("  {} (installed)", release.version);
                 } else {

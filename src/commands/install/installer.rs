@@ -156,10 +156,10 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         update_current_symlink(&self.runtime, &target_dir, &release.tag_name)?;
 
         // Update external links if configured
-        if let Some(parent) = target_dir.parent() {
-            if let Err(e) = update_external_links(&self.runtime, parent, &target_dir, &meta) {
-                warn!("Failed to update external links: {}. Continuing.", e);
-            }
+        if let Some(parent) = target_dir.parent()
+            && let Err(e) = update_external_links(&self.runtime, parent, &target_dir, &meta)
+        {
+            warn!("Failed to update external links: {}. Continuing.", e);
         }
 
         // Metadata handling - save meta only after successful install
@@ -182,6 +182,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn show_install_plan(
         &self,
         repo: &GitHubRepo,
@@ -230,56 +231,55 @@ impl<R: Runtime + 'static, G: GetReleases, E: Extractor> Installer<R, G, E> {
         }
 
         // Show external links that will be updated (with validity check)
-        if !meta.links.is_empty() {
-            if let Some(package_dir) = target_dir.parent() {
-                let (valid_links, invalid_links) =
-                    check_links(&self.runtime, &meta.links, package_dir);
+        if !meta.links.is_empty()
+            && let Some(package_dir) = target_dir.parent()
+        {
+            let (valid_links, invalid_links) = check_links(&self.runtime, &meta.links, package_dir);
 
-                // Show valid links (existing or to be created)
-                if !valid_links.is_empty() {
-                    println!();
-                    println!("External links to update:");
-                    for link in &valid_links {
-                        let source = link
-                            .path
-                            .as_ref()
-                            .map(|p| format!(":{}", p))
-                            .unwrap_or_default();
-                        match link.status {
-                            LinkStatus::Valid => {
-                                println!(
-                                    "  [LINK] {} -> {}{}/{}",
-                                    link.dest.display(),
-                                    repo,
-                                    source,
-                                    release.tag_name
-                                );
-                            }
-                            LinkStatus::NotExists => {
-                                println!(
-                                    "  [NEW]  {} -> {}{}/{}",
-                                    link.dest.display(),
-                                    repo,
-                                    source,
-                                    release.tag_name
-                                );
-                            }
-                            _ => {}
+            // Show valid links (existing or to be created)
+            if !valid_links.is_empty() {
+                println!();
+                println!("External links to update:");
+                for link in &valid_links {
+                    let source = link
+                        .path
+                        .as_ref()
+                        .map(|p| format!(":{}", p))
+                        .unwrap_or_default();
+                    match link.status {
+                        LinkStatus::Valid => {
+                            println!(
+                                "  [LINK] {} -> {}{}/{}",
+                                link.dest.display(),
+                                repo,
+                                source,
+                                release.tag_name
+                            );
                         }
+                        LinkStatus::NotExists => {
+                            println!(
+                                "  [NEW]  {} -> {}{}/{}",
+                                link.dest.display(),
+                                repo,
+                                source,
+                                release.tag_name
+                            );
+                        }
+                        _ => {}
                     }
                 }
+            }
 
-                // Show invalid links
-                if !invalid_links.is_empty() {
-                    println!();
-                    println!("External links to skip (will not be updated):");
-                    for link in &invalid_links {
-                        println!(
-                            "  [SKIP] {} ({})",
-                            link.dest.display(),
-                            link.status.reason()
-                        );
-                    }
+            // Show invalid links
+            if !invalid_links.is_empty() {
+                println!();
+                println!("External links to skip (will not be updated):");
+                for link in &invalid_links {
+                    println!(
+                        "  [SKIP] {} ({})",
+                        link.dest.display(),
+                        link.status.reason()
+                    );
                 }
             }
         }

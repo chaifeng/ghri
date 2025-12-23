@@ -112,22 +112,22 @@ impl ArchiveExtractor {
                     .with_context(|| format!("Failed to extract file {:?}", full_path))?;
 
                 // Set file permissions from archive metadata
-                if let Ok(mode) = entry.header().mode() {
-                    if let Err(e) = runtime.set_permissions(&full_path, mode) {
-                        debug!("Failed to set permissions on {:?}: {}", full_path, e);
-                    }
+                if let Ok(mode) = entry.header().mode()
+                    && let Err(e) = runtime.set_permissions(&full_path, mode)
+                {
+                    debug!("Failed to set permissions on {:?}: {}", full_path, e);
                 }
-            } else if entry_type.is_symlink() {
-                if let Some(link_name) = entry.link_name()? {
-                    if let Some(parent) = full_path.parent() {
-                        runtime.create_dir_all(parent)?;
-                    }
-                    if let Err(e) = runtime.symlink(link_name.as_ref(), &full_path) {
-                        debug!(
-                            "Failed to create symlink {:?} -> {:?}: {}",
-                            full_path, link_name, e
-                        );
-                    }
+            } else if entry_type.is_symlink()
+                && let Some(link_name) = entry.link_name()?
+            {
+                if let Some(parent) = full_path.parent() {
+                    runtime.create_dir_all(parent)?;
+                }
+                if let Err(e) = runtime.symlink(link_name.as_ref(), &full_path) {
+                    debug!(
+                        "Failed to create symlink {:?} -> {:?}: {}",
+                        full_path, link_name, e
+                    );
                 }
             }
             // Skip other entry types (hard links, etc.)

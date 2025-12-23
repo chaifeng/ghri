@@ -190,14 +190,14 @@ impl Meta {
         }
 
         // Default current_version by reading the 'current' symlink
-        if Self::is_empty_or_blank(&self.current_version) {
-            if let Some(parent) = meta_path.parent() {
-                let current_link = parent.join("current");
-                if let Ok(target) = runtime.read_link(&current_link) {
-                    if let Some(version) = target.file_name().and_then(|s| s.to_str()) {
-                        self.current_version = version.to_string();
-                    }
-                }
+        if Self::is_empty_or_blank(&self.current_version)
+            && let Some(parent) = meta_path.parent()
+        {
+            let current_link = parent.join("current");
+            if let Ok(target) = runtime.read_link(&current_link)
+                && let Some(version) = target.file_name().and_then(|s| s.to_str())
+            {
+                self.current_version = version.to_string();
             }
         }
 
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(release.tag_name, "v1.0.0");
         assert_eq!(release.name, Some("Release 1.0.0".into()));
         assert_eq!(release.published_at, Some("2023-01-01".into()));
-        assert_eq!(release.prerelease, false);
+        assert!(!release.prerelease);
         assert_eq!(release.tarball_url, "https://example.com/tarball");
         assert_eq!(release.assets.len(), 1);
     }

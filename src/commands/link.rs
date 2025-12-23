@@ -110,10 +110,10 @@ pub fn link<R: Runtime>(
     };
 
     // Create parent directory of destination if needed
-    if let Some(parent) = final_dest.parent() {
-        if !runtime.exists(parent) {
-            runtime.create_dir_all(parent)?;
-        }
+    if let Some(parent) = final_dest.parent()
+        && !runtime.exists(parent)
+    {
+        runtime.create_dir_all(parent)?;
     }
 
     // Handle existing destination
