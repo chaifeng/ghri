@@ -63,6 +63,14 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
         self.package_dir(owner, repo).join("current")
     }
 
+    /// Check if a package directory exists.
+    ///
+    /// This is a weaker check than `is_installed()` - the directory might exist
+    /// without a meta.json file (e.g., partially installed or corrupted state).
+    pub fn package_exists(&self, owner: &str, repo: &str) -> bool {
+        self.runtime.exists(&self.package_dir(owner, repo))
+    }
+
     /// Check if a package is installed (has meta.json).
     pub fn is_installed(&self, owner: &str, repo: &str) -> bool {
         self.runtime.exists(&self.meta_path(owner, repo))
