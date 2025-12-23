@@ -8,7 +8,7 @@ use crate::{
     cleanup::CleanupContext,
     download::Downloader,
     github::{GetReleases, GitHubRepo, Release},
-    package::{LinkManager, Meta},
+    package::{LinkManager, Meta, PackageRepository},
     runtime::Runtime,
 };
 
@@ -311,17 +311,17 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         config: &Config,
         repo: &GitHubRepo,
     ) -> Result<(Meta, std::path::PathBuf, bool)> {
-        let meta_path = config.package_dir(&repo.owner, &repo.repo).join("meta.json");
+        let pkg_repo = PackageRepository::new(&self.runtime, config.install_root.clone());
+        let meta_path = pkg_repo.meta_path(&repo.owner, &repo.repo);
 
-        if self.runtime.exists(&meta_path) {
-            match Meta::load(&self.runtime, &meta_path) {
-                Ok(meta) => return Ok((meta, meta_path, false)),
-                Err(e) => {
-                    warn!(
-                        "Failed to load existing meta.json at {:?}: {}. Re-fetching.",
-                        meta_path, e
-                    );
-                }
+        match pkg_repo.load(&repo.owner, &repo.repo) {
+            Ok(Some(meta)) => return Ok((meta, meta_path, false)),
+            Ok(None) => {} // Not installed, will fetch
+            Err(e) => {
+                warn!(
+                    "Failed to load existing meta.json at {:?}: {}. Re-fetching.",
+                    meta_path, e
+                );
             }
         }
 
