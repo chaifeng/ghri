@@ -4,6 +4,7 @@
 //! (GitHub, GitLab, Gitee, etc.), enabling multi-platform support.
 
 mod github;
+mod registry;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -12,6 +13,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use github::GitHubSource;
+pub use registry::{PackageSpec, SourceRegistry};
 
 /// Repository identifier (owner/repo format).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

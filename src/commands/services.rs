@@ -4,6 +4,8 @@
 //! downloader, extractor) from the configuration. Services are built based on
 //! configuration values but are not part of the configuration itself.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use log::debug;
 use reqwest::{
@@ -12,10 +14,10 @@ use reqwest::{
 };
 
 use crate::{
-    archive::{ArchiveExtractor, ArchiveExtractorImpl},
-    download::{Downloader, HttpDownloader},
+    archive::ArchiveExtractorImpl,
+    download::HttpDownloader,
     http::HttpClient,
-    source::{GitHubSource, Source},
+    source::{GitHubSource, Source, SourceKind, SourceRegistry},
 };
 
 use super::config::Config;
@@ -45,6 +47,21 @@ pub fn build_source(config: &Config) -> Result<GitHubSource> {
     Ok(GitHubSource::from_http_client(http_client, &config.api_url))
 }
 
+/// Build a SourceRegistry with all available sources
+pub fn build_source_registry(config: &Config) -> Result<SourceRegistry> {
+    let mut registry = SourceRegistry::new();
+
+    // Register GitHub source (default)
+    let github_source = build_source(config)?;
+    registry.register(Arc::new(github_source));
+
+    // Future: Register GitLab, Gitee sources here
+    // registry.register(Arc::new(build_gitlab_source(config)?));
+    // registry.register(Arc::new(build_gitee_source(config)?));
+
+    Ok(registry)
+}
+
 /// Build a downloader from configuration
 pub fn build_downloader(config: &Config) -> Result<HttpDownloader> {
     let http_client = build_http_client(config.token.as_deref())?;
@@ -56,22 +73,31 @@ pub fn build_extractor() -> ArchiveExtractorImpl {
     ArchiveExtractorImpl::new()
 }
 
-/// Container for all service dependencies needed by commands.
-/// This is used to pass dependencies to internal functions that need them.
-pub struct Services<S: Source, D: Downloader, E: ArchiveExtractor> {
-    pub source: S,
-    pub downloader: D,
-    pub extractor: E,
+/// Container for services using SourceRegistry for multi-platform support.
+pub struct RegistryServices {
+    pub registry: SourceRegistry,
+    pub downloader: HttpDownloader,
+    pub extractor: ArchiveExtractorImpl,
 }
 
-impl Services<GitHubSource, HttpDownloader, ArchiveExtractorImpl> {
-    /// Build all services from configuration
+impl RegistryServices {
+    /// Build services with a source registry from configuration
     pub fn from_config(config: &Config) -> Result<Self> {
         Ok(Self {
-            source: build_source(config)?,
+            registry: build_source_registry(config)?,
             downloader: build_downloader(config)?,
             extractor: build_extractor(),
         })
+    }
+
+    /// Get a source by kind from the registry
+    pub fn get_source(&self, kind: SourceKind) -> Option<&Arc<dyn Source>> {
+        self.registry.get(kind)
+    }
+
+    /// Get the default source (GitHub)
+    pub fn default_source(&self) -> Option<&Arc<dyn Source>> {
+        self.registry.get(self.registry.default_kind())
     }
 }
 
@@ -114,14 +140,32 @@ mod tests {
     }
 
     #[test]
-    fn test_services_from_config() {
+    fn test_build_source_registry() {
         let config = Config {
             install_root: std::path::PathBuf::from("/test"),
             api_url: "https://api.github.com".to_string(),
             token: None,
         };
 
-        let services = Services::from_config(&config);
-        assert!(services.is_ok());
+        let registry = build_source_registry(&config).unwrap();
+
+        // Should have GitHub registered
+        assert!(registry.has(SourceKind::GitHub));
+        assert_eq!(registry.default_kind(), SourceKind::GitHub);
+    }
+
+    #[test]
+    fn test_registry_services_from_config() {
+        let config = Config {
+            install_root: std::path::PathBuf::from("/test"),
+            api_url: "https://api.github.com".to_string(),
+            token: None,
+        };
+
+        let services = RegistryServices::from_config(&config).unwrap();
+
+        // Should have default source available
+        assert!(services.default_source().is_some());
+        assert!(services.get_source(SourceKind::GitHub).is_some());
     }
 }

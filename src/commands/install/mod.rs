@@ -1,10 +1,10 @@
 use anyhow::Result;
 
-use crate::{archive::ArchiveExtractor, download::Downloader, runtime::Runtime, source::Source};
+use crate::runtime::Runtime;
 
 use super::config::{Config, ConfigOverrides, InstallOptions};
 use super::prune::prune_package_dir;
-use super::services::Services;
+use super::services::RegistryServices;
 
 mod download;
 mod external_links;
@@ -25,25 +25,26 @@ pub async fn install<R: Runtime + 'static>(
     let config = Config::load(&runtime, overrides)?;
 
     // Build services from config
-    let services = Services::from_config(&config)?;
+    let services = RegistryServices::from_config(&config)?;
 
     // Run installation
     run(&config, runtime, services, repo_str, options).await
 }
 
 #[tracing::instrument(skip(config, runtime, services, options))]
-pub async fn run<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
+pub async fn run<R: Runtime + 'static>(
     config: &Config,
     runtime: R,
-    services: Services<S, D, E>,
+    services: RegistryServices,
     repo_str: &str,
     options: InstallOptions,
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
 
+    // Create installer with source from registry
     let installer = Installer::new(
         runtime,
-        services.source,
+        super::services::build_source(config)?,
         services.downloader,
         services.extractor,
     );

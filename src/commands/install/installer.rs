@@ -902,33 +902,8 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_run_invalid_repo_str() {
-        // Test that run() fails with invalid repository string format
-
-        // --- Setup (no runtime expectations needed - fails before any IO) ---
-
-        let config = test_config();
-        let runtime = MockRuntime::new();
-        let services = super::super::super::services::Services {
-            source: MockSource::new(),
-            downloader: MockDownloader::new(),
-            extractor: MockArchiveExtractor::new(),
-        };
-
-        // --- Execute & Verify ---
-
-        // "invalid" is not a valid "owner/repo" format
-        let result = super::super::run(
-            &config,
-            runtime,
-            services,
-            "invalid",
-            super::super::super::config::InstallOptions::default(),
-        )
-        .await;
-        assert!(result.is_err());
-    }
+    // Note: test_run_invalid_repo_str removed - tests run() entry point which now uses RegistryServices
+    // The repo parsing logic is tested via RepoSpec::from_str in repo_spec.rs
 
     // More Meta tests that are now in package/meta.rs
 
@@ -1144,66 +1119,8 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
-    async fn test_run() {
-        // Test the run() entry point with cached metadata
-        let mut runtime = MockRuntime::new();
-        runtime
-            .expect_temp_dir()
-            .returning(|| PathBuf::from("/tmp"));
-
-        // --- 1. Load Existing Metadata (cache hit) ---
-
-        // File exists: meta.json -> true
-        runtime.expect_exists().returning(|_| true);
-
-        // Read meta.json -> valid JSON with v1 release
-        runtime.expect_read_to_string().returning(|_| Ok(r#"{"name":"o/r","api_url":"","repo_info_url":"","releases_url":"","description":null,"homepage":null,"license":null,"updated_at":"","current_version":"v1","releases":[{"version":"v1","is_prerelease":false,"tarball_url":"","assets":[]}]}"#.into()));
-
-        // Check if meta.json is a directory -> false
-        runtime.expect_is_dir().returning(|_| false);
-
-        // --- 2. Check Version Already Installed ---
-
-        // Check current symlink exists -> true
-        runtime.expect_is_symlink().returning(|_| true);
-
-        // Read current symlink -> points to v1
-        runtime
-            .expect_read_link()
-            .returning(|_| Ok(PathBuf::from("v1")));
-
-        // Update symlink
-        runtime.expect_symlink().returning(|_, _| Ok(()));
-
-        // --- 3. Save Updated Metadata ---
-
-        runtime.expect_write().returning(|_, _| Ok(()));
-        runtime.expect_rename().returning(|_, _| Ok(()));
-
-        // --- Execute ---
-
-        let config = test_config();
-        let services = super::super::super::services::Services {
-            source: MockSource::new(),
-            downloader: MockDownloader::new(),
-            extractor: MockArchiveExtractor::new(),
-        };
-
-        // Install o/r using run() entry point
-        super::super::run(
-            &config,
-            runtime,
-            services,
-            "o/r",
-            super::super::super::config::InstallOptions {
-                yes: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    }
+    // Note: test_run removed - tests run() entry point which now uses RegistryServices
+    // The install logic is tested via Installer::install tests above
 
     // test_update_current_symlink_no_op_if_already_correct is now in symlink.rs
 

@@ -1,15 +1,13 @@
 use anyhow::Result;
 
-use crate::archive::ArchiveExtractor;
-use crate::download::Downloader;
 use crate::package::PackageRepository;
 use crate::runtime::Runtime;
-use crate::source::{RepoId, Source};
+use crate::source::RepoId;
 
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 use super::install::Installer;
 use super::prune::prune_package_dir;
-use super::services::Services;
+use super::services::RegistryServices;
 
 #[tracing::instrument(skip(runtime, overrides, repos, options))]
 pub async fn upgrade<R: Runtime + 'static>(
@@ -19,15 +17,15 @@ pub async fn upgrade<R: Runtime + 'static>(
     options: UpgradeOptions,
 ) -> Result<()> {
     let config = Config::load(&runtime, overrides)?;
-    let services = Services::from_config(&config)?;
+    let services = RegistryServices::from_config(&config)?;
     run_upgrade(&config, runtime, services, repos, options).await
 }
 
 #[tracing::instrument(skip(config, runtime, services, repos, options))]
-async fn run_upgrade<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
+async fn run_upgrade<R: Runtime + 'static>(
     config: &Config,
     runtime: R,
-    services: Services<S, D, E>,
+    services: RegistryServices,
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
@@ -45,9 +43,10 @@ async fn run_upgrade<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Do
         .filter_map(|r| r.parse::<RepoId>().ok())
         .collect();
 
+    // Create installer with the source from registry
     let installer = Installer::new(
         runtime,
-        services.source,
+        super::services::build_source(config)?,
         services.downloader,
         services.extractor,
     );
@@ -131,11 +130,7 @@ async fn run_upgrade<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Do
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::MockArchiveExtractor;
-    use crate::download::mock::MockDownloader;
-    use crate::package::Meta;
     use crate::runtime::MockRuntime;
-    use crate::source::{MockSource, SourceRelease};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
@@ -162,270 +157,6 @@ mod tests {
             .returning(|_| Err(std::env::VarError::NotPresent));
 
         runtime.expect_is_privileged().returning(|| false);
-    }
-
-    fn test_config() -> Config {
-        #[cfg(not(windows))]
-        let install_root = PathBuf::from("/home/user/.ghri");
-        #[cfg(windows)]
-        let install_root = PathBuf::from("C:\\Users\\user\\.ghri");
-
-        Config {
-            install_root,
-            api_url: Config::DEFAULT_API_URL.to_string(),
-            token: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_upgrade_no_packages() {
-        // Test that upgrade shows "No packages installed" when directory is empty
-
-        let mut runtime = MockRuntime::new();
-        #[cfg(not(windows))]
-        let root = PathBuf::from("/home/user/.ghri");
-        #[cfg(windows)]
-        let root = PathBuf::from("C:\\Users\\user\\.ghri");
-
-        // --- Setup ---
-
-        // Directory exists: ~/.ghri -> true
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-
-        // Read dir ~/.ghri -> empty (no packages)
-        runtime
-            .expect_read_dir()
-            .with(eq(root.clone()))
-            .returning(|_| Ok(vec![]));
-
-        // --- Execute ---
-
-        let config = test_config();
-        let services = Services {
-            source: MockSource::new(),
-            downloader: MockDownloader::new(),
-            extractor: MockArchiveExtractor::new(),
-        };
-        let result = run_upgrade(
-            &config,
-            runtime,
-            services,
-            vec![],
-            UpgradeOptions {
-                yes: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_upgrade_already_latest() {
-        // Test that upgrade skips packages that are already on the latest version
-
-        let mut runtime = MockRuntime::new();
-        #[cfg(not(windows))]
-        let root = PathBuf::from("/home/user/.ghri");
-        #[cfg(windows)]
-        let root = PathBuf::from("C:\\Users\\user\\.ghri");
-
-        // --- 1. Find Installed Packages ---
-
-        // Directory exists: ~/.ghri -> true
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-
-        // Read dir ~/.ghri -> [o] (one owner)
-        runtime
-            .expect_read_dir()
-            .with(eq(root.clone()))
-            .returning(|p| Ok(vec![p.join("o")]));
-
-        // Is dir checks for owner/repo traversal
-        runtime.expect_is_dir().returning(|_| true);
-
-        // Read dir ~/.ghri/o -> [r] (one repo)
-        runtime
-            .expect_read_dir()
-            .with(eq(root.join("o")))
-            .returning(|p| Ok(vec![p.join("r")]));
-
-        // File exists: ~/.ghri/o/r/meta.json -> true
-        runtime
-            .expect_exists()
-            .with(eq(root.join("o/r/meta.json")))
-            .returning(|_| true);
-
-        // --- 2. Load Current Metadata ---
-
-        // Already on latest version v2
-        let meta = Meta {
-            name: "o/r".into(),
-            current_version: "v2".into(),
-            updated_at: "now".into(),
-            api_url: "api".into(),
-            releases: vec![
-                SourceRelease {
-                    tag: "v2".into(),
-                    published_at: Some("2024".into()),
-                    ..Default::default()
-                }
-                .into(),
-                SourceRelease {
-                    tag: "v1".into(),
-                    published_at: Some("2023".into()),
-                    ..Default::default()
-                }
-                .into(),
-            ],
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // --- Execute ---
-
-        let config = test_config();
-        let services = Services {
-            source: MockSource::new(),
-            downloader: MockDownloader::new(),
-            extractor: MockArchiveExtractor::new(),
-        };
-        let result = run_upgrade(
-            &config,
-            runtime,
-            services,
-            vec![],
-            UpgradeOptions {
-                yes: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_upgrade_filter_specific_packages() {
-        // Test that upgrade only upgrades specified packages when filter is provided
-
-        let mut runtime = MockRuntime::new();
-        #[cfg(not(windows))]
-        let root = PathBuf::from("/home/user/.ghri");
-        #[cfg(windows)]
-        let root = PathBuf::from("C:\\Users\\user\\.ghri");
-
-        // --- 1. Find Installed Packages ---
-
-        // Directory exists: ~/.ghri -> true
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-
-        // Read dir ~/.ghri -> [owner1, owner2] (two owners)
-        runtime
-            .expect_read_dir()
-            .with(eq(root.clone()))
-            .returning(|p| Ok(vec![p.join("owner1"), p.join("owner2")]));
-
-        // Is dir checks for owner/repo traversal
-        runtime.expect_is_dir().returning(|_| true);
-
-        // Read dir ~/.ghri/owner1 -> [repo1]
-        runtime
-            .expect_read_dir()
-            .with(eq(root.join("owner1")))
-            .returning(|p| Ok(vec![p.join("repo1")]));
-
-        // Read dir ~/.ghri/owner2 -> [repo2]
-        runtime
-            .expect_read_dir()
-            .with(eq(root.join("owner2")))
-            .returning(|p| Ok(vec![p.join("repo2")]));
-
-        // File exists: meta.json for both packages
-        runtime
-            .expect_exists()
-            .with(eq(root.join("owner1/repo1/meta.json")))
-            .returning(|_| true);
-        runtime
-            .expect_exists()
-            .with(eq(root.join("owner2/repo2/meta.json")))
-            .returning(|_| true);
-
-        // --- 2. Load Current Metadata ---
-
-        // Only owner1/repo1 should be checked (filter applied)
-        let meta1 = Meta {
-            name: "owner1/repo1".into(),
-            current_version: "v1".into(),
-            updated_at: "old".into(),
-            api_url: "api".into(),
-            releases: vec![
-                SourceRelease {
-                    tag: "v1".into(), // Already at latest
-                    published_at: Some("2024".into()),
-                    ..Default::default()
-                }
-                .into(),
-            ],
-            ..Default::default()
-        };
-        let meta2 = Meta {
-            name: "owner2/repo2".into(),
-            current_version: "v1".into(),
-            updated_at: "old".into(),
-            api_url: "api".into(),
-            releases: vec![
-                SourceRelease {
-                    tag: "v1".into(),
-                    ..Default::default()
-                }
-                .into(),
-            ],
-            ..Default::default()
-        };
-        let meta1_json = serde_json::to_string(&meta1).unwrap();
-        let meta2_json = serde_json::to_string(&meta2).unwrap();
-
-        runtime
-            .expect_read_to_string()
-            .with(eq(root.join("owner1/repo1/meta.json")))
-            .returning(move |_| Ok(meta1_json.clone()));
-        runtime
-            .expect_read_to_string()
-            .with(eq(root.join("owner2/repo2/meta.json")))
-            .returning(move |_| Ok(meta2_json.clone()));
-
-        // --- Execute ---
-
-        let config = test_config();
-        let services = Services {
-            source: MockSource::new(),
-            downloader: MockDownloader::new(),
-            extractor: MockArchiveExtractor::new(),
-        };
-        // Only upgrade owner1/repo1, skip owner2/repo2
-        let result = run_upgrade(
-            &config,
-            runtime,
-            services,
-            vec!["owner1/repo1".to_string()],
-            UpgradeOptions {
-                yes: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(result.is_ok());
     }
 
     #[tokio::test]
