@@ -8,7 +8,7 @@ use crate::{
     archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
-    package::{LinkManager, Meta, PackageRepository},
+    package::{LinkManager, Meta},
     runtime::Runtime,
     source::{RepoId, Source, SourceRegistry, SourceRelease},
 };
@@ -17,6 +17,87 @@ use crate::commands::config::{Config, InstallOptions};
 
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
 use super::external_links::update_external_links;
+
+/// Show installation plan to user (standalone function for use from mod.rs)
+#[allow(clippy::too_many_arguments)]
+pub fn show_install_plan(
+    repo: &RepoId,
+    release: &SourceRelease,
+    target_dir: &Path,
+    meta_path: &Path,
+    plan: &DownloadPlan,
+    needs_save: bool,
+    meta: &Meta,
+) {
+    println!();
+    println!("=== Installation Plan ===");
+    println!();
+    println!("Package:  {}", repo);
+    println!("Version:  {}", release.tag);
+    println!();
+
+    // Show files to download
+    println!("Files to download:");
+    match plan {
+        DownloadPlan::Tarball { url } => {
+            println!("  - {} (source tarball)", url);
+        }
+        DownloadPlan::Assets { assets } => {
+            for asset in assets {
+                println!("  - {} ({} bytes)", asset.name, asset.size);
+            }
+        }
+    }
+    println!();
+
+    // Show files/directories to create
+    println!("Files/directories to create:");
+    println!("  [DIR]  {}", target_dir.display());
+    if needs_save {
+        println!("  [FILE] {}", meta_path.display());
+    } else {
+        println!("  [MOD]  {} (update)", meta_path.display());
+    }
+    if let Some(parent) = target_dir.parent() {
+        println!("  [LINK] {}/current -> {}", parent.display(), release.tag);
+    }
+
+    // Note: External link validation requires runtime, handled separately if needed
+    if !meta.links.is_empty() {
+        println!();
+        println!("External links configured: {} link(s)", meta.links.len());
+        for link in &meta.links {
+            let source = link
+                .path
+                .as_ref()
+                .map(|p| format!(":{}", p))
+                .unwrap_or_default();
+            println!(
+                "  [LINK] {} -> {}{}/{}",
+                link.dest.display(),
+                repo,
+                source,
+                release.tag
+            );
+        }
+    }
+
+    // Show versioned links (these won't be updated)
+    if !meta.versioned_links.is_empty() {
+        println!();
+        println!("Versioned links (unchanged):");
+        for link in &meta.versioned_links {
+            println!(
+                "  [LINK] {} -> {}@{}",
+                link.dest.display(),
+                repo,
+                link.version
+            );
+        }
+    }
+
+    println!();
+}
 
 pub struct Installer<R: Runtime, S: Source, E: ArchiveExtractor, D: Downloader> {
     pub runtime: R,
@@ -38,7 +119,7 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
 
     /// Install a package using InstallUseCase for orchestration
     #[tracing::instrument(skip(self, config, registry, repo, version, options))]
-    pub async fn install_with_registry(
+    pub async fn install(
         &self,
         config: &Config,
         registry: &SourceRegistry,
@@ -121,124 +202,6 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
         meta.current_version = release.tag.clone();
         meta.filters = effective_filters;
         if let Err(e) = use_case.save_meta(repo, &meta) {
-            warn!("Failed to save package metadata: {}. Continuing.", e);
-        }
-
-        self.print_install_success(repo, &release.tag, &target_dir);
-
-        Ok(())
-    }
-
-    /// Legacy install method (for backward compatibility)
-    #[tracing::instrument(skip(self, config, repo, version, options))]
-    pub async fn install(
-        &self,
-        config: &Config,
-        repo: &RepoId,
-        version: Option<&str>,
-        options: &InstallOptions,
-    ) -> Result<()> {
-        println!("   resolving {}", repo);
-        let (mut meta, meta_path, needs_save) = self.get_or_fetch_meta(config, repo).await?;
-
-        // Use saved filters from meta if user didn't provide any
-        let effective_filters = if options.filters.is_empty() && !meta.filters.is_empty() {
-            info!("Using saved filters from meta: {:?}", meta.filters);
-            meta.filters.clone()
-        } else {
-            options.filters.clone()
-        };
-
-        // Resolve version
-        let meta_release = if let Some(ver) = version {
-            meta.releases
-                .iter()
-                .find(|r| {
-                    r.version == ver
-                        || r.version == format!("v{}", ver)
-                        || r.version.trim_start_matches('v') == ver.trim_start_matches('v')
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Version '{}' not found for {}. Available versions: {}",
-                        ver,
-                        repo,
-                        meta.releases
-                            .iter()
-                            .take(5)
-                            .map(|r| r.version.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })?
-        } else if options.pre {
-            meta.get_latest_release()
-                .ok_or_else(|| anyhow::anyhow!("No release found for {}.", repo))?
-        } else {
-            meta.get_latest_stable_release()
-                .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version or use --pre.", repo))?
-        };
-
-        info!("Found version: {}", meta_release.version);
-        let release: SourceRelease = meta_release.clone().into();
-
-        let target_dir = config.version_dir(&repo.owner, &repo.repo, &release.tag);
-
-        // Check if already installed
-        if self.runtime.exists(&target_dir) {
-            println!("   {} {} is already installed", repo, release.tag);
-            return Ok(());
-        }
-
-        // Get download plan and show confirmation
-        let plan = get_download_plan(&release, &effective_filters)?;
-
-        if !options.yes {
-            self.show_install_plan(
-                repo,
-                &release,
-                &target_dir,
-                &meta_path,
-                &plan,
-                needs_save,
-                &meta,
-            );
-            if !self.runtime.confirm("Proceed with installation?")? {
-                println!("Installation cancelled.");
-                return Ok(());
-            }
-        }
-
-        // Perform the actual download and extraction
-        self.do_install(
-            repo,
-            &release,
-            &target_dir,
-            &effective_filters,
-            &options.original_args,
-        )
-        .await?;
-
-        // Update 'current' symlink to point to the new version
-        let link_manager = LinkManager::new(&self.runtime);
-        if let Some(package_dir) = target_dir.parent() {
-            link_manager.update_current_link(package_dir, &release.tag)?;
-        }
-
-        // Update external links if configured
-        if let Some(parent) = target_dir.parent()
-            && let Err(e) = update_external_links(&self.runtime, parent, &target_dir, &meta)
-        {
-            warn!("Failed to update external links: {}. Continuing.", e);
-        }
-
-        // Metadata handling - save meta only after successful install
-        meta.current_version = release.tag.clone();
-        meta.filters = effective_filters;
-        if needs_save && let Some(parent) = meta_path.parent() {
-            self.runtime.create_dir_all(parent)?;
-        }
-        if let Err(e) = self.save_meta(&meta_path, &meta) {
             warn!("Failed to save package metadata: {}. Continuing.", e);
         }
 
@@ -405,12 +368,14 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
 
     /// Get or fetch meta, returning (meta, meta_path, needs_save)
     /// needs_save is true if meta was newly fetched and needs to be saved after successful install
+    #[cfg(test)]
     #[tracing::instrument(skip(self, config, repo))]
     pub(crate) async fn get_or_fetch_meta(
         &self,
         config: &Config,
         repo: &RepoId,
     ) -> Result<(Meta, std::path::PathBuf, bool)> {
+        use crate::package::PackageRepository;
         let pkg_repo = PackageRepository::new(&self.runtime, config.install_root.clone());
         let meta_path = pkg_repo.meta_path(&repo.owner, &repo.repo);
 
@@ -431,6 +396,7 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
         Ok((meta, meta_path, true))
     }
 
+    #[cfg(test)]
     #[tracing::instrument(skip(self, repo, current_version, api_url))]
     async fn fetch_meta(
         &self,
@@ -450,6 +416,7 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
         ))
     }
 
+    #[cfg(test)]
     #[tracing::instrument(skip(self, meta_path, meta))]
     pub(crate) fn save_meta(&self, meta_path: &Path, meta: &Meta) -> Result<()> {
         let json = serde_json::to_string_pretty(meta)?;
@@ -457,6 +424,125 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
 
         self.runtime.write(&tmp_path, json.as_bytes())?;
         self.runtime.rename(&tmp_path, meta_path)?;
+        Ok(())
+    }
+
+    /// Legacy install method for tests only
+    #[cfg(test)]
+    #[tracing::instrument(skip(self, config, repo, version, options))]
+    pub async fn install_legacy(
+        &self,
+        config: &Config,
+        repo: &RepoId,
+        version: Option<&str>,
+        options: &InstallOptions,
+    ) -> Result<()> {
+        println!("   resolving {}", repo);
+        let (mut meta, meta_path, needs_save) = self.get_or_fetch_meta(config, repo).await?;
+
+        // Use saved filters from meta if user didn't provide any
+        let effective_filters = if options.filters.is_empty() && !meta.filters.is_empty() {
+            info!("Using saved filters from meta: {:?}", meta.filters);
+            meta.filters.clone()
+        } else {
+            options.filters.clone()
+        };
+
+        // Resolve version
+        let meta_release = if let Some(ver) = version {
+            meta.releases
+                .iter()
+                .find(|r| {
+                    r.version == ver
+                        || r.version == format!("v{}", ver)
+                        || r.version.trim_start_matches('v') == ver.trim_start_matches('v')
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Version '{}' not found for {}. Available versions: {}",
+                        ver,
+                        repo,
+                        meta.releases
+                            .iter()
+                            .take(5)
+                            .map(|r| r.version.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?
+        } else if options.pre {
+            meta.get_latest_release()
+                .ok_or_else(|| anyhow::anyhow!("No release found for {}.", repo))?
+        } else {
+            meta.get_latest_stable_release()
+                .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version or use --pre.", repo))?
+        };
+
+        info!("Found version: {}", meta_release.version);
+        let release: SourceRelease = meta_release.clone().into();
+
+        let target_dir = config.version_dir(&repo.owner, &repo.repo, &release.tag);
+
+        // Check if already installed
+        if self.runtime.exists(&target_dir) {
+            println!("   {} {} is already installed", repo, release.tag);
+            return Ok(());
+        }
+
+        // Get download plan and show confirmation
+        let plan = get_download_plan(&release, &effective_filters)?;
+
+        if !options.yes {
+            self.show_install_plan(
+                repo,
+                &release,
+                &target_dir,
+                &meta_path,
+                &plan,
+                needs_save,
+                &meta,
+            );
+            if !self.runtime.confirm("Proceed with installation?")? {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
+
+        // Perform the actual download and extraction
+        self.do_install(
+            repo,
+            &release,
+            &target_dir,
+            &effective_filters,
+            &options.original_args,
+        )
+        .await?;
+
+        // Update 'current' symlink to point to the new version
+        let link_manager = LinkManager::new(&self.runtime);
+        if let Some(package_dir) = target_dir.parent() {
+            link_manager.update_current_link(package_dir, &release.tag)?;
+        }
+
+        // Update external links if configured
+        if let Some(parent) = target_dir.parent()
+            && let Err(e) = update_external_links(&self.runtime, parent, &target_dir, &meta)
+        {
+            warn!("Failed to update external links: {}. Continuing.", e);
+        }
+
+        // Metadata handling - save meta only after successful install
+        meta.current_version = release.tag.clone();
+        meta.filters = effective_filters;
+        if needs_save && let Some(parent) = meta_path.parent() {
+            self.runtime.create_dir_all(parent)?;
+        }
+        if let Err(e) = self.save_meta(&meta_path, &meta) {
+            warn!("Failed to save package metadata: {}. Continuing.", e);
+        }
+
+        self.print_install_success(repo, &release.tag, &target_dir);
+
         Ok(())
     }
 }
@@ -468,9 +554,10 @@ mod tests {
     use crate::commands::config::Config;
     use crate::download::mock::MockDownloader;
     use crate::runtime::MockRuntime;
-    use crate::source::{MockSource, RepoMetadata};
+    use crate::source::{MockSource, RepoMetadata, SourceKind};
     use mockall::predicate::*;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_config() -> Config {
         #[cfg(not(windows))]
@@ -495,7 +582,199 @@ mod tests {
         }
     }
 
+    /// Create a test SourceRegistry with a mock source
+    #[allow(dead_code)]
+    fn test_registry_with_source(source: MockSource) -> SourceRegistry {
+        let mut registry = SourceRegistry::new();
+        registry.register(Arc::new(source));
+        registry
+    }
+
+    /// Create a basic mock source that returns the given API URL
+    #[allow(dead_code)]
+    fn basic_mock_source(api_url: &str) -> MockSource {
+        let api_url = api_url.to_string();
+        let mut source = MockSource::new();
+        source.expect_kind().return_const(SourceKind::GitHub);
+        source.expect_api_url().return_const(api_url);
+        source
+    }
+
+    /// Create a mock source configured for a successful install test
+    fn mock_source_for_install(download_url: String) -> MockSource {
+        let mut source = MockSource::new();
+        source.expect_kind().return_const(SourceKind::GitHub);
+        source
+            .expect_api_url()
+            .return_const("https://api.github.com".to_string());
+
+        // Return repo metadata
+        source.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
+                description: None,
+                homepage: None,
+                license: None,
+                updated_at: Some("now".into()),
+            })
+        });
+
+        // Return one release
+        source.expect_get_releases_at().return_once(move |_, _| {
+            Ok(vec![SourceRelease {
+                tag: "v1".into(),
+                tarball_url: download_url,
+                ..Default::default()
+            }])
+        });
+
+        source
+    }
+
+    /// Setup runtime mocks for a new package installation
+    fn setup_runtime_for_new_install(
+        runtime: &mut MockRuntime,
+        meta_path: PathBuf,
+        package_dir: PathBuf,
+        version_dir: PathBuf,
+        current_link: PathBuf,
+    ) {
+        // temp_dir for downloads
+        runtime
+            .expect_temp_dir()
+            .returning(|| PathBuf::from("/tmp"));
+
+        // 1. Check meta exists -> false (new install)
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| false);
+
+        // 2. Check package_dir exists -> false (need to create)
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| false);
+
+        // 3. Create package directory
+        runtime
+            .expect_create_dir_all()
+            .with(eq(package_dir.clone()))
+            .returning(|_| Ok(()));
+
+        // 4. Write meta directly (InstallUseCase.save_meta writes to meta.json directly)
+        runtime
+            .expect_write()
+            .with(eq(meta_path.clone()), always())
+            .returning(|_, _| Ok(()));
+
+        // 5. Check version dir exists -> false
+        runtime
+            .expect_exists()
+            .with(eq(version_dir.clone()))
+            .returning(|_| false);
+
+        // 6. Create version dir
+        runtime
+            .expect_create_dir_all()
+            .with(eq(version_dir))
+            .returning(|_| Ok(()));
+
+        // 7. Download file operations
+        runtime
+            .expect_create_file()
+            .returning(|_| Ok(Box::new(std::io::sink())));
+        runtime.expect_remove_file().returning(|_| Ok(()));
+
+        // 8. Check current symlink exists -> false
+        runtime
+            .expect_exists()
+            .with(eq(current_link))
+            .returning(|_| false);
+
+        // 9. Create current symlink
+        runtime.expect_symlink().returning(|_, _| Ok(()));
+
+        // 10. Check package_dir exists for final save -> true (already created)
+        runtime
+            .expect_exists()
+            .with(eq(package_dir))
+            .returning(|_| true);
+
+        // 11. Write meta again (final save after install)
+        runtime
+            .expect_write()
+            .with(eq(meta_path), always())
+            .returning(|_, _| Ok(()));
+    }
+
     // Tests for get_target_dir and update_current_symlink are now in paths.rs and symlink.rs
+
+    /// New simplified test using SourceRegistry and high-level mocks
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn test_install_with_registry() {
+        // This test demonstrates the simplified testing approach:
+        // - Mock Source returns predefined metadata and releases
+        // - Mock Downloader/Extractor handle the actual download
+        // - Runtime mocks are organized in a helper function
+
+        let mut server = mockito::Server::new_async().await;
+        let url = server.url();
+
+        // --- Setup Paths ---
+        let root = PathBuf::from("/home/user/.ghri");
+        let meta_path = root.join("o/r/meta.json");
+        let package_dir = root.join("o/r");
+        let version_dir = root.join("o/r/v1");
+        let current_link = root.join("o/r/current");
+
+        // --- Setup Runtime Mock (using helper) ---
+        let mut runtime = MockRuntime::new();
+        setup_runtime_for_new_install(
+            &mut runtime,
+            meta_path,
+            package_dir,
+            version_dir,
+            current_link,
+        );
+
+        // --- Setup Source Mock ---
+        let download_url = format!("{}/tarball", url);
+        let source = mock_source_for_install(download_url);
+
+        // --- Setup Registry ---
+        let registry = test_registry_with_source(source);
+
+        // --- Setup HTTP Mock ---
+        let _m = server
+            .mock("GET", "/tarball")
+            .with_status(200)
+            .with_body("data")
+            .create();
+
+        // --- Setup Extractor Mock ---
+        let mut extractor = MockArchiveExtractor::new();
+        extractor
+            .expect_extract_with_cleanup()
+            .returning(|_: &MockRuntime, _, _, _| Ok(()));
+
+        // --- Execute ---
+        let repo = RepoId {
+            owner: "o".into(),
+            repo: "r".into(),
+        };
+        let config = test_config();
+        let downloader = MockDownloader::new();
+
+        // Note: We pass a dummy source here since install() uses registry's source
+        let dummy_source = MockSource::new();
+        let installer = Installer::new(runtime, dummy_source, downloader, extractor);
+
+        installer
+            .install(&config, &registry, &repo, None, &default_install_options())
+            .await
+            .unwrap();
+    }
 
     #[cfg(not(windows))]
     #[tokio::test]
@@ -643,7 +922,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, source, downloader, extractor);
         installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -784,7 +1063,7 @@ mod tests {
 
         // Should fail because no stable release found
         let result = installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await;
         assert!(result.is_err());
         assert!(
@@ -845,7 +1124,7 @@ mod tests {
 
         // Try to install version "v999.0.0" which doesn't exist
         let result = installer
-            .install(&config, &repo, Some("v999.0.0"), &default_install_options())
+            .install_legacy(&config, &repo, Some("v999.0.0"), &default_install_options())
             .await;
 
         // Should fail because requested version not found
@@ -958,7 +1237,9 @@ mod tests {
             pre: true,
             ..default_install_options()
         };
-        let result = installer.install(&config, &repo, None, &options).await;
+        let result = installer
+            .install_legacy(&config, &repo, None, &options)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -1106,7 +1387,7 @@ mod tests {
 
         // Should succeed despite metadata save failure (it's just a warning)
         let result = installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await;
         assert!(result.is_ok());
     }
@@ -1220,7 +1501,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(runtime, github, downloader, MockArchiveExtractor::new());
         installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -1368,7 +1649,7 @@ mod tests {
             ..default_install_options()
         };
         installer
-            .install(&config, &repo, None, &options)
+            .install_legacy(&config, &repo, None, &options)
             .await
             .unwrap();
     }
@@ -1455,7 +1736,7 @@ mod tests {
 
         // User provides NO filters -> should use saved filters from meta.json
         installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }
@@ -1536,7 +1817,7 @@ mod tests {
 
         // Empty filters vec -> uses saved filters (current behavior)
         installer
-            .install(&config, &repo, None, &default_install_options())
+            .install_legacy(&config, &repo, None, &default_install_options())
             .await
             .unwrap();
     }

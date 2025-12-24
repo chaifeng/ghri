@@ -84,7 +84,7 @@ async fn run_upgrade<R: Runtime + 'static>(
         return Ok(());
     }
 
-    // Now create installer for actual installation work
+    // Create installer for actual installation work
     let installer = Installer::new(
         runtime,
         super::services::build_source(config)?,
@@ -110,8 +110,15 @@ async fn run_upgrade<R: Runtime + 'static>(
             original_args: vec![], // No original args needed for upgrade
         };
 
+        // Use install for unified installation path
         if let Err(e) = installer
-            .install(config, &repo, Some(&latest_version), &install_options)
+            .install(
+                config,
+                &services.registry,
+                &repo,
+                Some(&latest_version),
+                &install_options,
+            )
             .await
         {
             eprintln!("   failed to upgrade {}: {}", repo, e);

@@ -85,6 +85,98 @@ pub trait Runtime: Send + Sync {
     fn confirm(&self, prompt: &str) -> Result<bool>;
 }
 
+// Blanket implementation for &R where R: Runtime
+// This allows functions that take `runtime: &R` to work with any Runtime
+#[async_trait]
+impl<R: Runtime + ?Sized> Runtime for &R {
+    fn env_var(&self, key: &str) -> Result<String, std_env::VarError> {
+        (*self).env_var(key)
+    }
+    fn write(&self, path: &Path, contents: &[u8]) -> Result<()> {
+        (*self).write(path, contents)
+    }
+    fn read_to_string(&self, path: &Path) -> Result<String> {
+        (*self).read_to_string(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        (*self).rename(from, to)
+    }
+    fn copy(&self, from: &Path, to: &Path) -> Result<u64> {
+        (*self).copy(from, to)
+    }
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        (*self).create_dir_all(path)
+    }
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        (*self).remove_file(path)
+    }
+    fn remove_dir(&self, path: &Path) -> Result<()> {
+        (*self).remove_dir(path)
+    }
+    fn remove_symlink(&self, path: &Path) -> Result<()> {
+        (*self).remove_symlink(path)
+    }
+    fn exists(&self, path: &Path) -> bool {
+        (*self).exists(path)
+    }
+    fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        (*self).read_dir(path)
+    }
+    fn symlink(&self, original: &Path, link: &Path) -> Result<()> {
+        (*self).symlink(original, link)
+    }
+    fn read_link(&self, path: &Path) -> Result<PathBuf> {
+        (*self).read_link(path)
+    }
+    fn resolve_link(&self, path: &Path) -> Result<PathBuf> {
+        (*self).resolve_link(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
+        (*self).canonicalize(path)
+    }
+    fn is_symlink(&self, path: &Path) -> bool {
+        (*self).is_symlink(path)
+    }
+    fn create_file(&self, path: &Path) -> Result<Box<dyn std::io::Write + Send>> {
+        (*self).create_file(path)
+    }
+    fn open(&self, path: &Path) -> Result<Box<dyn std::io::Read + Send>> {
+        (*self).open(path)
+    }
+    fn remove_dir_all(&self, path: &Path) -> Result<()> {
+        (*self).remove_dir_all(path)
+    }
+    fn is_dir(&self, path: &Path) -> bool {
+        (*self).is_dir(path)
+    }
+    fn set_permissions(&self, path: &Path, mode: u32) -> Result<()> {
+        (*self).set_permissions(path, mode)
+    }
+    fn remove_symlink_if_target_under(
+        &self,
+        link_path: &Path,
+        target_prefix: &Path,
+        description: &str,
+    ) -> Result<bool> {
+        (*self).remove_symlink_if_target_under(link_path, target_prefix, description)
+    }
+    fn home_dir(&self) -> Option<PathBuf> {
+        (*self).home_dir()
+    }
+    fn config_dir(&self) -> Option<PathBuf> {
+        (*self).config_dir()
+    }
+    fn temp_dir(&self) -> PathBuf {
+        (*self).temp_dir()
+    }
+    fn is_privileged(&self) -> bool {
+        (*self).is_privileged()
+    }
+    fn confirm(&self, prompt: &str) -> Result<bool> {
+        (*self).confirm(prompt)
+    }
+}
+
 pub struct RealRuntime;
 
 #[async_trait]
