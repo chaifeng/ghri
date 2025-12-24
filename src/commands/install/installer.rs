@@ -4,12 +4,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::{
+    application::InstallUseCase,
     archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
     package::{LinkManager, Meta, PackageRepository},
     runtime::Runtime,
-    source::{RepoId, Source, SourceRelease},
+    source::{RepoId, Source, SourceRegistry, SourceRelease},
 };
 
 use crate::commands::config::{Config, InstallOptions};
@@ -35,6 +36,100 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
         }
     }
 
+    /// Install a package using InstallUseCase for orchestration
+    #[tracing::instrument(skip(self, config, registry, repo, version, options))]
+    pub async fn install_with_registry(
+        &self,
+        config: &Config,
+        registry: &SourceRegistry,
+        repo: &RepoId,
+        version: Option<&str>,
+        options: &InstallOptions,
+    ) -> Result<()> {
+        // Create InstallUseCase for orchestration
+        let use_case = InstallUseCase::new(&self.runtime, registry, config.install_root.clone());
+
+        println!("   resolving {}", repo);
+
+        // Get or fetch metadata using UseCase
+        let source = use_case.resolve_source(None)?;
+        let (mut meta, is_new) = use_case.get_or_fetch_meta(repo, source.as_ref()).await?;
+
+        // Get effective filters using UseCase
+        let app_options = crate::application::InstallOptions {
+            filters: options.filters.clone(),
+            pre: options.pre,
+            yes: options.yes,
+            original_args: options.original_args.clone(),
+        };
+        let effective_filters = use_case.effective_filters(&app_options, &meta);
+
+        // Resolve version using UseCase
+        let meta_release = use_case.resolve_version(&meta, version, options.pre)?;
+        info!("Found version: {}", meta_release.version);
+        let release: SourceRelease = meta_release.clone().into();
+
+        // Check if already installed using UseCase
+        if use_case.is_installed(repo, &release.tag) {
+            println!("   {} {} is already installed", repo, release.tag);
+            return Ok(());
+        }
+
+        let target_dir = use_case.version_dir(repo, &release.tag);
+        let meta_path = use_case.package_repo().meta_path(&repo.owner, &repo.repo);
+
+        // Get download plan and show confirmation
+        let plan = get_download_plan(&release, &effective_filters)?;
+
+        if !options.yes {
+            self.show_install_plan(
+                repo,
+                &release,
+                &target_dir,
+                &meta_path,
+                &plan,
+                is_new,
+                &meta,
+            );
+            if !self.runtime.confirm("Proceed with installation?")? {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
+
+        // Perform the actual download and extraction
+        self.do_install(
+            repo,
+            &release,
+            &target_dir,
+            &effective_filters,
+            &options.original_args,
+        )
+        .await?;
+
+        // Update 'current' symlink using UseCase
+        use_case.update_current_link(repo, &release.tag)?;
+
+        // Update external links using the proper function
+        if let Some(package_dir) = target_dir.parent()
+            && let Err(e) = update_external_links(&self.runtime, package_dir, &target_dir, &meta)
+        {
+            warn!("Failed to update external links: {}. Continuing.", e);
+        }
+
+        // Save metadata using UseCase
+        meta.current_version = release.tag.clone();
+        meta.filters = effective_filters;
+        if let Err(e) = use_case.save_meta(repo, &meta) {
+            warn!("Failed to save package metadata: {}. Continuing.", e);
+        }
+
+        self.print_install_success(repo, &release.tag, &target_dir);
+
+        Ok(())
+    }
+
+    /// Legacy install method (for backward compatibility)
     #[tracing::instrument(skip(self, config, repo, version, options))]
     pub async fn install(
         &self,
@@ -54,8 +149,8 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
             options.filters.clone()
         };
 
+        // Resolve version
         let meta_release = if let Some(ver) = version {
-            // Find the specific version
             meta.releases
                 .iter()
                 .find(|r| {
@@ -77,11 +172,9 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
                     )
                 })?
         } else if options.pre {
-            // Get latest release including pre-releases
             meta.get_latest_release()
                 .ok_or_else(|| anyhow::anyhow!("No release found for {}.", repo))?
         } else {
-            // Get latest stable release
             meta.get_latest_stable_release()
                 .ok_or_else(|| anyhow::anyhow!("No stable release found for {}. If you want to install a pre-release, specify the version with @version or use --pre.", repo))?
         };
@@ -116,36 +209,15 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
             }
         }
 
-        // Set up cleanup context for Ctrl-C handling
-        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-        let cleanup_ctx_clone = Arc::clone(&cleanup_ctx);
-
-        // Register Ctrl-C handler
-        let ctrl_c_handler = tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                eprintln!("\nInterrupted, cleaning up...");
-                cleanup_ctx_clone.lock().unwrap().cleanup();
-                std::process::exit(130); // Standard exit code for Ctrl-C
-            }
-        });
-
-        let result = ensure_installed(
-            &self.runtime,
-            &target_dir,
+        // Perform the actual download and extraction
+        self.do_install(
             repo,
             &release,
-            &self.downloader,
-            &self.extractor,
-            Arc::clone(&cleanup_ctx),
+            &target_dir,
             &effective_filters,
             &options.original_args,
         )
-        .await;
-
-        // Abort the Ctrl-C handler since installation completed (successfully or with error)
-        ctrl_c_handler.abort();
-
-        result?;
+        .await?;
 
         // Update 'current' symlink to point to the new version
         let link_manager = LinkManager::new(&self.runtime);
@@ -162,14 +234,9 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
 
         // Metadata handling - save meta only after successful install
         meta.current_version = release.tag.clone();
-        // Save filters to meta (for use during updates)
-        // Always update filters: use effective_filters which may be user-provided or from saved meta
         meta.filters = effective_filters;
-        if needs_save {
-            // Newly fetched meta - need to create parent directory first
-            if let Some(parent) = meta_path.parent() {
-                self.runtime.create_dir_all(parent)?;
-            }
+        if needs_save && let Some(parent) = meta_path.parent() {
+            self.runtime.create_dir_all(parent)?;
         }
         if let Err(e) = self.save_meta(&meta_path, &meta) {
             warn!("Failed to save package metadata: {}. Continuing.", e);
@@ -178,6 +245,45 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
         self.print_install_success(repo, &release.tag, &target_dir);
 
         Ok(())
+    }
+
+    /// Perform the actual download and extraction
+    async fn do_install(
+        &self,
+        repo: &RepoId,
+        release: &SourceRelease,
+        target_dir: &Path,
+        filters: &[String],
+        original_args: &[String],
+    ) -> Result<()> {
+        // Set up cleanup context for Ctrl-C handling
+        let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
+        let cleanup_ctx_clone = Arc::clone(&cleanup_ctx);
+
+        // Register Ctrl-C handler
+        let ctrl_c_handler = tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                eprintln!("\nInterrupted, cleaning up...");
+                cleanup_ctx_clone.lock().unwrap().cleanup();
+                std::process::exit(130);
+            }
+        });
+
+        let result = ensure_installed(
+            &self.runtime,
+            target_dir,
+            repo,
+            release,
+            &self.downloader,
+            &self.extractor,
+            Arc::clone(&cleanup_ctx),
+            filters,
+            original_args,
+        )
+        .await;
+
+        ctrl_c_handler.abort();
+        result
     }
 
     #[allow(clippy::too_many_arguments)]

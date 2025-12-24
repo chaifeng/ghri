@@ -48,8 +48,16 @@ pub async fn run<R: Runtime + 'static>(
         services.downloader,
         services.extractor,
     );
+
+    // Use new install_with_registry method that leverages InstallUseCase
     installer
-        .install(config, &spec.repo, spec.version.as_deref(), &options)
+        .install_with_registry(
+            config,
+            &services.registry,
+            &spec.repo,
+            spec.version.as_deref(),
+            &options,
+        )
         .await?;
 
     // Prune old versions if requested

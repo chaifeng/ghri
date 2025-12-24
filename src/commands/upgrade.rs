@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::package::PackageRepository;
+use crate::application::UpgradeUseCase;
 use crate::runtime::Runtime;
 use crate::source::RepoId;
 
@@ -29,21 +29,62 @@ async fn run_upgrade<R: Runtime + 'static>(
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
-    let packages = pkg_repo.find_all_with_meta()?;
+    // First, use UpgradeUseCase to find packages and check for updates
+    let packages_to_upgrade: Vec<_> = {
+        let use_case =
+            UpgradeUseCase::new(&runtime, &services.registry, config.install_root.clone());
 
-    if packages.is_empty() {
-        println!("No packages installed.");
+        // Find all installed packages
+        let packages = use_case.find_all_packages()?;
+
+        if packages.is_empty() {
+            println!("No packages installed.");
+            return Ok(());
+        }
+
+        // Parse and filter repositories
+        let filter_repos = use_case.parse_repo_filters(&repos);
+
+        // Collect packages that need upgrading
+        packages
+            .into_iter()
+            .filter_map(|(_, meta)| {
+                let repo = match meta.name.parse::<RepoId>() {
+                    Ok(r) => r,
+                    Err(_) => return None,
+                };
+
+                // Skip if not in filter list (when filter is specified)
+                if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
+                    return None;
+                }
+
+                // Check for available update
+                let update_check = use_case.check_update(&meta, options.pre);
+
+                match update_check.latest_version {
+                    Some(latest) if update_check.has_update => {
+                        Some((repo, meta.current_version.clone(), latest))
+                    }
+                    Some(_) => {
+                        println!("   {} {} is up to date", repo, meta.current_version);
+                        None
+                    }
+                    None => {
+                        println!("   {} no release available", repo);
+                        None
+                    }
+                }
+            })
+            .collect()
+    };
+
+    if packages_to_upgrade.is_empty() {
+        println!("\nAll packages are up to date.");
         return Ok(());
     }
 
-    // Parse requested repos for filtering
-    let filter_repos: Vec<RepoId> = repos
-        .iter()
-        .filter_map(|r| r.parse::<RepoId>().ok())
-        .collect();
-
-    // Create installer with the source from registry
+    // Now create installer for actual installation work
     let installer = Installer::new(
         runtime,
         super::services::build_source(config)?,
@@ -52,39 +93,12 @@ async fn run_upgrade<R: Runtime + 'static>(
     );
 
     let mut upgraded_count = 0;
-    let mut skipped_count = 0;
+    let total = packages_to_upgrade.len();
 
-    for (_meta_path, meta) in packages {
-        let repo = meta.name.parse::<RepoId>()?;
-
-        // Skip if not in filter list (when filter is specified)
-        if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
-            continue;
-        }
-
-        // Get the latest version from cached release info
-        let latest = if options.pre {
-            meta.get_latest_release()
-        } else {
-            meta.get_latest_stable_release()
-        };
-
-        let Some(latest) = latest else {
-            println!("   {} no release available", repo);
-            skipped_count += 1;
-            continue;
-        };
-
-        // Skip if already on latest version
-        if meta.current_version == latest.version {
-            println!("   {} {} is up to date", repo, meta.current_version);
-            skipped_count += 1;
-            continue;
-        }
-
+    for (repo, current_version, latest_version) in packages_to_upgrade {
         println!(
             "   upgrading {} {} -> {}",
-            repo, meta.current_version, latest.version
+            repo, current_version, latest_version
         );
 
         // Install the new version using saved filters from meta
@@ -95,8 +109,9 @@ async fn run_upgrade<R: Runtime + 'static>(
             prune: false,          // Handle prune separately below
             original_args: vec![], // No original args needed for upgrade
         };
+
         if let Err(e) = installer
-            .install(config, &repo, Some(&latest.version), &install_options)
+            .install(config, &repo, Some(&latest_version), &install_options)
             .await
         {
             eprintln!("   failed to upgrade {}: {}", repo, e);
@@ -121,7 +136,8 @@ async fn run_upgrade<R: Runtime + 'static>(
     println!();
     println!(
         "Upgraded {} package(s), {} already up to date.",
-        upgraded_count, skipped_count
+        upgraded_count,
+        total - upgraded_count
     );
 
     Ok(())

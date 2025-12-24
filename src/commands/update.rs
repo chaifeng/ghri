@@ -1,7 +1,8 @@
 use anyhow::Result;
 use log::warn;
 
-use crate::package::{Meta, PackageRepository, VersionResolver};
+use crate::application::InstallUseCase;
+use crate::package::VersionResolver;
 use crate::runtime::Runtime;
 use crate::source::RepoId;
 
@@ -26,7 +27,10 @@ async fn run_update<R: Runtime + 'static>(
     services: RegistryServices,
     repos: Vec<String>,
 ) -> Result<()> {
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
+    // Create InstallUseCase for metadata operations
+    let use_case = InstallUseCase::new(&runtime, &services.registry, config.install_root.clone());
+    let pkg_repo = use_case.package_repo();
+
     let packages = pkg_repo.find_all_with_meta()?;
 
     if packages.is_empty() {
@@ -56,8 +60,8 @@ async fn run_update<R: Runtime + 'static>(
 
         println!("   updating {}", repo);
 
-        // Resolve source from package metadata (auto-detect GitHub/GitLab/Gitee)
-        let source = match services.registry.resolve_from_meta(&meta) {
+        // Resolve source from package metadata using InstallUseCase
+        let source = match use_case.resolve_source_from_meta(&meta) {
             Ok(s) => s,
             Err(e) => {
                 warn!("Failed to resolve source for {}: {}", repo, e);
@@ -65,18 +69,37 @@ async fn run_update<R: Runtime + 'static>(
             }
         };
 
-        if let Err(e) = save_metadata(&pkg_repo, source.as_ref(), &repo, &meta).await {
-            warn!("Failed to update metadata for {}: {}", repo, e);
-        } else {
-            // Check if update is available using VersionResolver
-            let updated_meta = pkg_repo.load_required(&repo.owner, &repo.repo)?;
-            if let Some(latest) = VersionResolver::check_update(
-                &updated_meta.releases,
-                &meta.current_version,
-                false, // don't include prereleases
-            ) {
-                print_update_available(&repo, &meta.current_version, &latest.version);
+        // Fetch new metadata using InstallUseCase with saved API URL
+        let new_meta = match use_case
+            .fetch_meta_at(&repo, source.as_ref(), &meta.api_url, &meta.current_version)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("Failed to fetch metadata for {}: {}", repo, e);
+                continue;
             }
+        };
+
+        // Merge with existing metadata
+        let mut final_meta = meta.clone();
+        if final_meta.merge(new_meta.clone()) {
+            final_meta.updated_at = new_meta.updated_at.clone();
+        }
+
+        // Save updated metadata
+        if let Err(e) = use_case.save_meta(&repo, &final_meta) {
+            warn!("Failed to save metadata for {}: {}", repo, e);
+            continue;
+        }
+
+        // Check if update is available
+        if let Some(latest) = VersionResolver::check_update(
+            &final_meta.releases,
+            &meta.current_version,
+            false, // don't include prereleases
+        ) {
+            print_update_available(&repo, &meta.current_version, &latest.version);
         }
     }
 
@@ -91,32 +114,6 @@ fn print_update_available(repo: &RepoId, current: &str, latest: &str) {
         current
     };
     println!("  updatable {} {} -> {}", repo, current_display, latest);
-}
-
-#[tracing::instrument(skip(pkg_repo, source, repo, existing_meta))]
-async fn save_metadata<R: Runtime>(
-    pkg_repo: &PackageRepository<'_, R>,
-    source: &dyn crate::source::Source,
-    repo: &RepoId,
-    existing_meta: &Meta,
-) -> Result<()> {
-    let api_url = &existing_meta.api_url;
-    let current_version = &existing_meta.current_version;
-
-    // Fetch new metadata from source
-    let repo_info = source.get_repo_metadata_at(repo, api_url).await?;
-    let releases = source.get_releases_at(repo, api_url).await?;
-    let new_meta = Meta::from(repo.clone(), repo_info, releases, current_version, api_url);
-
-    // Merge with existing metadata
-    let mut final_meta = existing_meta.clone();
-    if final_meta.merge(new_meta.clone()) {
-        final_meta.updated_at = new_meta.updated_at;
-    }
-
-    pkg_repo.save(&repo.owner, &repo.repo, &final_meta)?;
-
-    Ok(())
 }
 
 #[cfg(test)]
