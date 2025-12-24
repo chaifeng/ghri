@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use log::{info, warn};
 
 use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionResolver};
@@ -40,6 +41,75 @@ pub struct ResolvedInstall {
     pub target_dir: PathBuf,
     /// Effective filters to use
     pub filters: Vec<String>,
+}
+
+/// Trait for install use case operations
+///
+/// This trait abstracts the install orchestration logic, enabling:
+/// - Dependency injection for testing
+/// - Mock implementations for unit tests
+/// - Separation of concerns between command layer and business logic
+#[async_trait]
+#[cfg_attr(test, mockall::automock)]
+pub trait InstallOperations: Send + Sync {
+    /// Get or load cached metadata for a package
+    fn get_cached_meta(&self, repo: &RepoId) -> Result<Option<Meta>>;
+
+    /// Fetch fresh metadata from source
+    async fn fetch_meta(
+        &self,
+        repo: &RepoId,
+        source: &dyn Source,
+        current_version: &str,
+    ) -> Result<Meta>;
+
+    /// Fetch fresh metadata using a specific API URL
+    async fn fetch_meta_at(
+        &self,
+        repo: &RepoId,
+        source: &dyn Source,
+        api_url: &str,
+        current_version: &str,
+    ) -> Result<Meta>;
+
+    /// Get or fetch metadata, preferring cache
+    async fn get_or_fetch_meta(&self, repo: &RepoId, source: &dyn Source) -> Result<(Meta, bool)>;
+
+    /// Resolve the version to install based on constraints
+    /// Returns a cloned MetaRelease to avoid lifetime issues
+    fn resolve_version(
+        &self,
+        meta: &Meta,
+        version: Option<String>,
+        pre: bool,
+    ) -> Result<MetaRelease>;
+
+    /// Get effective filters (user-provided or from saved meta)
+    fn effective_filters(&self, options: &InstallOptions, meta: &Meta) -> Vec<String>;
+
+    /// Check if a version is already installed
+    fn is_installed(&self, repo: &RepoId, version: &str) -> bool;
+
+    /// Get the version directory path
+    fn version_dir(&self, repo: &RepoId, version: &str) -> PathBuf;
+
+    /// Get the package directory path
+    fn package_dir(&self, repo: &RepoId) -> PathBuf;
+
+    /// Get the meta.json path for a package
+    fn meta_path(&self, repo: &RepoId) -> PathBuf;
+
+    /// Update the 'current' symlink after installation
+    fn update_current_link(&self, repo: &RepoId, version: &str) -> Result<()>;
+
+    /// Save metadata after successful installation
+    fn save_meta(&self, repo: &RepoId, meta: &Meta) -> Result<()>;
+
+    /// Resolve the source for a package (None = use default source)
+    fn resolve_source_for_new(&self) -> Result<Arc<dyn Source>>;
+
+    /// Resolve source from existing metadata (for update/upgrade)
+    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Source>>;
 }
 
 /// Install use case - platform-agnostic installation orchestration
@@ -283,6 +353,159 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     /// Resolve source from existing metadata (for update/upgrade)
     pub fn resolve_source_from_meta(&self, meta: &Meta) -> Result<&Arc<dyn Source>> {
         self.source_registry.resolve_from_meta(meta)
+    }
+}
+
+// Implement InstallOperations trait for InstallUseCase
+#[async_trait]
+impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
+    fn get_cached_meta(&self, repo: &RepoId) -> Result<Option<Meta>> {
+        self.package_repo.load(&repo.owner, &repo.repo)
+    }
+
+    async fn fetch_meta(
+        &self,
+        repo: &RepoId,
+        source: &dyn Source,
+        current_version: &str,
+    ) -> Result<Meta> {
+        let api_url = source.api_url();
+        let repo_info = source
+            .get_repo_metadata_at(repo, api_url)
+            .await
+            .context("Failed to fetch repository metadata")?;
+        let releases = source
+            .get_releases_at(repo, api_url)
+            .await
+            .context("Failed to fetch releases")?;
+
+        Ok(Meta::from(
+            repo.clone(),
+            repo_info,
+            releases,
+            current_version,
+            api_url,
+        ))
+    }
+
+    async fn fetch_meta_at(
+        &self,
+        repo: &RepoId,
+        source: &dyn Source,
+        api_url: &str,
+        current_version: &str,
+    ) -> Result<Meta> {
+        let repo_info = source
+            .get_repo_metadata_at(repo, api_url)
+            .await
+            .context("Failed to fetch repository metadata")?;
+        let releases = source
+            .get_releases_at(repo, api_url)
+            .await
+            .context("Failed to fetch releases")?;
+
+        Ok(Meta::from(
+            repo.clone(),
+            repo_info,
+            releases,
+            current_version,
+            api_url,
+        ))
+    }
+
+    async fn get_or_fetch_meta(&self, repo: &RepoId, source: &dyn Source) -> Result<(Meta, bool)> {
+        match self.get_cached_meta(repo)? {
+            Some(meta) => Ok((meta, false)),
+            None => {
+                let meta = InstallOperations::fetch_meta(self, repo, source, "").await?;
+                Ok((meta, true))
+            }
+        }
+    }
+
+    fn resolve_version(
+        &self,
+        meta: &Meta,
+        version: Option<String>,
+        pre: bool,
+    ) -> Result<MetaRelease> {
+        if let Some(ver) = version {
+            VersionResolver::find_exact(&meta.releases, &ver)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Version '{}' not found for {}. Available versions: {}",
+                        ver,
+                        meta.name,
+                        meta.releases
+                            .iter()
+                            .take(5)
+                            .map(|r| r.version.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+        } else if pre {
+            meta.get_latest_release()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("No release found for {}.", meta.name))
+        } else {
+            meta.get_latest_stable_release().cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No stable release found for {}. Use --pre for pre-releases.",
+                    meta.name
+                )
+            })
+        }
+    }
+
+    fn effective_filters(&self, options: &InstallOptions, meta: &Meta) -> Vec<String> {
+        if options.filters.is_empty() && !meta.filters.is_empty() {
+            info!("Using saved filters from meta: {:?}", meta.filters);
+            meta.filters.clone()
+        } else {
+            options.filters.clone()
+        }
+    }
+
+    fn is_installed(&self, repo: &RepoId, version: &str) -> bool {
+        let target_dir = self.version_dir(repo, version);
+        self.runtime.exists(&target_dir)
+    }
+
+    fn version_dir(&self, repo: &RepoId, version: &str) -> PathBuf {
+        self.install_root
+            .join(&repo.owner)
+            .join(&repo.repo)
+            .join(version)
+    }
+
+    fn package_dir(&self, repo: &RepoId) -> PathBuf {
+        self.install_root.join(&repo.owner).join(&repo.repo)
+    }
+
+    fn meta_path(&self, repo: &RepoId) -> PathBuf {
+        self.package_repo.meta_path(&repo.owner, &repo.repo)
+    }
+
+    fn update_current_link(&self, repo: &RepoId, version: &str) -> Result<()> {
+        let package_dir = self.package_dir(repo);
+        self.link_manager.update_current_link(&package_dir, version)
+    }
+
+    fn save_meta(&self, repo: &RepoId, meta: &Meta) -> Result<()> {
+        self.package_repo.save(&repo.owner, &repo.repo, meta)
+    }
+
+    fn resolve_source_for_new(&self) -> Result<Arc<dyn Source>> {
+        self.source_registry
+            .get(self.source_registry.default_kind())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No default source available"))
+    }
+
+    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Source>> {
+        self.source_registry.resolve_from_meta(meta).cloned()
     }
 }
 

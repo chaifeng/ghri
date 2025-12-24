@@ -2,7 +2,7 @@ use anyhow::Result;
 use log::warn;
 use std::sync::{Arc, Mutex};
 
-use crate::application::InstallUseCase;
+use crate::application::{InstallOperations, InstallUseCase};
 use crate::cleanup::CleanupContext;
 use crate::runtime::Runtime;
 use crate::source::SourceRelease;
@@ -29,34 +29,55 @@ pub async fn install<R: Runtime + 'static>(
     overrides: ConfigOverrides,
     options: InstallOptions,
 ) -> Result<()> {
+    // Wrap runtime in Arc first for shared ownership
+    let runtime = Arc::new(runtime);
+
     // Load configuration
-    let config = Config::load(&runtime, overrides)?;
+    let config = Config::load(runtime.as_ref(), overrides)?;
 
     // Build services from config
     let services = RegistryServices::from_config(&config)?;
 
-    // Run installation
-    run(&config, runtime, services, repo_str, options).await
+    // Create use case (borrows from Arc)
+    let use_case = InstallUseCase::new(
+        runtime.as_ref(),
+        &services.registry,
+        config.install_root.clone(),
+    );
+
+    // Run installation - clone Arc for ownership transfer
+    run_install(
+        &config,
+        Arc::clone(&runtime),
+        &services,
+        &use_case,
+        repo_str,
+        options,
+    )
+    .await
 }
 
-#[tracing::instrument(skip(config, runtime, services, options))]
-pub async fn run<R: Runtime + 'static>(
+/// Core installation logic - separated for testability
+///
+/// This function takes all dependencies as parameters, enabling:
+/// - Unit tests with mock InstallOperations
+/// - Integration tests with real implementations
+#[tracing::instrument(skip(config, runtime, services, use_case, options))]
+pub async fn run_install<R: Runtime + 'static>(
     config: &Config,
-    runtime: R,
-    services: RegistryServices,
+    runtime: Arc<R>,
+    services: &RegistryServices,
+    use_case: &dyn InstallOperations,
     repo_str: &str,
     options: InstallOptions,
 ) -> Result<()> {
     let spec = repo_str.parse::<RepoSpec>()?;
     let repo = &spec.repo;
 
-    // Create InstallUseCase for orchestration
-    let use_case = InstallUseCase::new(&runtime, &services.registry, config.install_root.clone());
-
     println!("   resolving {}", repo);
 
     // Get or fetch metadata
-    let source = use_case.resolve_source(None)?;
+    let source = use_case.resolve_source_for_new()?;
     let (mut meta, is_new) = use_case.get_or_fetch_meta(repo, source.as_ref()).await?;
 
     // Get effective filters
@@ -69,8 +90,8 @@ pub async fn run<R: Runtime + 'static>(
     let effective_filters = use_case.effective_filters(&app_options, &meta);
 
     // Resolve version
-    let meta_release = use_case.resolve_version(&meta, spec.version.as_deref(), options.pre)?;
-    let release: SourceRelease = meta_release.clone().into();
+    let meta_release = use_case.resolve_version(&meta, spec.version.clone(), options.pre)?;
+    let release: SourceRelease = meta_release.into();
 
     // Check if already installed
     if use_case.is_installed(repo, &release.tag) {
@@ -79,7 +100,7 @@ pub async fn run<R: Runtime + 'static>(
     }
 
     let target_dir = use_case.version_dir(repo, &release.tag);
-    let meta_path = use_case.package_repo().meta_path(&repo.owner, &repo.repo);
+    let meta_path = use_case.meta_path(repo);
 
     // Get download plan and show confirmation
     let plan = get_download_plan(&release, &effective_filters)?;
@@ -114,7 +135,7 @@ pub async fn run<R: Runtime + 'static>(
 
     // Perform the actual download and extraction
     let install_result = ensure_installed(
-        &runtime,
+        runtime.as_ref(),
         &target_dir,
         repo,
         &release,
@@ -134,7 +155,7 @@ pub async fn run<R: Runtime + 'static>(
 
     // Update external links
     if let Some(package_dir) = target_dir.parent()
-        && let Err(e) = update_external_links(&runtime, package_dir, &target_dir, &meta)
+        && let Err(e) = update_external_links(runtime.as_ref(), package_dir, &target_dir, &meta)
     {
         warn!("Failed to update external links: {}. Continuing.", e);
     }
@@ -156,7 +177,7 @@ pub async fn run<R: Runtime + 'static>(
     // Prune old versions if requested
     if options.prune {
         prune_package_dir(
-            &runtime,
+            runtime.as_ref(),
             &config.install_root,
             &repo.owner,
             &repo.repo,

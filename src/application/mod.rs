@@ -6,5 +6,8 @@
 mod install;
 mod upgrade;
 
-pub use install::{InstallOptions, InstallUseCase};
+pub use install::{InstallOperations, InstallOptions, InstallUseCase};
 pub use upgrade::{UpdateCheck, UpgradeOptions, UpgradeUseCase};
+
+#[cfg(test)]
+pub use install::MockInstallOperations;
