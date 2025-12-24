@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use log::{debug, info};
+#[cfg(test)]
+use mockall::automock;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -10,6 +13,95 @@ use crate::{
     runtime::Runtime,
     source::{ReleaseAsset, RepoId, SourceRelease},
 };
+
+/// Trait for installing a release to a target directory.
+///
+/// This abstracts the download and extraction logic, making it easy to mock
+/// in tests without needing to mock low-level runtime operations.
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait ReleaseInstaller: Send + Sync {
+    /// Install a release to the target directory.
+    ///
+    /// This will:
+    /// 1. Check if target directory already exists (skip if so)
+    /// 2. Filter assets based on provided patterns
+    /// 3. Download either assets or source tarball
+    /// 4. Extract archives as needed
+    /// 5. Handle cleanup on failure or Ctrl-C
+    async fn install(
+        &self,
+        repo: &RepoId,
+        release: &SourceRelease,
+        target_dir: &Path,
+        filters: &[String],
+        original_args: &[String],
+    ) -> Result<()>;
+}
+
+/// Default implementation of ReleaseInstaller that downloads and extracts releases.
+pub struct DefaultReleaseInstaller<R, D, E>
+where
+    R: Runtime + 'static,
+    D: Downloader,
+    E: ArchiveExtractor,
+{
+    runtime: Arc<R>,
+    downloader: Arc<D>,
+    extractor: Arc<E>,
+    cleanup_ctx: Arc<Mutex<CleanupContext>>,
+}
+
+impl<R, D, E> DefaultReleaseInstaller<R, D, E>
+where
+    R: Runtime + 'static,
+    D: Downloader,
+    E: ArchiveExtractor,
+{
+    pub fn new(
+        runtime: Arc<R>,
+        downloader: Arc<D>,
+        extractor: Arc<E>,
+        cleanup_ctx: Arc<Mutex<CleanupContext>>,
+    ) -> Self {
+        Self {
+            runtime,
+            downloader,
+            extractor,
+            cleanup_ctx,
+        }
+    }
+}
+
+#[async_trait]
+impl<R, D, E> ReleaseInstaller for DefaultReleaseInstaller<R, D, E>
+where
+    R: Runtime + 'static,
+    D: Downloader + Send + Sync,
+    E: ArchiveExtractor + Send + Sync,
+{
+    async fn install(
+        &self,
+        repo: &RepoId,
+        release: &SourceRelease,
+        target_dir: &Path,
+        filters: &[String],
+        original_args: &[String],
+    ) -> Result<()> {
+        ensure_installed_impl(
+            self.runtime.as_ref(),
+            target_dir,
+            repo,
+            release,
+            self.downloader.as_ref(),
+            self.extractor.as_ref(),
+            Arc::clone(&self.cleanup_ctx),
+            filters,
+            original_args,
+        )
+        .await
+    }
+}
 
 /// Describes what will be downloaded during installation
 #[derive(Debug, Clone)]
@@ -65,7 +157,11 @@ pub fn get_download_plan(release: &SourceRelease, filters: &[String]) -> Result<
     original_args
 ))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn ensure_installed<R: Runtime + 'static, E: ArchiveExtractor, D: Downloader>(
+pub(super) async fn ensure_installed_impl<
+    R: Runtime + 'static,
+    E: ArchiveExtractor,
+    D: Downloader,
+>(
     runtime: &R,
     target_dir: &Path,
     repo: &RepoId,
@@ -774,7 +870,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        ensure_installed(
+        ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -855,7 +951,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target_dir,
             &repo,
@@ -934,7 +1030,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target_dir,
             &repo,
@@ -1025,7 +1121,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target_dir,
             &repo,
@@ -1073,7 +1169,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &RepoId {
@@ -1195,7 +1291,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1291,7 +1387,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1396,7 +1492,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1483,7 +1579,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1589,7 +1685,7 @@ mod tests {
 
         let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
         let downloader = HttpDownloader::new(HttpClient::new(Client::new()));
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1663,7 +1759,7 @@ mod tests {
             .returning(|_| Ok(()));
 
         // --- Execute ---
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,
@@ -1736,7 +1832,7 @@ mod tests {
             .returning(|_| false);
 
         // --- Execute ---
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &runtime,
             &target,
             &repo,

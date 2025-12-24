@@ -15,7 +15,7 @@ use crate::{
 
 use crate::commands::config::{Config, InstallOptions};
 
-use super::download::{DownloadPlan, ensure_installed, get_download_plan};
+use super::download::{DownloadPlan, ensure_installed_impl, get_download_plan};
 use super::external_links::update_external_links;
 
 /// Show installation plan to user (standalone function for use from mod.rs)
@@ -232,7 +232,7 @@ impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Instal
             }
         });
 
-        let result = ensure_installed(
+        let result = ensure_installed_impl(
             &self.runtime,
             target_dir,
             repo,

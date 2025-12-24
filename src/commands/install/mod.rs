@@ -16,10 +16,15 @@ mod external_links;
 mod installer;
 mod repo_spec;
 
+pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
 pub use installer::Installer;
 pub use repo_spec::RepoSpec;
 
-use download::{ensure_installed, get_download_plan};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use download::MockReleaseInstaller;
+
+use download::get_download_plan;
 use external_links::update_external_links;
 
 #[tracing::instrument(skip(runtime, overrides, options))]
@@ -45,12 +50,20 @@ pub async fn install<R: Runtime + 'static>(
         config.install_root.clone(),
     );
 
+    // Create release installer
+    let release_installer = DefaultReleaseInstaller::new(
+        Arc::clone(&runtime),
+        Arc::new(services.downloader),
+        Arc::new(services.extractor),
+        Arc::new(Mutex::new(CleanupContext::new())),
+    );
+
     // Run installation - clone Arc for ownership transfer
     run_install(
         &config,
         Arc::clone(&runtime),
-        &services,
         &use_case,
+        &release_installer,
         repo_str,
         options,
     )
@@ -60,14 +73,14 @@ pub async fn install<R: Runtime + 'static>(
 /// Core installation logic - separated for testability
 ///
 /// This function takes all dependencies as parameters, enabling:
-/// - Unit tests with mock InstallOperations
+/// - Unit tests with mock InstallOperations and ReleaseInstaller
 /// - Integration tests with real implementations
-#[tracing::instrument(skip(config, runtime, services, use_case, options))]
+#[tracing::instrument(skip(config, runtime, use_case, release_installer, options))]
 pub async fn run_install<R: Runtime + 'static>(
     config: &Config,
     runtime: Arc<R>,
-    services: &RegistryServices,
     use_case: &dyn InstallOperations,
+    release_installer: &dyn ReleaseInstaller,
     repo_str: &str,
     options: InstallOptions,
 ) -> Result<()> {
@@ -121,34 +134,16 @@ pub async fn run_install<R: Runtime + 'static>(
         }
     }
 
-    // Set up cleanup context for Ctrl-C handling
-    let cleanup_ctx = Arc::new(Mutex::new(CleanupContext::new()));
-    let cleanup_ctx_clone = Arc::clone(&cleanup_ctx);
-
-    let ctrl_c_handler = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\nInterrupted, cleaning up...");
-            cleanup_ctx_clone.lock().unwrap().cleanup();
-            std::process::exit(130);
-        }
-    });
-
-    // Perform the actual download and extraction
-    let install_result = ensure_installed(
-        runtime.as_ref(),
-        &target_dir,
-        repo,
-        &release,
-        &services.downloader,
-        &services.extractor,
-        Arc::clone(&cleanup_ctx),
-        &effective_filters,
-        &options.original_args,
-    )
-    .await;
-
-    ctrl_c_handler.abort();
-    install_result?;
+    // Perform the actual download and extraction via ReleaseInstaller
+    release_installer
+        .install(
+            repo,
+            &release,
+            &target_dir,
+            &effective_filters,
+            &options.original_args,
+        )
+        .await?;
 
     // Update 'current' symlink
     use_case.update_current_link(repo, &release.tag)?;
@@ -186,4 +181,252 @@ pub async fn run_install<R: Runtime + 'static>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::MockInstallOperations;
+    use crate::package::{Meta, MetaRelease};
+    use crate::runtime::MockRuntime;
+    use crate::source::{MockSource, RepoId};
+    use mockall::predicate::*;
+    use std::path::PathBuf;
+
+    fn default_install_options() -> InstallOptions {
+        InstallOptions {
+            filters: vec![],
+            pre: false,
+            yes: true, // Skip confirmation in tests
+            prune: false,
+            original_args: vec![],
+        }
+    }
+
+    fn test_config() -> Config {
+        Config {
+            install_root: PathBuf::from("/home/user/.ghri"),
+            api_url: "https://api.github.com".into(),
+            token: None,
+        }
+    }
+
+    fn test_meta() -> Meta {
+        Meta {
+            name: "owner/repo".into(),
+            api_url: "https://api.github.com".into(),
+            current_version: String::new(),
+            releases: vec![MetaRelease {
+                version: "v1.0.0".into(),
+                published_at: Some("2024-01-01T00:00:00Z".into()),
+                is_prerelease: false,
+                assets: vec![],
+                tarball_url: "https://example.com/tarball".into(),
+                title: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_install_happy_path() {
+        // Test successful installation with mocked traits
+        // No need to mock low-level Runtime operations!
+
+        let runtime = MockRuntime::new();
+        // Only need to mock confirm() since we use yes: true in options
+        // (confirm is skipped when yes=true)
+
+        let mut use_case = MockInstallOperations::new();
+        let mut release_installer = MockReleaseInstaller::new();
+
+        let repo = RepoId {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let meta = test_meta();
+        let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // Setup use_case expectations
+        use_case
+            .expect_resolve_source_for_new()
+            .returning(move || Ok(Arc::new(MockSource::new())));
+
+        let meta_clone = meta.clone();
+        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+            let m = meta_clone.clone();
+            Box::pin(async move { Ok((m, true)) })
+        });
+
+        use_case.expect_effective_filters().returning(|_, _| vec![]);
+
+        let release = meta.releases[0].clone();
+        use_case
+            .expect_resolve_version()
+            .returning(move |_, _, _| Ok(release.clone()));
+
+        use_case
+            .expect_is_installed()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| false);
+
+        let target_dir_clone = target_dir.clone();
+        use_case
+            .expect_version_dir()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(move |_, _| target_dir_clone.clone());
+
+        let meta_path_clone = meta_path.clone();
+        use_case
+            .expect_meta_path()
+            .with(eq(repo.clone()))
+            .returning(move |_| meta_path_clone.clone());
+
+        // Mock the actual installation
+        release_installer
+            .expect_install()
+            .returning(|_, _, _, _, _| Ok(()));
+
+        // Mock update_current_link
+        use_case
+            .expect_update_current_link()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| Ok(()));
+
+        // Mock save_meta
+        use_case.expect_save_meta().returning(|_, _| Ok(()));
+
+        // Execute
+        let config = test_config();
+        let options = default_install_options();
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "owner/repo",
+            options,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_install_already_installed() {
+        // Test that installation is skipped when version is already installed
+
+        let runtime = MockRuntime::new();
+        let mut use_case = MockInstallOperations::new();
+        let release_installer = MockReleaseInstaller::new(); // No install() call expected
+
+        let repo = RepoId {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let meta = test_meta();
+
+        // Setup use_case expectations
+        use_case
+            .expect_resolve_source_for_new()
+            .returning(|| Ok(Arc::new(MockSource::new())));
+
+        let meta_clone = meta.clone();
+        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+            let m = meta_clone.clone();
+            Box::pin(async move { Ok((m, false)) })
+        });
+
+        use_case.expect_effective_filters().returning(|_, _| vec![]);
+
+        let release = meta.releases[0].clone();
+        use_case
+            .expect_resolve_version()
+            .returning(move |_, _, _| Ok(release.clone()));
+
+        // Already installed!
+        use_case
+            .expect_is_installed()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| true);
+
+        // Execute
+        let config = test_config();
+        let options = default_install_options();
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "owner/repo",
+            options,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        // Note: release_installer.install() should NOT be called
+    }
+
+    #[tokio::test]
+    async fn test_run_install_user_cancels() {
+        // Test that installation is cancelled when user declines confirmation
+
+        let mut runtime = MockRuntime::new();
+        runtime.expect_confirm().returning(|_| Ok(false)); // User says no
+
+        let mut use_case = MockInstallOperations::new();
+        let release_installer = MockReleaseInstaller::new(); // No install() call expected
+
+        let meta = test_meta();
+        let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // Setup use_case expectations
+        use_case
+            .expect_resolve_source_for_new()
+            .returning(|| Ok(Arc::new(MockSource::new())));
+
+        let meta_clone = meta.clone();
+        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+            let m = meta_clone.clone();
+            Box::pin(async move { Ok((m, true)) })
+        });
+
+        use_case.expect_effective_filters().returning(|_, _| vec![]);
+
+        let release = meta.releases[0].clone();
+        use_case
+            .expect_resolve_version()
+            .returning(move |_, _, _| Ok(release.clone()));
+
+        use_case.expect_is_installed().returning(|_, _| false);
+
+        let target_dir_clone = target_dir.clone();
+        use_case
+            .expect_version_dir()
+            .returning(move |_, _| target_dir_clone.clone());
+
+        let meta_path_clone = meta_path.clone();
+        use_case
+            .expect_meta_path()
+            .returning(move |_| meta_path_clone.clone());
+
+        // Execute with yes=false to trigger confirmation
+        let config = test_config();
+        let mut options = default_install_options();
+        options.yes = false;
+
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "owner/repo",
+            options,
+        )
+        .await;
+
+        assert!(result.is_ok()); // Cancellation is not an error
+    }
 }
