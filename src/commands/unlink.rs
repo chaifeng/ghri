@@ -3,12 +3,12 @@ use log::{debug, info, warn};
 use std::path::PathBuf;
 
 use crate::{
-    github::LinkSpec,
     package::{LinkManager, LinkRule, PackageRepository, RemoveLinkResult},
     runtime::Runtime,
 };
 
 use super::config::{Config, ConfigOverrides};
+use super::link_spec::LinkSpec;
 
 /// Remove a link rule and its symlink
 #[tracing::instrument(skip(runtime, overrides))]

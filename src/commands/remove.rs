@@ -3,12 +3,12 @@ use log::debug;
 use std::path::Path;
 
 use crate::{
-    github::RepoSpec,
     package::{LinkManager, Meta, PackageRepository},
     runtime::Runtime,
 };
 
 use super::config::{Config, ConfigOverrides};
+use super::install::RepoSpec;
 
 /// Remove a package or specific version
 #[tracing::instrument(skip(runtime, overrides))]
@@ -85,7 +85,7 @@ pub fn remove<R: Runtime>(
 
 fn show_package_removal_plan<R: Runtime>(
     runtime: &R,
-    repo: &crate::github::GitHubRepo,
+    repo: &crate::source::RepoId,
     package_dir: &Path,
     meta: Option<&Meta>,
 ) {
@@ -149,7 +149,7 @@ fn show_package_removal_plan<R: Runtime>(
 fn show_version_removal_plan<R: Runtime>(
     runtime: &R,
     pkg_repo: &PackageRepository<'_, R>,
-    repo: &crate::github::GitHubRepo,
+    repo: &crate::source::RepoId,
     version: &str,
     meta: Option<&Meta>,
 ) -> Result<()> {

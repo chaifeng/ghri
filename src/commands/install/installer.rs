@@ -7,9 +7,9 @@ use crate::{
     archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
-    github::{GetReleases, GitHubRepo, Release},
     package::{LinkManager, Meta, PackageRepository},
     runtime::Runtime,
+    source::{RepoId, Source, SourceRelease},
 };
 
 use crate::commands::config::{Config, InstallOptions};
@@ -17,21 +17,19 @@ use crate::commands::config::{Config, InstallOptions};
 use super::download::{DownloadPlan, ensure_installed, get_download_plan};
 use super::external_links::update_external_links;
 
-pub struct Installer<R: Runtime, G: GetReleases, E: ArchiveExtractor, D: Downloader> {
+pub struct Installer<R: Runtime, S: Source, E: ArchiveExtractor, D: Downloader> {
     pub runtime: R,
-    pub github: G,
+    pub source: S,
     pub downloader: D,
     pub extractor: E,
 }
 
-impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
-    Installer<R, G, E, D>
-{
-    #[tracing::instrument(skip(runtime, github, downloader, extractor))]
-    pub fn new(runtime: R, github: G, downloader: D, extractor: E) -> Self {
+impl<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader> Installer<R, S, E, D> {
+    #[tracing::instrument(skip(runtime, source, downloader, extractor))]
+    pub fn new(runtime: R, source: S, downloader: D, extractor: E) -> Self {
         Self {
             runtime,
-            github,
+            source,
             downloader,
             extractor,
         }
@@ -41,7 +39,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
     pub async fn install(
         &self,
         config: &Config,
-        repo: &GitHubRepo,
+        repo: &RepoId,
         version: Option<&str>,
         options: &InstallOptions,
     ) -> Result<()> {
@@ -89,13 +87,13 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         };
 
         info!("Found version: {}", meta_release.version);
-        let release: Release = meta_release.clone().into();
+        let release: SourceRelease = meta_release.clone().into();
 
-        let target_dir = config.version_dir(&repo.owner, &repo.repo, &release.tag_name);
+        let target_dir = config.version_dir(&repo.owner, &repo.repo, &release.tag);
 
         // Check if already installed
         if self.runtime.exists(&target_dir) {
-            println!("   {} {} is already installed", repo, release.tag_name);
+            println!("   {} {} is already installed", repo, release.tag);
             return Ok(());
         }
 
@@ -152,7 +150,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         // Update 'current' symlink to point to the new version
         let link_manager = LinkManager::new(&self.runtime);
         if let Some(package_dir) = target_dir.parent() {
-            link_manager.update_current_link(package_dir, &release.tag_name)?;
+            link_manager.update_current_link(package_dir, &release.tag)?;
         }
 
         // Update external links if configured
@@ -163,7 +161,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         }
 
         // Metadata handling - save meta only after successful install
-        meta.current_version = release.tag_name.clone();
+        meta.current_version = release.tag.clone();
         // Save filters to meta (for use during updates)
         // Always update filters: use effective_filters which may be user-provided or from saved meta
         meta.filters = effective_filters;
@@ -177,7 +175,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
             warn!("Failed to save package metadata: {}. Continuing.", e);
         }
 
-        self.print_install_success(repo, &release.tag_name, &target_dir);
+        self.print_install_success(repo, &release.tag, &target_dir);
 
         Ok(())
     }
@@ -185,8 +183,8 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
     #[allow(clippy::too_many_arguments)]
     fn show_install_plan(
         &self,
-        repo: &GitHubRepo,
-        release: &Release,
+        repo: &RepoId,
+        release: &SourceRelease,
         target_dir: &Path,
         meta_path: &Path,
         plan: &DownloadPlan,
@@ -197,7 +195,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
         println!("=== Installation Plan ===");
         println!();
         println!("Package:  {}", repo);
-        println!("Version:  {}", release.tag_name);
+        println!("Version:  {}", release.tag);
         println!();
 
         // Show files to download
@@ -223,11 +221,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
             println!("  [MOD]  {} (update)", meta_path.display());
         }
         if let Some(parent) = target_dir.parent() {
-            println!(
-                "  [LINK] {}/current -> {}",
-                parent.display(),
-                release.tag_name
-            );
+            println!("  [LINK] {}/current -> {}", parent.display(), release.tag);
         }
 
         // Show external links that will be updated (with validity check)
@@ -253,7 +247,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
                             link.dest.display(),
                             repo,
                             source,
-                            release.tag_name
+                            release.tag
                         );
                     } else if link.status.is_creatable() {
                         println!(
@@ -261,7 +255,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
                             link.dest.display(),
                             repo,
                             source,
-                            release.tag_name
+                            release.tag
                         );
                     }
                 }
@@ -299,7 +293,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
     }
 
     #[tracing::instrument(skip(self, repo, tag, target_dir))]
-    fn print_install_success(&self, repo: &GitHubRepo, tag: &str, target_dir: &Path) {
+    fn print_install_success(&self, repo: &RepoId, tag: &str, target_dir: &Path) {
         println!("   installed {} {} {}", repo, tag, target_dir.display());
     }
 
@@ -309,7 +303,7 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
     pub(crate) async fn get_or_fetch_meta(
         &self,
         config: &Config,
-        repo: &GitHubRepo,
+        repo: &RepoId,
     ) -> Result<(Meta, std::path::PathBuf, bool)> {
         let pkg_repo = PackageRepository::new(&self.runtime, config.install_root.clone());
         let meta_path = pkg_repo.meta_path(&repo.owner, &repo.repo);
@@ -334,13 +328,13 @@ impl<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>
     #[tracing::instrument(skip(self, repo, current_version, api_url))]
     async fn fetch_meta(
         &self,
-        repo: &GitHubRepo,
+        repo: &RepoId,
         current_version: &str,
         api_url: Option<&str>,
     ) -> Result<Meta> {
-        let api_url = api_url.unwrap_or_else(|| self.github.api_url());
-        let repo_info = self.github.get_repo_info_at(repo, api_url).await?;
-        let releases = self.github.get_releases_at(repo, api_url).await?;
+        let api_url = api_url.unwrap_or_else(|| self.source.api_url());
+        let repo_info = self.source.get_repo_metadata_at(repo, api_url).await?;
+        let releases = self.source.get_releases_at(repo, api_url).await?;
         Ok(Meta::from(
             repo.clone(),
             repo_info,
@@ -367,8 +361,8 @@ mod tests {
     use crate::archive::MockArchiveExtractor;
     use crate::commands::config::Config;
     use crate::download::mock::MockDownloader;
-    use crate::github::{MockGetReleases, RepoInfo};
     use crate::runtime::MockRuntime;
+    use crate::source::{MockSource, RepoMetadata};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
@@ -490,28 +484,28 @@ mod tests {
             .with(eq(meta_tmp), eq(meta_path))
             .returning(|_, _| Ok(()));
 
-        // --- Setup GitHub API Mock ---
+        // --- Setup Source API Mock ---
 
-        let mut github = MockGetReleases::new();
-        github
+        let mut source = MockSource::new();
+        source
             .expect_api_url()
             .return_const("https://api.github.com".to_string());
 
         // API returns repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
+        source.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
                 description: None,
                 homepage: None,
                 license: None,
-                updated_at: "now".into(),
+                updated_at: Some("now".into()),
             })
         });
 
         // API returns one release v1 with tarball URL
         let download_url = format!("{}/tarball", url);
-        github.expect_get_releases_at().return_once(move |_, _| {
-            Ok(vec![Release {
-                tag_name: "v1".into(),
+        source.expect_get_releases_at().return_once(move |_, _| {
+            Ok(vec![SourceRelease {
+                tag: "v1".into(),
                 tarball_url: download_url,
                 ..Default::default()
             }])
@@ -535,13 +529,13 @@ mod tests {
 
         // --- Execute ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
         let config = test_config();
         let downloader = MockDownloader::new();
-        let installer = Installer::new(runtime, github, downloader, extractor);
+        let installer = Installer::new(runtime, source, downloader, extractor);
         installer
             .install(&config, &repo, None, &default_install_options())
             .await
@@ -589,15 +583,15 @@ mod tests {
 
         // --- Setup GitHub API Mock ---
 
-        let mut github = MockGetReleases::new();
+        let mut github = MockSource::new();
 
         // API returns repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
+        github.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
                 description: None,
                 homepage: None,
                 license: None,
-                updated_at: "now".into(),
+                updated_at: Some("now".into()),
             })
         });
 
@@ -606,7 +600,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -648,25 +642,25 @@ mod tests {
 
         // --- Setup GitHub API Mock ---
 
-        let mut github = MockGetReleases::new();
+        let mut github = MockSource::new();
         github
             .expect_api_url()
             .return_const("https://api.github.com".to_string());
 
         // API returns repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
+        github.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
                 description: None,
                 homepage: None,
                 license: None,
-                updated_at: "now".into(),
+                updated_at: Some("now".into()),
             })
         });
 
         // API returns ONLY a pre-release version (no stable release!)
         github.expect_get_releases_at().returning(|_, _| {
-            Ok(vec![Release {
-                tag_name: "v1-rc".into(),
+            Ok(vec![SourceRelease {
+                tag: "v1-rc".into(),
                 prerelease: true, // This is a pre-release
                 ..Default::default()
             }])
@@ -674,7 +668,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -729,7 +723,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -738,7 +732,7 @@ mod tests {
         // No GitHub mock needed - meta is loaded from "cached" file
         let installer = Installer::new(
             runtime,
-            MockGetReleases::new(),
+            MockSource::new(),
             downloader,
             MockArchiveExtractor::new(),
         );
@@ -805,23 +799,23 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let url = server.url();
 
-        let mut github = MockGetReleases::new();
+        let mut github = MockSource::new();
 
         // API returns repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
+        github.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
                 description: None,
                 homepage: None,
                 license: None,
-                updated_at: "now".into(),
+                updated_at: Some("now".into()),
             })
         });
 
         // API returns ONLY a pre-release version (no stable release!)
         let download_url = format!("{}/tarball", url);
         github.expect_get_releases_at().return_once(move |_, _| {
-            Ok(vec![Release {
-                tag_name: "v1-rc".into(),
+            Ok(vec![SourceRelease {
+                tag: "v1-rc".into(),
                 prerelease: true, // This is a pre-release
                 tarball_url: download_url,
                 ..Default::default()
@@ -845,7 +839,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -883,19 +877,19 @@ mod tests {
 
         // --- Setup GitHub API Mock (FAILS) ---
 
-        let mut github = MockGetReleases::new();
+        let mut github = MockSource::new();
         github
             .expect_api_url()
             .return_const("https://api".to_string());
 
         // API call fails with error
         github
-            .expect_get_repo_info_at()
+            .expect_get_repo_metadata_at()
             .returning(|_, _| Err(anyhow::anyhow!("fail")));
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -917,7 +911,7 @@ mod tests {
         let config = test_config();
         let runtime = MockRuntime::new();
         let services = super::super::super::services::Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -983,26 +977,26 @@ mod tests {
 
         // --- Setup GitHub API Mock ---
 
-        let mut github = MockGetReleases::new();
+        let mut github = MockSource::new();
         github
             .expect_api_url()
             .return_const("https://api".to_string());
 
         // API returns repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
+        github.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
                 description: None,
                 homepage: None,
                 license: None,
-                updated_at: "".into(),
+                updated_at: None,
             })
         });
 
         // API returns one release v1
         let tar_url = format!("{}/tar", url);
         github.expect_get_releases_at().return_once(move |_, _| {
-            Ok(vec![Release {
-                tag_name: "v1".into(),
+            Ok(vec![SourceRelease {
+                tag: "v1".into(),
                 tarball_url: tar_url,
                 ..Default::default()
             }])
@@ -1021,7 +1015,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -1058,7 +1052,7 @@ mod tests {
 
         // No GitHub API mock needed - should use cached meta
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -1066,7 +1060,7 @@ mod tests {
         let downloader = MockDownloader::new();
         let installer = Installer::new(
             runtime,
-            MockGetReleases::new(),
+            MockSource::new(),
             downloader,
             MockArchiveExtractor::new(),
         );
@@ -1084,7 +1078,7 @@ mod tests {
         runtime
             .expect_temp_dir()
             .returning(|| PathBuf::from("/tmp"));
-        let github = MockGetReleases::new();
+        let github = MockSource::new();
 
         // --- 1. Load Existing Metadata (cache hit) ---
 
@@ -1097,8 +1091,8 @@ mod tests {
             current_version: "v1".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -1137,7 +1131,7 @@ mod tests {
 
         // --- Execute ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -1191,7 +1185,7 @@ mod tests {
 
         let config = test_config();
         let services = super::super::super::services::Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -1253,7 +1247,7 @@ mod tests {
         let downloader = MockDownloader::new();
         Installer::new(
             runtime,
-            MockGetReleases::new(),
+            MockSource::new(),
             downloader,
             MockArchiveExtractor::new(),
         )
@@ -1271,7 +1265,7 @@ mod tests {
         runtime
             .expect_temp_dir()
             .returning(|| PathBuf::from("/tmp"));
-        let github = MockGetReleases::new();
+        let github = MockSource::new();
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1294,8 +1288,8 @@ mod tests {
             api_url: "api".into(),
             filters: vec!["*old-filter*".to_string()], // Saved filter from previous install
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -1337,7 +1331,7 @@ mod tests {
 
         // --- Execute ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -1363,7 +1357,7 @@ mod tests {
         runtime
             .expect_temp_dir()
             .returning(|| PathBuf::from("/tmp"));
-        let github = MockGetReleases::new();
+        let github = MockSource::new();
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1386,8 +1380,8 @@ mod tests {
             api_url: "api".into(),
             filters: vec!["*linux*".to_string(), "*x86_64*".to_string()],
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -1428,7 +1422,7 @@ mod tests {
 
         // --- Execute ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
@@ -1453,7 +1447,7 @@ mod tests {
         runtime
             .expect_temp_dir()
             .returning(|| PathBuf::from("/tmp"));
-        let github = MockGetReleases::new();
+        let github = MockSource::new();
 
         // --- Setup Paths ---
         #[cfg(not(windows))]
@@ -1474,8 +1468,8 @@ mod tests {
             api_url: "api".into(),
             filters: vec!["*saved-filter*".to_string()],
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -1509,7 +1503,7 @@ mod tests {
 
         // --- Execute ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };

@@ -1,6 +1,6 @@
 //! Service factory for building application dependencies.
 //!
-//! This module separates the construction of service dependencies (GitHub client,
+//! This module separates the construction of service dependencies (Source client,
 //! downloader, extractor) from the configuration. Services are built based on
 //! configuration values but are not part of the configuration itself.
 
@@ -14,8 +14,8 @@ use reqwest::{
 use crate::{
     archive::{ArchiveExtractor, ArchiveExtractorImpl},
     download::{Downloader, HttpDownloader},
-    github::{GetReleases, GitHub},
     http::HttpClient,
+    source::{GitHubSource, Source},
 };
 
 use super::config::Config;
@@ -39,10 +39,10 @@ pub fn build_http_client(token: Option<&str>) -> Result<HttpClient> {
     Ok(HttpClient::new(client))
 }
 
-/// Build a GitHub API client from configuration
-pub fn build_github(config: &Config) -> Result<GitHub> {
+/// Build a Source (GitHub) client from configuration
+pub fn build_source(config: &Config) -> Result<GitHubSource> {
     let http_client = build_http_client(config.token.as_deref())?;
-    Ok(GitHub::from_http_client(http_client, &config.api_url))
+    Ok(GitHubSource::from_http_client(http_client, &config.api_url))
 }
 
 /// Build a downloader from configuration
@@ -58,17 +58,17 @@ pub fn build_extractor() -> ArchiveExtractorImpl {
 
 /// Container for all service dependencies needed by commands.
 /// This is used to pass dependencies to internal functions that need them.
-pub struct Services<G: GetReleases, D: Downloader, E: ArchiveExtractor> {
-    pub github: G,
+pub struct Services<S: Source, D: Downloader, E: ArchiveExtractor> {
+    pub source: S,
     pub downloader: D,
     pub extractor: E,
 }
 
-impl Services<GitHub, HttpDownloader, ArchiveExtractorImpl> {
+impl Services<GitHubSource, HttpDownloader, ArchiveExtractorImpl> {
     /// Build all services from configuration
     pub fn from_config(config: &Config) -> Result<Self> {
         Ok(Self {
-            github: build_github(config)?,
+            source: build_source(config)?,
             downloader: build_downloader(config)?,
             extractor: build_extractor(),
         })

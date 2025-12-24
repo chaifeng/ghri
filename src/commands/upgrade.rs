@@ -2,9 +2,9 @@ use anyhow::Result;
 
 use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
-use crate::github::{GetReleases, GitHubRepo};
 use crate::package::PackageRepository;
 use crate::runtime::Runtime;
+use crate::source::{RepoId, Source};
 
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 use super::install::Installer;
@@ -24,10 +24,10 @@ pub async fn upgrade<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, repos, options))]
-async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
+async fn run_upgrade<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
-    services: Services<G, D, E>,
+    services: Services<S, D, E>,
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
@@ -40,14 +40,14 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
     }
 
     // Parse requested repos for filtering
-    let filter_repos: Vec<GitHubRepo> = repos
+    let filter_repos: Vec<RepoId> = repos
         .iter()
-        .filter_map(|r| r.parse::<GitHubRepo>().ok())
+        .filter_map(|r| r.parse::<RepoId>().ok())
         .collect();
 
     let installer = Installer::new(
         runtime,
-        services.github,
+        services.source,
         services.downloader,
         services.extractor,
     );
@@ -56,7 +56,7 @@ async fn run_upgrade<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, 
     let mut skipped_count = 0;
 
     for (_meta_path, meta) in packages {
-        let repo = meta.name.parse::<GitHubRepo>()?;
+        let repo = meta.name.parse::<RepoId>()?;
 
         // Skip if not in filter list (when filter is specified)
         if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
@@ -133,9 +133,9 @@ mod tests {
     use super::*;
     use crate::archive::MockArchiveExtractor;
     use crate::download::mock::MockDownloader;
-    use crate::github::{MockGetReleases, Release};
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
+    use crate::source::{MockSource, SourceRelease};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
@@ -205,7 +205,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -271,14 +271,14 @@ mod tests {
             updated_at: "now".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v2".into(),
+                SourceRelease {
+                    tag: "v2".into(),
                     published_at: Some("2024".into()),
                     ..Default::default()
                 }
                 .into(),
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     published_at: Some("2023".into()),
                     ..Default::default()
                 }
@@ -294,7 +294,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -370,8 +370,8 @@ mod tests {
             updated_at: "old".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(), // Already at latest
+                SourceRelease {
+                    tag: "v1".into(), // Already at latest
                     published_at: Some("2024".into()),
                     ..Default::default()
                 }
@@ -385,8 +385,8 @@ mod tests {
             updated_at: "old".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -409,7 +409,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };

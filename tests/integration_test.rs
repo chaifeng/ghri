@@ -40,6 +40,34 @@ fn create_tar_gz_with_executable(files: &[(&str, &str, u32)]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+/// Helper to mock releases endpoint with pagination support
+fn mock_releases(
+    server: &mut Server,
+    owner: &str,
+    repo: &str,
+    releases_json: &str,
+) -> (mockito::Mock, mockito::Mock) {
+    let page1 = server
+        .mock(
+            "GET",
+            &*format!("/repos/{}/{}/releases?per_page=100&page=1", owner, repo),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(releases_json)
+        .create();
+    let page2 = server
+        .mock(
+            "GET",
+            &*format!("/repos/{}/{}/releases?per_page=100&page=2", owner, repo),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+    (page1, page2)
+}
+
 #[test]
 fn test_end_to_end_install() {
     let mut server = Server::new();
@@ -60,11 +88,11 @@ fn test_end_to_end_install() {
         ))
         .create();
 
-    let _mock_releases = server
-        .mock("GET", "/repos/owner/repo/releases?per_page=100&page=1")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(format!(
+    let (_mock_releases, _mock_releases_page2) = mock_releases(
+        &mut server,
+        "owner",
+        "repo",
+        &format!(
             r#"[{{
                 "tag_name": "v1.0.0",
                 "tarball_url": "{}/download/v1.0.0.tar.gz",
@@ -72,8 +100,8 @@ fn test_end_to_end_install() {
                 "assets": []
             }}]"#,
             url
-        ))
-        .create();
+        ),
+    );
 
     let _mock_repo = server
         .mock("GET", "/repos/owner/repo")
@@ -158,6 +186,13 @@ fn test_link_single_file_to_path() {
         ))
         .create();
 
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/tool/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let _mock_repo = server
         .mock("GET", "/repos/test/tool")
         .with_status(200)
@@ -233,6 +268,13 @@ fn test_link_to_directory() {
             }}]"#,
             url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/org/cli/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server
@@ -313,6 +355,13 @@ fn test_link_update_on_reinstall() {
         .expect(1)
         .create();
 
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/dev/app/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let _mock_repo = server
         .mock("GET", "/repos/dev/app")
         .with_status(200)
@@ -380,6 +429,13 @@ fn test_link_update_on_reinstall() {
         ))
         .create();
 
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/dev/app/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let tar_gz_v2 = create_tar_gz_with_executable(&[("app-v2/app", "v2", 0o755)]);
     let _mock_download_v2 = server
         .mock("GET", "/download/v2.0.0.tar.gz")
@@ -441,6 +497,13 @@ fn test_link_update_existing_symlink() {
             }}]"#,
             url, url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/my/pkg/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server
@@ -557,6 +620,13 @@ fn test_link_fails_for_existing_non_symlink() {
         ))
         .create();
 
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/blocked/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let _mock_repo = server
         .mock("GET", "/repos/test/blocked")
         .with_status(200)
@@ -616,6 +686,13 @@ fn test_unlink_removes_link_and_rule() {
             r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
             url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/unlink/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server
@@ -698,6 +775,13 @@ fn test_unlink_all_removes_all_links() {
             r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
             url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/unlinkall/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server
@@ -813,6 +897,13 @@ fn test_unlink_requires_dest_or_all() {
         ))
         .create();
 
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/needarg/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let _mock_repo = server
         .mock("GET", "/repos/test/needarg")
         .with_status(200)
@@ -876,6 +967,13 @@ fn test_remove_package() {
             r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
             url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/removeme/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server
@@ -963,6 +1061,16 @@ fn test_remove_specific_version() {
         ))
         .create();
 
+    let _mock_releases_page2 = server
+        .mock(
+            "GET",
+            "/repos/test/multiversion/releases?per_page=100&page=2",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
+        .create();
+
     let _mock_repo = server
         .mock("GET", "/repos/test/multiversion")
         .with_status(200)
@@ -1046,6 +1154,13 @@ fn test_remove_current_version_requires_force() {
             r#"[{{"tag_name": "v1.0.0", "tarball_url": "{}/download/v1.0.0.tar.gz", "prerelease": false, "assets": []}}]"#,
             url
         ))
+        .create();
+
+    let _mock_releases_page2 = server
+        .mock("GET", "/repos/test/forceme/releases?per_page=100&page=2")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body("[]")
         .create();
 
     let _mock_repo = server

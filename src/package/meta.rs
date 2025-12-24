@@ -2,8 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::github::{GitHubRepo, Release, ReleaseAsset, RepoInfo};
 use crate::runtime::Runtime;
+use crate::source::{ReleaseAsset, RepoId, RepoMetadata, SourceRelease};
 
 use super::LinkRule;
 
@@ -63,9 +63,9 @@ pub struct Meta {
 
 impl Meta {
     pub fn from(
-        repo: GitHubRepo,
-        info: RepoInfo,
-        releases: Vec<Release>,
+        repo: RepoId,
+        info: RepoMetadata,
+        releases: Vec<SourceRelease>,
         current: &str,
         api_url: &str,
     ) -> Self {
@@ -76,8 +76,8 @@ impl Meta {
             releases_url: format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo),
             description: info.description,
             homepage: info.homepage,
-            license: info.license.map(|l| l.name),
-            updated_at: info.updated_at,
+            license: info.license,
+            updated_at: info.updated_at.unwrap_or_default(),
             current_version: current.to_string(),
             releases: {
                 let mut r: Vec<MetaRelease> = releases.into_iter().map(MetaRelease::from).collect();
@@ -283,10 +283,10 @@ pub struct MetaRelease {
     pub assets: Vec<MetaAsset>,
 }
 
-impl From<Release> for MetaRelease {
-    fn from(r: Release) -> Self {
+impl From<SourceRelease> for MetaRelease {
+    fn from(r: SourceRelease) -> Self {
         MetaRelease {
-            version: r.tag_name,
+            version: r.tag,
             title: r.name,
             published_at: r.published_at,
             is_prerelease: r.prerelease,
@@ -296,10 +296,10 @@ impl From<Release> for MetaRelease {
     }
 }
 
-impl From<MetaRelease> for Release {
+impl From<MetaRelease> for SourceRelease {
     fn from(r: MetaRelease) -> Self {
-        Release {
-            tag_name: r.version,
+        SourceRelease {
+            tag: r.version,
             tarball_url: r.tarball_url,
             name: r.title,
             published_at: r.published_at,
@@ -324,7 +324,7 @@ impl From<ReleaseAsset> for MetaAsset {
         MetaAsset {
             name: a.name,
             size: a.size,
-            download_url: a.browser_download_url,
+            download_url: a.download_url,
         }
     }
 }
@@ -334,7 +334,7 @@ impl From<MetaAsset> for ReleaseAsset {
         ReleaseAsset {
             name: a.name,
             size: a.size,
-            browser_download_url: a.download_url,
+            download_url: a.download_url,
         }
     }
 }
@@ -342,7 +342,6 @@ impl From<MetaAsset> for ReleaseAsset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::Release;
     use crate::runtime::MockRuntime;
     use mockall::predicate::eq;
     use std::path::PathBuf;
@@ -352,15 +351,15 @@ mod tests {
         // Test that Meta serializes and deserializes with custom API URL preserved
 
         // --- Setup ---
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let info = RepoInfo {
+        let info = RepoMetadata {
             description: None,
             homepage: None,
             license: None,
-            updated_at: "now".into(),
+            updated_at: Some("now".into()),
         };
         let api_url = "https://custom.api";
 
@@ -384,31 +383,31 @@ mod tests {
         // Test that releases are sorted by published_at date in descending order (newest first)
 
         // --- Setup ---
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let info = RepoInfo {
+        let info = RepoMetadata {
             description: None,
             homepage: None,
             license: None,
-            updated_at: "now".into(),
+            updated_at: Some("now".into()),
         };
 
         // Releases in random order with different published dates
         let releases = vec![
-            Release {
-                tag_name: "v1.0.0".into(),
+            SourceRelease {
+                tag: "v1.0.0".into(),
                 published_at: Some("2023-01-01T00:00:00Z".into()), // Oldest
                 ..Default::default()
             },
-            Release {
-                tag_name: "v2.0.0".into(),
+            SourceRelease {
+                tag: "v2.0.0".into(),
                 published_at: Some("2023-02-01T00:00:00Z".into()), // Newest
                 ..Default::default()
             },
-            Release {
-                tag_name: "v0.9.0".into(),
+            SourceRelease {
+                tag: "v0.9.0".into(),
                 published_at: Some("2022-12-01T00:00:00Z".into()), // Middle
                 ..Default::default()
             },
@@ -439,8 +438,8 @@ mod tests {
             updated_at: "t1".into(),
             current_version: "v1".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     published_at: Some("2023-01-01".into()), // Older
                     ..Default::default()
                 }
@@ -456,8 +455,8 @@ mod tests {
             updated_at: "t2".into(),
             current_version: "v1".into(),
             releases: vec![
-                Release {
-                    tag_name: "v2".into(),
+                SourceRelease {
+                    tag: "v2".into(),
                     published_at: Some("2023-02-01".into()), // Newer
                     ..Default::default()
                 }
@@ -667,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_meta_conversions() {
-        // Test conversion between Meta types and GitHub API types (MetaAsset <-> ReleaseAsset, MetaRelease <-> Release)
+        // Test conversion between Meta types and Source types (MetaAsset <-> ReleaseAsset, MetaRelease <-> SourceRelease)
 
         // --- Test MetaAsset -> ReleaseAsset ---
 
@@ -682,9 +681,9 @@ mod tests {
         // Verify conversion preserves all fields
         assert_eq!(asset.name, "app.tar.gz");
         assert_eq!(asset.size, 1024);
-        assert_eq!(asset.browser_download_url, "https://example.com/app.tar.gz");
+        assert_eq!(asset.download_url, "https://example.com/app.tar.gz");
 
-        // --- Test MetaRelease -> Release ---
+        // --- Test MetaRelease -> SourceRelease ---
 
         let meta_release = MetaRelease {
             version: "v1.0.0".into(),
@@ -695,10 +694,10 @@ mod tests {
             assets: vec![meta_asset],
         };
 
-        let release: Release = meta_release.clone().into();
+        let release: SourceRelease = meta_release.clone().into();
 
         // Verify conversion preserves all fields
-        assert_eq!(release.tag_name, "v1.0.0");
+        assert_eq!(release.tag, "v1.0.0");
         assert_eq!(release.name, Some("Release 1.0.0".into()));
         assert_eq!(release.published_at, Some("2023-01-01".into()));
         assert!(!release.prerelease);
@@ -1429,15 +1428,15 @@ mod tests {
 
         // --- Setup ---
 
-        let repo = GitHubRepo {
+        let repo = RepoId {
             owner: "owner".into(),
             repo: "repo".into(),
         };
-        let info = RepoInfo {
+        let info = RepoMetadata {
             description: None,
             homepage: None,
             license: None,
-            updated_at: "now".into(),
+            updated_at: Some("now".into()),
         };
 
         // --- Execute ---

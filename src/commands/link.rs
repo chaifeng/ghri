@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    github::LinkSpec,
     package::{LinkManager, LinkRule, PackageRepository, VersionedLink},
     runtime::Runtime,
 };
 
 use super::config::{Config, ConfigOverrides};
+use super::link_spec::LinkSpec;
 
 /// Link a package's current version to a destination directory
 #[tracing::instrument(skip(runtime, overrides))]

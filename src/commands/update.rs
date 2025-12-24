@@ -3,9 +3,9 @@ use log::warn;
 
 use crate::archive::ArchiveExtractor;
 use crate::download::Downloader;
-use crate::github::{GetReleases, GitHubRepo};
 use crate::package::{Meta, PackageRepository, VersionResolver};
 use crate::runtime::Runtime;
+use crate::source::{RepoId, Source};
 
 use super::config::{Config, ConfigOverrides};
 use super::install::Installer;
@@ -23,15 +23,15 @@ pub async fn update<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, repos))]
-async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
+async fn run_update<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
-    services: Services<G, D, E>,
+    services: Services<S, D, E>,
     repos: Vec<String>,
 ) -> Result<()> {
     let installer = Installer::new(
         runtime,
-        services.github,
+        services.source,
         services.downloader,
         services.extractor,
     );
@@ -45,13 +45,13 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
     }
 
     // Parse requested repos for filtering
-    let filter_repos: Vec<GitHubRepo> = repos
+    let filter_repos: Vec<RepoId> = repos
         .iter()
-        .filter_map(|r| r.parse::<GitHubRepo>().ok())
+        .filter_map(|r| r.parse::<RepoId>().ok())
         .collect();
 
     for (_meta_path, meta) in packages {
-        let repo = match meta.name.parse::<GitHubRepo>() {
+        let repo = match meta.name.parse::<RepoId>() {
             Ok(r) => r,
             Err(e) => {
                 warn!("Invalid repo name in meta: {}", e);
@@ -86,7 +86,7 @@ async fn run_update<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D
 }
 
 #[tracing::instrument(skip(repo, current, latest))]
-fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
+fn print_update_available(repo: &RepoId, current: &str, latest: &str) {
     let current_display = if current.is_empty() {
         "(none)"
     } else {
@@ -96,11 +96,11 @@ fn print_update_available(repo: &GitHubRepo, current: &str, latest: &str) {
 }
 
 #[tracing::instrument(skip(config, pkg_repo, installer, repo, current_version))]
-async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
+async fn save_metadata<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     pkg_repo: &PackageRepository<'_, R>,
-    installer: &Installer<R, G, E, D>,
-    repo: &GitHubRepo,
+    installer: &Installer<R, S, E, D>,
+    repo: &RepoId,
     current_version: &str,
 ) -> Result<()> {
     let existing_meta = pkg_repo.load(&repo.owner, &repo.repo)?;
@@ -132,16 +132,16 @@ async fn save_metadata<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor
 }
 
 #[tracing::instrument(skip(config, installer, repo, current_version, api_url))]
-async fn fetch_meta<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
+async fn fetch_meta<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
-    installer: &Installer<R, G, E, D>,
-    repo: &GitHubRepo,
+    installer: &Installer<R, S, E, D>,
+    repo: &RepoId,
     current_version: &str,
     api_url: Option<&str>,
 ) -> Result<Meta> {
     let api_url = api_url.unwrap_or(&config.api_url);
-    let repo_info = installer.github.get_repo_info_at(repo, api_url).await?;
-    let releases = installer.github.get_releases_at(repo, api_url).await?;
+    let repo_info = installer.source.get_repo_metadata_at(repo, api_url).await?;
+    let releases = installer.source.get_releases_at(repo, api_url).await?;
     Ok(Meta::from(
         repo.clone(),
         repo_info,
@@ -156,8 +156,8 @@ mod tests {
     use super::*;
     use crate::archive::MockArchiveExtractor;
     use crate::download::mock::MockDownloader;
-    use crate::github::{MockGetReleases, Release, RepoInfo};
     use crate::runtime::MockRuntime;
+    use crate::source::{MockSource, RepoMetadata, SourceRelease};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
@@ -267,8 +267,8 @@ mod tests {
             updated_at: "old".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -279,34 +279,31 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Fetch New Metadata from GitHub ---
+        // --- 3. Fetch New Metadata from Source ---
 
-        let mut github = MockGetReleases::new();
-        github.expect_api_url().return_const("api".to_string());
+        let mut source = MockSource::new();
+        source.expect_api_url().return_const("api".to_string());
 
         // Get repo info
-        github.expect_get_repo_info_at().returning(|_, _| {
-            Ok(RepoInfo {
-                updated_at: "new".into(),
-                ..RepoInfo {
-                    description: None,
-                    homepage: None,
-                    license: None,
-                    updated_at: "".into(),
-                }
+        source.expect_get_repo_metadata_at().returning(|_, _| {
+            Ok(RepoMetadata {
+                updated_at: Some("new".into()),
+                description: None,
+                homepage: None,
+                license: None,
             })
         });
 
         // Get releases -> v2 is available (newer than installed v1)
-        github.expect_get_releases_at().returning(|_, _| {
+        source.expect_get_releases_at().returning(|_, _| {
             Ok(vec![
-                Release {
-                    tag_name: "v2".into(), // New version!
+                SourceRelease {
+                    tag: "v2".into(), // New version!
                     published_at: Some("2024".into()),
                     ..Default::default()
                 },
-                Release {
-                    tag_name: "v1".into(), // Currently installed
+                SourceRelease {
+                    tag: "v1".into(), // Currently installed
                     published_at: Some("2023".into()),
                     ..Default::default()
                 },
@@ -329,7 +326,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github,
+            source,
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -366,7 +363,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github: MockGetReleases::new(),
+            source: MockSource::new(),
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };
@@ -432,8 +429,8 @@ mod tests {
             updated_at: "old".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -446,8 +443,8 @@ mod tests {
             updated_at: "old".into(),
             api_url: "api".into(),
             releases: vec![
-                Release {
-                    tag_name: "v1".into(),
+                SourceRelease {
+                    tag: "v1".into(),
                     ..Default::default()
                 }
                 .into(),
@@ -466,23 +463,26 @@ mod tests {
             .with(eq(root.join("owner2/repo2/meta.json")))
             .returning(move |_| Ok(meta2_json.clone()));
 
-        // --- 3. Fetch New Metadata from GitHub (only for owner1/repo1) ---
+        // --- 3. Fetch New Metadata from Source (only for owner1/repo1) ---
 
-        let mut github = MockGetReleases::new();
+        let mut source = MockSource::new();
 
         // Only owner1/repo1 should be updated, so expect exactly one call
-        github.expect_get_repo_info_at().times(1).returning(|_, _| {
-            Ok(RepoInfo {
-                updated_at: "new".into(),
-                description: None,
-                homepage: None,
-                license: None,
-            })
-        });
+        source
+            .expect_get_repo_metadata_at()
+            .times(1)
+            .returning(|_, _| {
+                Ok(RepoMetadata {
+                    updated_at: Some("new".into()),
+                    description: None,
+                    homepage: None,
+                    license: None,
+                })
+            });
 
-        github.expect_get_releases_at().times(1).returning(|_, _| {
-            Ok(vec![Release {
-                tag_name: "v1".into(),
+        source.expect_get_releases_at().times(1).returning(|_, _| {
+            Ok(vec![SourceRelease {
+                tag: "v1".into(),
                 ..Default::default()
             }])
         });
@@ -502,7 +502,7 @@ mod tests {
 
         let config = test_config();
         let services = Services {
-            github,
+            source,
             downloader: MockDownloader::new(),
             extractor: MockArchiveExtractor::new(),
         };

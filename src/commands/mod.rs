@@ -1,6 +1,7 @@
 pub mod config;
 mod install;
 mod link;
+mod link_spec;
 mod links;
 mod list;
 mod prune;
@@ -12,8 +13,9 @@ mod update;
 mod upgrade;
 
 pub use config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
-pub use install::{Installer, install, run};
+pub use install::{Installer, RepoSpec, install, run};
 pub use link::link;
+pub use link_spec::LinkSpec;
 pub use links::links;
 pub(crate) use links::{print_links, print_versioned_links};
 pub use list::list;

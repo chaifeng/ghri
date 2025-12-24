@@ -1,9 +1,10 @@
 use anyhow::Result;
 use log::debug;
 
-use crate::{github::RepoSpec, package::PackageRepository, runtime::Runtime};
+use crate::{package::PackageRepository, runtime::Runtime};
 
 use super::config::{Config, ConfigOverrides};
+use super::install::RepoSpec;
 use super::{print_links, print_versioned_links};
 
 /// Show detailed information about a package

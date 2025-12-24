@@ -3,12 +3,12 @@ use log::debug;
 use std::path::Path;
 
 use crate::{
-    github::RepoSpec,
     package::{LinkManager, LinkRule, LinkStatus, PackageRepository, VersionedLink},
     runtime::Runtime,
 };
 
 use super::config::{Config, ConfigOverrides};
+use super::install::RepoSpec;
 
 /// Convert LinkManager's LinkStatus to display string
 fn format_link_status(status: &LinkStatus) -> String {

@@ -2,9 +2,10 @@ use anyhow::Result;
 use log::{debug, info};
 use std::path::Path;
 
-use crate::{github::RepoSpec, package::PackageRepository, runtime::Runtime};
+use crate::{package::PackageRepository, runtime::Runtime};
 
 use super::config::{Config, ConfigOverrides};
+use super::install::RepoSpec;
 use super::remove_version;
 
 /// Prune unused versions, keeping only the current version

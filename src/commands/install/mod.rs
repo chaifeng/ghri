@@ -1,11 +1,6 @@
 use anyhow::Result;
 
-use crate::{
-    archive::ArchiveExtractor,
-    download::Downloader,
-    github::{GetReleases, RepoSpec},
-    runtime::Runtime,
-};
+use crate::{archive::ArchiveExtractor, download::Downloader, runtime::Runtime, source::Source};
 
 use super::config::{Config, ConfigOverrides, InstallOptions};
 use super::prune::prune_package_dir;
@@ -14,8 +9,10 @@ use super::services::Services;
 mod download;
 mod external_links;
 mod installer;
+mod repo_spec;
 
 pub use installer::Installer;
+pub use repo_spec::RepoSpec;
 
 #[tracing::instrument(skip(runtime, overrides, options))]
 pub async fn install<R: Runtime + 'static>(
@@ -35,10 +32,10 @@ pub async fn install<R: Runtime + 'static>(
 }
 
 #[tracing::instrument(skip(config, runtime, services, options))]
-pub async fn run<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: Downloader>(
+pub async fn run<R: Runtime + 'static, S: Source, E: ArchiveExtractor, D: Downloader>(
     config: &Config,
     runtime: R,
-    services: Services<G, D, E>,
+    services: Services<S, D, E>,
     repo_str: &str,
     options: InstallOptions,
 ) -> Result<()> {
@@ -46,7 +43,7 @@ pub async fn run<R: Runtime + 'static, G: GetReleases, E: ArchiveExtractor, D: D
 
     let installer = Installer::new(
         runtime,
-        services.github,
+        services.source,
         services.downloader,
         services.extractor,
     );
