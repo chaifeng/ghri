@@ -1,11 +1,13 @@
 use anyhow::Result;
+use std::sync::{Arc, Mutex};
 
-use crate::application::UpgradeUseCase;
+use crate::application::{InstallUseCase, UpgradeUseCase};
+use crate::cleanup::CleanupContext;
 use crate::runtime::Runtime;
 use crate::source::RepoId;
 
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
-use super::install::Installer;
+use super::install::{DefaultReleaseInstaller, run_install};
 use super::prune::prune_package_dir;
 use super::services::RegistryServices;
 
@@ -84,12 +86,22 @@ async fn run_upgrade<R: Runtime + 'static>(
         return Ok(());
     }
 
-    // Create installer for actual installation work
-    let installer = Installer::new(
-        runtime,
-        super::services::build_source(config)?,
-        services.downloader,
-        services.extractor,
+    // Wrap runtime in Arc for shared ownership
+    let runtime = Arc::new(runtime);
+
+    // Create InstallUseCase for orchestration
+    let use_case = InstallUseCase::new(
+        runtime.as_ref(),
+        &services.registry,
+        config.install_root.clone(),
+    );
+
+    // Create release installer
+    let release_installer = DefaultReleaseInstaller::new(
+        Arc::clone(&runtime),
+        Arc::new(services.downloader),
+        Arc::new(services.extractor),
+        Arc::new(Mutex::new(CleanupContext::new())),
     );
 
     let mut upgraded_count = 0;
@@ -110,16 +122,18 @@ async fn run_upgrade<R: Runtime + 'static>(
             original_args: vec![], // No original args needed for upgrade
         };
 
-        // Use install for unified installation path
-        if let Err(e) = installer
-            .install(
-                config,
-                &services.registry,
-                &repo,
-                Some(&latest_version),
-                &install_options,
-            )
-            .await
+        // Use run_install for unified installation path
+        // Format: owner/repo@version
+        let repo_str = format!("{}@{}", repo, latest_version);
+        if let Err(e) = run_install(
+            config,
+            Arc::clone(&runtime),
+            &use_case,
+            &release_installer,
+            &repo_str,
+            install_options,
+        )
+        .await
         {
             eprintln!("   failed to upgrade {}: {}", repo, e);
         } else {
@@ -128,7 +142,7 @@ async fn run_upgrade<R: Runtime + 'static>(
             // Prune old versions if requested
             if options.prune
                 && let Err(e) = prune_package_dir(
-                    &installer.runtime,
+                    runtime.as_ref(),
                     &config.install_root,
                     &repo.owner,
                     &repo.repo,

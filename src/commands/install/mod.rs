@@ -17,7 +17,6 @@ mod installer;
 mod repo_spec;
 
 pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
-pub use installer::Installer;
 pub use repo_spec::RepoSpec;
 
 #[cfg(test)]
