@@ -428,4 +428,207 @@ mod tests {
 
         assert!(result.is_ok()); // Cancellation is not an error
     }
+
+    #[tokio::test]
+    async fn test_run_install_invalid_repo_spec() {
+        // Test that invalid repo spec returns error early
+        let runtime = MockRuntime::new();
+        let use_case = MockInstallOperations::new(); // No calls expected
+        let release_installer = MockReleaseInstaller::new(); // No calls expected
+
+        let config = test_config();
+        let options = default_install_options();
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "invalid-repo-string-without-slash",
+            options,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid repository"));
+    }
+
+    #[tokio::test]
+    async fn test_run_install_download_fails() {
+        // Test error handling when release_installer fails
+        let runtime = MockRuntime::new();
+        let mut use_case = MockInstallOperations::new();
+        let mut release_installer = MockReleaseInstaller::new();
+
+        let repo = RepoId {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+        let meta = test_meta();
+        let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // Setup use_case expectations
+        use_case
+            .expect_resolve_source_for_new()
+            .returning(|| Ok(Arc::new(MockSource::new())));
+
+        let meta_clone = meta.clone();
+        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+            let m = meta_clone.clone();
+            Box::pin(async move { Ok((m, true)) })
+        });
+
+        use_case.expect_effective_filters().returning(|_, _| vec![]);
+
+        let release = meta.releases[0].clone();
+        use_case
+            .expect_resolve_version()
+            .returning(move |_, _, _| Ok(release.clone()));
+
+        use_case
+            .expect_is_installed()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| false);
+
+        let target_dir_clone = target_dir.clone();
+        use_case
+            .expect_version_dir()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(move |_, _| target_dir_clone.clone());
+
+        let meta_path_clone = meta_path.clone();
+        use_case
+            .expect_meta_path()
+            .with(eq(repo.clone()))
+            .returning(move |_| meta_path_clone.clone());
+
+        // Release installer fails
+        release_installer
+            .expect_install()
+            .returning(|_, _, _, _, _| Err(anyhow::anyhow!("Download failed: network error")));
+
+        // Execute
+        let config = test_config();
+        let options = default_install_options();
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "owner/repo",
+            options,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("network error"));
+    }
+
+    #[tokio::test]
+    async fn test_run_install_with_specific_version() {
+        // Test installing a specific version (e.g., owner/repo@v2.0.0)
+        let runtime = MockRuntime::new();
+        let mut use_case = MockInstallOperations::new();
+        let mut release_installer = MockReleaseInstaller::new();
+
+        let repo = RepoId {
+            owner: "owner".into(),
+            repo: "repo".into(),
+        };
+
+        // Meta with multiple releases
+        let meta = Meta {
+            name: "owner/repo".into(),
+            api_url: "https://api.github.com".into(),
+            current_version: String::new(),
+            releases: vec![
+                MetaRelease {
+                    version: "v2.0.0".into(),
+                    published_at: Some("2024-02-01T00:00:00Z".into()),
+                    is_prerelease: false,
+                    assets: vec![],
+                    tarball_url: "https://example.com/tarball/v2".into(),
+                    title: None,
+                },
+                MetaRelease {
+                    version: "v1.0.0".into(),
+                    published_at: Some("2024-01-01T00:00:00Z".into()),
+                    is_prerelease: false,
+                    assets: vec![],
+                    tarball_url: "https://example.com/tarball/v1".into(),
+                    title: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0");
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+
+        // Setup use_case expectations
+        use_case
+            .expect_resolve_source_for_new()
+            .returning(|| Ok(Arc::new(MockSource::new())));
+
+        let meta_clone = meta.clone();
+        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+            let m = meta_clone.clone();
+            Box::pin(async move { Ok((m, true)) })
+        });
+
+        use_case.expect_effective_filters().returning(|_, _| vec![]);
+
+        // resolve_version should be called with the specified version
+        let release = meta.releases[0].clone();
+        use_case
+            .expect_resolve_version()
+            .withf(|_, version, _| version == &Some("v2.0.0".to_string()))
+            .returning(move |_, _, _| Ok(release.clone()));
+
+        use_case
+            .expect_is_installed()
+            .with(eq(repo.clone()), eq("v2.0.0"))
+            .returning(|_, _| false);
+
+        let target_dir_clone = target_dir.clone();
+        use_case
+            .expect_version_dir()
+            .with(eq(repo.clone()), eq("v2.0.0"))
+            .returning(move |_, _| target_dir_clone.clone());
+
+        let meta_path_clone = meta_path.clone();
+        use_case
+            .expect_meta_path()
+            .with(eq(repo.clone()))
+            .returning(move |_| meta_path_clone.clone());
+
+        release_installer
+            .expect_install()
+            .returning(|_, _, _, _, _| Ok(()));
+
+        use_case
+            .expect_update_current_link()
+            .with(eq(repo.clone()), eq("v2.0.0"))
+            .returning(|_, _| Ok(()));
+
+        use_case.expect_save_meta().returning(|_, _| Ok(()));
+
+        // Execute with version spec
+        let config = test_config();
+        let options = default_install_options();
+        let result = run_install(
+            &config,
+            Arc::new(runtime),
+            &use_case,
+            &release_installer,
+            "owner/repo@v2.0.0", // Specific version
+            options,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
 }
