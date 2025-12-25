@@ -135,7 +135,7 @@ impl ProviderFactory {
     ///
     /// The provider kind is inferred from the stored API URL, and the
     /// exact API URL from meta is used (for GitHub Enterprise, etc.).
-    pub fn from_meta(&self, meta: &Meta) -> Arc<dyn Provider> {
+    pub fn provider_for_meta(&self, meta: &Meta) -> Arc<dyn Provider> {
         let kind = Self::infer_provider_kind(&meta.api_url);
         self.create(kind, &meta.api_url)
     }
@@ -191,7 +191,7 @@ mod tests {
             ..Default::default()
         };
 
-        let provider = factory.from_meta(&meta);
+        let provider = factory.provider_for_meta(&meta);
         assert_eq!(provider.kind(), ProviderKind::GitHub);
         assert_eq!(provider.api_url(), "https://api.github.com");
     }
@@ -205,7 +205,7 @@ mod tests {
             ..Default::default()
         };
 
-        let provider = factory.from_meta(&meta);
+        let provider = factory.provider_for_meta(&meta);
         assert_eq!(provider.kind(), ProviderKind::GitHub);
         assert_eq!(provider.api_url(), "https://github.mycompany.com/api/v3");
     }

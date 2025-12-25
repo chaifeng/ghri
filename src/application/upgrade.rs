@@ -118,7 +118,7 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
 
     /// Resolve the source for a package from its metadata
     pub fn resolve_source(&self, meta: &Meta) -> Arc<dyn Provider> {
-        self.provider_factory.from_meta(meta)
+        self.provider_factory.provider_for_meta(meta)
     }
 
     /// Parse repository strings into RepoIds

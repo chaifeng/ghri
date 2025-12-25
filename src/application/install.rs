@@ -330,14 +330,14 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
     /// For updates/upgrades, resolves from package metadata.
     pub fn resolve_source(&self, meta: Option<&Meta>) -> Arc<dyn Provider> {
         match meta {
-            Some(m) => self.provider_factory.from_meta(m),
+            Some(m) => self.provider_factory.provider_for_meta(m),
             None => self.provider_factory.default_provider(),
         }
     }
 
     /// Resolve source from existing metadata (for update/upgrade)
     pub fn resolve_source_from_meta(&self, meta: &Meta) -> Arc<dyn Provider> {
-        self.provider_factory.from_meta(meta)
+        self.provider_factory.provider_for_meta(meta)
     }
 }
 
@@ -486,7 +486,7 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
     }
 
     fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Provider>> {
-        Ok(self.provider_factory.from_meta(meta))
+        Ok(self.provider_factory.provider_for_meta(meta))
     }
 }
 
