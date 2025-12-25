@@ -16,15 +16,6 @@ use crate::runtime::Runtime;
 
 use super::install::InstallAction;
 
-/// Options for the upgrade action
-#[derive(Debug, Clone, Default)]
-pub struct UpgradeOptions {
-    /// Allow upgrading to pre-release versions
-    pub pre: bool,
-    /// Skip confirmation prompts
-    pub yes: bool,
-}
-
 /// Result of checking for an update
 #[derive(Debug)]
 pub struct UpdateCheck<'a> {

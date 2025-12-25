@@ -126,16 +126,8 @@ pub struct InstallOptions {
     pub original_args: Vec<String>,
 }
 
-/// Options for the upgrade command (behavior parameters)
-#[derive(Debug, Default, Clone)]
-pub struct UpgradeOptions {
-    /// Allow upgrading to pre-release versions
-    pub pre: bool,
-    /// Skip confirmation prompts
-    pub yes: bool,
-    /// Prune old versions after upgrade
-    pub prune: bool,
-}
+/// Type alias for backward compatibility - upgrade uses the same options as install
+pub type UpgradeOptions = InstallOptions;
 
 #[cfg(test)]
 mod tests {

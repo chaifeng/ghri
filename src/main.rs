@@ -231,6 +231,7 @@ async fn main() -> Result<()> {
                     pre: args.pre,
                     yes: args.yes,
                     prune: args.prune,
+                    ..Default::default()
                 },
             )
             .await?

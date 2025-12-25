@@ -14,22 +14,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::{info, warn};
 
+use crate::commands::InstallOptions;
 use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionResolver};
 use crate::provider::{Provider, ProviderFactory, RepoId};
 use crate::runtime::Runtime;
-
-/// Options for the install action
-#[derive(Debug, Clone, Default)]
-pub struct InstallOptions {
-    /// Asset name filters (e.g., ["*linux*", "*x86_64*"])
-    pub filters: Vec<String>,
-    /// Allow installing pre-release versions
-    pub pre: bool,
-    /// Skip confirmation prompts
-    pub yes: bool,
-    /// Original command line arguments (for error messages)
-    pub original_args: Vec<String>,
-}
 
 /// Result of resolving a version to install
 #[derive(Debug)]

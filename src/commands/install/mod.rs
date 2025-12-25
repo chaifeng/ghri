@@ -90,13 +90,7 @@ pub async fn run_install<R: Runtime + 'static>(
     let (mut meta, is_new) = action.get_or_fetch_meta(repo, source.as_ref()).await?;
 
     // Get effective filters
-    let app_options = crate::application::InstallOptions {
-        filters: options.filters.clone(),
-        pre: options.pre,
-        yes: options.yes,
-        original_args: options.original_args.clone(),
-    };
-    let effective_filters = action.effective_filters(&app_options, &meta);
+    let effective_filters = action.effective_filters(&options, &meta);
 
     // Resolve version
     let meta_release = action.resolve_version(&meta, spec.version.clone(), options.pre)?;
