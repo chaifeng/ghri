@@ -486,10 +486,10 @@ test_upgrade_after_update() {
     "current_version": "$old_version",
     "releases": [
         {
-            "version": "$old_version",
-            "title": "Old Release",
+            "tag": "$old_version",
+            "name": "Old Release",
             "published_at": "2020-01-01T00:00:00Z",
-            "is_prerelease": false,
+            "prerelease": false,
             "tarball_url": "https://api.github.com/repos/bach-sh/bach/tarball/$old_version",
             "assets": []
         }
