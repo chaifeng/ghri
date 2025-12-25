@@ -1,4 +1,4 @@
-//! GitHub source implementation.
+//! GitHub provider implementation.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -7,7 +7,7 @@ use reqwest::Client;
 
 use crate::http::HttpClient;
 
-use super::{ReleaseAsset, RepoId, RepoMetadata, Source, SourceKind, SourceRelease};
+use super::{Provider, ProviderKind, Release, ReleaseAsset, RepoId, RepoMetadata};
 
 /// GitHub API response types (internal).
 mod api {
@@ -44,19 +44,19 @@ mod api {
     }
 }
 
-/// GitHub source implementation.
-pub struct GitHubSource {
+/// GitHub provider implementation.
+pub struct GitHubProvider {
     http_client: HttpClient,
     api_url: String,
 }
 
-impl GitHubSource {
-    /// Create a new GitHub source with default API URL.
+impl GitHubProvider {
+    /// Create a new GitHub provider with default API URL.
     pub fn new(client: Client) -> Self {
         Self::with_api_url(client, "https://api.github.com")
     }
 
-    /// Create a new GitHub source with custom API URL.
+    /// Create a new GitHub provider with custom API URL.
     pub fn with_api_url(client: Client, api_url: &str) -> Self {
         Self {
             http_client: HttpClient::new(client),
@@ -105,9 +105,9 @@ impl GitHubSource {
 }
 
 #[async_trait]
-impl Source for GitHubSource {
-    fn kind(&self) -> SourceKind {
-        SourceKind::GitHub
+impl Provider for GitHubProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::GitHub
     }
 
     fn api_url(&self) -> &str {
@@ -118,7 +118,7 @@ impl Source for GitHubSource {
         self.get_repo_metadata_at(repo, &self.api_url.clone()).await
     }
 
-    async fn get_releases(&self, repo: &RepoId) -> Result<Vec<SourceRelease>> {
+    async fn get_releases(&self, repo: &RepoId) -> Result<Vec<Release>> {
         self.get_releases_at(repo, &self.api_url.clone()).await
     }
 
@@ -132,15 +132,15 @@ impl Source for GitHubSource {
         })
     }
 
-    async fn get_releases_at(&self, repo: &RepoId, api_url: &str) -> Result<Vec<SourceRelease>> {
+    async fn get_releases_at(&self, repo: &RepoId, api_url: &str) -> Result<Vec<Release>> {
         let releases = self.fetch_releases(repo, api_url).await?;
         Ok(releases.into_iter().map(|r| r.into()).collect())
     }
 }
 
-impl From<api::Release> for SourceRelease {
+impl From<api::Release> for Release {
     fn from(r: api::Release) -> Self {
-        SourceRelease {
+        Release {
             tag: r.tag_name,
             name: r.name,
             published_at: r.published_at,
@@ -166,19 +166,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_github_source_kind() {
+    fn test_github_provider_kind() {
         let client = Client::new();
-        let source = GitHubSource::new(client);
-        assert_eq!(source.kind(), SourceKind::GitHub);
+        let provider = GitHubProvider::new(client);
+        assert_eq!(provider.kind(), ProviderKind::GitHub);
     }
 
     #[test]
-    fn test_github_source_api_url() {
+    fn test_github_provider_api_url() {
         let client = Client::new();
-        let source = GitHubSource::new(client);
-        assert_eq!(source.api_url(), "https://api.github.com");
+        let provider = GitHubProvider::new(client);
+        assert_eq!(provider.api_url(), "https://api.github.com");
 
-        let custom = GitHubSource::with_api_url(Client::new(), "https://custom.api");
+        let custom = GitHubProvider::with_api_url(Client::new(), "https://custom.api");
         assert_eq!(custom.api_url(), "https://custom.api");
     }
 
@@ -197,7 +197,7 @@ mod tests {
             }],
         };
 
-        let release: SourceRelease = api_release.into();
+        let release: Release = api_release.into();
         assert_eq!(release.tag, "v1.0.0");
         assert_eq!(release.name, Some("Release 1.0".into()));
         assert!(!release.prerelease);

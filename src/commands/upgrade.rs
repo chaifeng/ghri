@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::{InstallUseCase, UpgradeUseCase};
 use crate::cleanup::CleanupContext;
+use crate::provider::RepoId;
 use crate::runtime::Runtime;
-use crate::source::RepoId;
 
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 use super::install::{DefaultReleaseInstaller, run_install};

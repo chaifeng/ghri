@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::{InstallOperations, InstallUseCase};
 use crate::cleanup::CleanupContext;
+use crate::provider::Release;
 use crate::runtime::Runtime;
-use crate::source::SourceRelease;
 
 use super::config::{Config, ConfigOverrides, InstallOptions};
 use super::prune::prune_package_dir;
@@ -103,7 +103,7 @@ pub async fn run_install<R: Runtime + 'static>(
 
     // Resolve version
     let meta_release = use_case.resolve_version(&meta, spec.version.clone(), options.pre)?;
-    let release: SourceRelease = meta_release.into();
+    let release: Release = meta_release.into();
 
     // Check if already installed
     if use_case.is_installed(repo, &release.tag) {
@@ -187,8 +187,8 @@ mod tests {
     use super::*;
     use crate::application::MockInstallOperations;
     use crate::package::{Meta, MetaRelease};
+    use crate::provider::{MockProvider, RepoId};
     use crate::runtime::MockRuntime;
-    use crate::source::{MockSource, RepoId};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
@@ -250,7 +250,7 @@ mod tests {
         // Setup use_case expectations
         use_case
             .expect_resolve_source_for_new()
-            .returning(move || Ok(Arc::new(MockSource::new())));
+            .returning(move || Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
         use_case.expect_get_or_fetch_meta().returning(move |_, _| {
@@ -329,7 +329,7 @@ mod tests {
         // Setup use_case expectations
         use_case
             .expect_resolve_source_for_new()
-            .returning(|| Ok(Arc::new(MockSource::new())));
+            .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
         use_case.expect_get_or_fetch_meta().returning(move |_, _| {
@@ -384,7 +384,7 @@ mod tests {
         // Setup use_case expectations
         use_case
             .expect_resolve_source_for_new()
-            .returning(|| Ok(Arc::new(MockSource::new())));
+            .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
         use_case.expect_get_or_fetch_meta().returning(move |_, _| {
@@ -449,10 +449,12 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid repository"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid repository")
+        );
     }
 
     #[tokio::test]
@@ -473,7 +475,7 @@ mod tests {
         // Setup use_case expectations
         use_case
             .expect_resolve_source_for_new()
-            .returning(|| Ok(Arc::new(MockSource::new())));
+            .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
         use_case.expect_get_or_fetch_meta().returning(move |_, _| {
@@ -571,7 +573,7 @@ mod tests {
         // Setup use_case expectations
         use_case
             .expect_resolve_source_for_new()
-            .returning(|| Ok(Arc::new(MockSource::new())));
+            .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
         use_case.expect_get_or_fetch_meta().returning(move |_, _| {

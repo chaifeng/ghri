@@ -2,8 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::provider::{Release, ReleaseAsset, RepoId, RepoMetadata};
 use crate::runtime::Runtime;
-use crate::source::{ReleaseAsset, RepoId, RepoMetadata, SourceRelease};
 
 use super::LinkRule;
 
@@ -65,7 +65,7 @@ impl Meta {
     pub fn from(
         repo: RepoId,
         info: RepoMetadata,
-        releases: Vec<SourceRelease>,
+        releases: Vec<Release>,
         current: &str,
         api_url: &str,
     ) -> Self {
@@ -283,8 +283,8 @@ pub struct MetaRelease {
     pub assets: Vec<MetaAsset>,
 }
 
-impl From<SourceRelease> for MetaRelease {
-    fn from(r: SourceRelease) -> Self {
+impl From<Release> for MetaRelease {
+    fn from(r: Release) -> Self {
         MetaRelease {
             version: r.tag,
             title: r.name,
@@ -296,9 +296,9 @@ impl From<SourceRelease> for MetaRelease {
     }
 }
 
-impl From<MetaRelease> for SourceRelease {
+impl From<MetaRelease> for Release {
     fn from(r: MetaRelease) -> Self {
-        SourceRelease {
+        Release {
             tag: r.version,
             tarball_url: r.tarball_url,
             name: r.title,
@@ -396,17 +396,17 @@ mod tests {
 
         // Releases in random order with different published dates
         let releases = vec![
-            SourceRelease {
+            Release {
                 tag: "v1.0.0".into(),
                 published_at: Some("2023-01-01T00:00:00Z".into()), // Oldest
                 ..Default::default()
             },
-            SourceRelease {
+            Release {
                 tag: "v2.0.0".into(),
                 published_at: Some("2023-02-01T00:00:00Z".into()), // Newest
                 ..Default::default()
             },
-            SourceRelease {
+            Release {
                 tag: "v0.9.0".into(),
                 published_at: Some("2022-12-01T00:00:00Z".into()), // Middle
                 ..Default::default()
@@ -438,7 +438,7 @@ mod tests {
             updated_at: "t1".into(),
             current_version: "v1".into(),
             releases: vec![
-                SourceRelease {
+                Release {
                     tag: "v1".into(),
                     published_at: Some("2023-01-01".into()), // Older
                     ..Default::default()
@@ -455,7 +455,7 @@ mod tests {
             updated_at: "t2".into(),
             current_version: "v1".into(),
             releases: vec![
-                SourceRelease {
+                Release {
                     tag: "v2".into(),
                     published_at: Some("2023-02-01".into()), // Newer
                     ..Default::default()
@@ -666,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_meta_conversions() {
-        // Test conversion between Meta types and Source types (MetaAsset <-> ReleaseAsset, MetaRelease <-> SourceRelease)
+        // Test conversion between Meta types and Source types (MetaAsset <-> ReleaseAsset, MetaRelease <-> Release)
 
         // --- Test MetaAsset -> ReleaseAsset ---
 
@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(asset.size, 1024);
         assert_eq!(asset.download_url, "https://example.com/app.tar.gz");
 
-        // --- Test MetaRelease -> SourceRelease ---
+        // --- Test MetaRelease -> Release ---
 
         let meta_release = MetaRelease {
             version: "v1.0.0".into(),
@@ -694,7 +694,7 @@ mod tests {
             assets: vec![meta_asset],
         };
 
-        let release: SourceRelease = meta_release.clone().into();
+        let release: Release = meta_release.clone().into();
 
         // Verify conversion preserves all fields
         assert_eq!(release.tag, "v1.0.0");

@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 
-use crate::source::RepoId;
+use crate::provider::RepoId;
 
 /// A repository specification that may include a version
 /// Format: "owner/repo" or "owner/repo@version"

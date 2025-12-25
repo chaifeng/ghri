@@ -3,8 +3,8 @@ use log::warn;
 
 use crate::application::InstallUseCase;
 use crate::package::VersionResolver;
+use crate::provider::RepoId;
 use crate::runtime::Runtime;
-use crate::source::RepoId;
 
 use super::config::{Config, ConfigOverrides};
 use super::services::RegistryServices;

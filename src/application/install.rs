@@ -1,7 +1,7 @@
 //! Install use case - orchestrates the package installation flow.
 //!
 //! This use case coordinates:
-//! - Source resolution (from registry or package metadata)
+//! - Provider resolution (from registry or package metadata)
 //! - Version resolution
 //! - Download and extraction
 //! - Link management
@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use log::{info, warn};
 
 use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionResolver};
+use crate::provider::{Provider, ProviderRegistry, RepoId};
 use crate::runtime::Runtime;
-use crate::source::{RepoId, Source, SourceRegistry};
 
 /// Options for the install use case
 #[derive(Debug, Clone, Default)]
@@ -59,7 +59,7 @@ pub trait InstallOperations: Send + Sync {
     async fn fetch_meta(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         current_version: &str,
     ) -> Result<Meta>;
 
@@ -67,13 +67,14 @@ pub trait InstallOperations: Send + Sync {
     async fn fetch_meta_at(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         api_url: &str,
         current_version: &str,
     ) -> Result<Meta>;
 
     /// Get or fetch metadata, preferring cache
-    async fn get_or_fetch_meta(&self, repo: &RepoId, source: &dyn Source) -> Result<(Meta, bool)>;
+    async fn get_or_fetch_meta(&self, repo: &RepoId, source: &dyn Provider)
+    -> Result<(Meta, bool)>;
 
     /// Resolve the version to install based on constraints
     /// Returns a cloned MetaRelease to avoid lifetime issues
@@ -106,24 +107,28 @@ pub trait InstallOperations: Send + Sync {
     fn save_meta(&self, repo: &RepoId, meta: &Meta) -> Result<()>;
 
     /// Resolve the source for a package (None = use default source)
-    fn resolve_source_for_new(&self) -> Result<Arc<dyn Source>>;
+    fn resolve_source_for_new(&self) -> Result<Arc<dyn Provider>>;
 
     /// Resolve source from existing metadata (for update/upgrade)
-    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Source>>;
+    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Provider>>;
 }
 
 /// Install use case - platform-agnostic installation orchestration
 pub struct InstallUseCase<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
-    source_registry: &'a SourceRegistry,
+    source_registry: &'a ProviderRegistry,
     link_manager: LinkManager<'a, R>,
     install_root: PathBuf,
 }
 
 impl<'a, R: Runtime> InstallUseCase<'a, R> {
     /// Create a new install use case
-    pub fn new(runtime: &'a R, source_registry: &'a SourceRegistry, install_root: PathBuf) -> Self {
+    pub fn new(
+        runtime: &'a R,
+        source_registry: &'a ProviderRegistry,
+        install_root: PathBuf,
+    ) -> Self {
         Self {
             runtime,
             package_repo: PackageRepository::new(runtime, install_root.clone()),
@@ -150,7 +155,7 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     pub async fn fetch_meta(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         current_version: &str,
     ) -> Result<Meta> {
         let api_url = source.api_url();
@@ -177,7 +182,7 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     pub async fn fetch_meta_at(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         api_url: &str,
         current_version: &str,
     ) -> Result<Meta> {
@@ -203,7 +208,7 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     pub async fn get_or_fetch_meta(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
     ) -> Result<(Meta, bool)> {
         // Try to load from cache first
         match self.get_cached_meta(repo)? {
@@ -340,7 +345,7 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     ///
     /// For new installs, uses the default source.
     /// For updates/upgrades, resolves from package metadata.
-    pub fn resolve_source(&self, meta: Option<&Meta>) -> Result<&Arc<dyn Source>> {
+    pub fn resolve_source(&self, meta: Option<&Meta>) -> Result<&Arc<dyn Provider>> {
         match meta {
             Some(m) => self.source_registry.resolve_from_meta(m),
             None => self
@@ -351,7 +356,7 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     }
 
     /// Resolve source from existing metadata (for update/upgrade)
-    pub fn resolve_source_from_meta(&self, meta: &Meta) -> Result<&Arc<dyn Source>> {
+    pub fn resolve_source_from_meta(&self, meta: &Meta) -> Result<&Arc<dyn Provider>> {
         self.source_registry.resolve_from_meta(meta)
     }
 }
@@ -366,7 +371,7 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
     async fn fetch_meta(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         current_version: &str,
     ) -> Result<Meta> {
         let api_url = source.api_url();
@@ -391,7 +396,7 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
     async fn fetch_meta_at(
         &self,
         repo: &RepoId,
-        source: &dyn Source,
+        source: &dyn Provider,
         api_url: &str,
         current_version: &str,
     ) -> Result<Meta> {
@@ -413,7 +418,11 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
         ))
     }
 
-    async fn get_or_fetch_meta(&self, repo: &RepoId, source: &dyn Source) -> Result<(Meta, bool)> {
+    async fn get_or_fetch_meta(
+        &self,
+        repo: &RepoId,
+        source: &dyn Provider,
+    ) -> Result<(Meta, bool)> {
         match self.get_cached_meta(repo)? {
             Some(meta) => Ok((meta, false)),
             None => {
@@ -497,14 +506,14 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
         self.package_repo.save(&repo.owner, &repo.repo, meta)
     }
 
-    fn resolve_source_for_new(&self) -> Result<Arc<dyn Source>> {
+    fn resolve_source_for_new(&self) -> Result<Arc<dyn Provider>> {
         self.source_registry
             .get(self.source_registry.default_kind())
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No default source available"))
     }
 
-    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Source>> {
+    fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Provider>> {
         self.source_registry.resolve_from_meta(meta).cloned()
     }
 }
@@ -513,14 +522,14 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
 mod tests {
     use super::*;
     use crate::package::MetaRelease;
+    use crate::provider::{MockProvider, ProviderKind};
     use crate::runtime::MockRuntime;
-    use crate::source::{MockSource, SourceKind};
     use std::sync::Arc;
 
-    fn make_test_registry() -> SourceRegistry {
-        let mut registry = SourceRegistry::new();
-        let mut mock = MockSource::new();
-        mock.expect_kind().return_const(SourceKind::GitHub);
+    fn make_test_registry() -> ProviderRegistry {
+        let mut registry = ProviderRegistry::new();
+        let mut mock = MockProvider::new();
+        mock.expect_kind().return_const(ProviderKind::GitHub);
         mock.expect_api_url()
             .return_const("https://api.github.com".to_string());
         registry.register(Arc::new(mock));

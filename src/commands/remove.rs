@@ -85,7 +85,7 @@ pub fn remove<R: Runtime>(
 
 fn show_package_removal_plan<R: Runtime>(
     runtime: &R,
-    repo: &crate::source::RepoId,
+    repo: &crate::provider::RepoId,
     package_dir: &Path,
     meta: Option<&Meta>,
 ) {
@@ -149,7 +149,7 @@ fn show_package_removal_plan<R: Runtime>(
 fn show_version_removal_plan<R: Runtime>(
     runtime: &R,
     pkg_repo: &PackageRepository<'_, R>,
-    repo: &crate::source::RepoId,
+    repo: &crate::provider::RepoId,
     version: &str,
     meta: Option<&Meta>,
 ) -> Result<()> {

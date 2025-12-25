@@ -10,8 +10,8 @@ use crate::{
     archive::ArchiveExtractor,
     cleanup::CleanupContext,
     download::Downloader,
+    provider::{Release, ReleaseAsset, RepoId},
     runtime::Runtime,
-    source::{ReleaseAsset, RepoId, SourceRelease},
 };
 
 /// Trait for installing a release to a target directory.
@@ -32,7 +32,7 @@ pub trait ReleaseInstaller: Send + Sync {
     async fn install(
         &self,
         repo: &RepoId,
-        release: &SourceRelease,
+        release: &Release,
         target_dir: &Path,
         filters: &[String],
         original_args: &[String],
@@ -83,7 +83,7 @@ where
     async fn install(
         &self,
         repo: &RepoId,
-        release: &SourceRelease,
+        release: &Release,
         target_dir: &Path,
         filters: &[String],
         original_args: &[String],
@@ -113,7 +113,7 @@ pub enum DownloadPlan {
 }
 
 /// Get the download plan without actually downloading
-pub fn get_download_plan(release: &SourceRelease, filters: &[String]) -> Result<DownloadPlan> {
+pub fn get_download_plan(release: &Release, filters: &[String]) -> Result<DownloadPlan> {
     // Filter assets if filters are provided
     let filtered_assets = if filters.is_empty() {
         release.assets.clone()
@@ -165,7 +165,7 @@ pub(super) async fn ensure_installed_impl<
     runtime: &R,
     target_dir: &Path,
     repo: &RepoId,
-    release: &SourceRelease,
+    release: &Release,
     downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
@@ -246,7 +246,7 @@ pub(super) async fn ensure_installed_impl<
     }
 
     // Create a modified release with filtered assets
-    let filtered_release = SourceRelease {
+    let filtered_release = Release {
         assets: filtered_assets,
         ..release.clone()
     };
@@ -289,9 +289,9 @@ pub(super) async fn ensure_installed_impl<
 
 /// Filter assets by glob patterns. An asset matches if ALL patterns match its name.
 fn filter_assets(
-    assets: &[crate::source::ReleaseAsset],
+    assets: &[crate::provider::ReleaseAsset],
     filters: &[String],
-) -> Vec<crate::source::ReleaseAsset> {
+) -> Vec<crate::provider::ReleaseAsset> {
     assets
         .iter()
         .filter(|asset| {
@@ -311,7 +311,7 @@ async fn download_and_extract_tarball<R: Runtime + 'static, E: ArchiveExtractor,
     runtime: &R,
     target_dir: &Path,
     repo: &RepoId,
-    release: &SourceRelease,
+    release: &Release,
     downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
@@ -476,7 +476,7 @@ async fn download_all_assets<R: Runtime + 'static, E: ArchiveExtractor, D: Downl
     runtime: &R,
     target_dir: &Path,
     repo: &RepoId,
-    release: &SourceRelease,
+    release: &Release,
     downloader: &D,
     extractor: &E,
     cleanup_ctx: Arc<Mutex<CleanupContext>>,
@@ -609,17 +609,17 @@ mod tests {
         // Pattern: "*aarch64*" should match assets containing "aarch64"
 
         let assets = vec![
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-linux-x86_64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/x86_64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-linux-aarch64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/aarch64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-darwin-aarch64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/darwin-aarch64".into(),
@@ -649,22 +649,22 @@ mod tests {
         // Pattern: "*aarch64*" AND "*darwin*" should match only darwin-aarch64
 
         let assets = vec![
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-linux-x86_64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/x86_64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-linux-aarch64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/aarch64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-darwin-aarch64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/darwin-aarch64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-darwin-x86_64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/darwin-x86_64".into(),
@@ -683,7 +683,7 @@ mod tests {
     fn test_filter_assets_no_match() {
         // Test filtering when no assets match the pattern
 
-        let assets = vec![crate::source::ReleaseAsset {
+        let assets = vec![crate::provider::ReleaseAsset {
             name: "app-linux-x86_64.tar.gz".into(),
             size: 1000,
             download_url: "http://example.com/x86_64".into(),
@@ -701,12 +701,12 @@ mod tests {
         // Test that empty filters returns all assets
 
         let assets = vec![
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-linux-x86_64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/x86_64".into(),
             },
-            crate::source::ReleaseAsset {
+            crate::provider::ReleaseAsset {
                 name: "app-darwin-aarch64.tar.gz".into(),
                 size: 1000,
                 download_url: "http://example.com/darwin-aarch64".into(),
@@ -818,7 +818,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: "http://mock/tar".into(),
             ..Default::default()
@@ -861,7 +861,7 @@ mod tests {
 
         let mut server = mockito::Server::new_async().await;
         let _m = server.mock("GET", "/tar").with_status(200).create();
-        let release_with_url = SourceRelease {
+        let release_with_url = Release {
             tarball_url: format!("{}/tar", server.url()),
             ..release
         };
@@ -901,7 +901,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/download", url),
             ..Default::default()
@@ -989,7 +989,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/download", url),
             ..Default::default()
@@ -1062,7 +1062,7 @@ mod tests {
             owner: "o".into(),
             repo: "r".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/download", url),
             ..Default::default()
@@ -1176,7 +1176,7 @@ mod tests {
                 owner: "o".into(),
                 repo: "r".into(),
             },
-            &SourceRelease::default(),
+            &Release::default(),
             &downloader,
             &MockArchiveExtractor::new(),
             cleanup_ctx,
@@ -1208,16 +1208,16 @@ mod tests {
 
         // Release with 2 assets (archive + text file)
         // Even though one is an archive, since there are multiple files, NONE are extracted
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/tarball", url), // Should NOT be downloaded
             assets: vec![
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "app-linux-x86_64.tar.gz".into(),
                     size: 1000,
                     download_url: format!("{}/asset1.tar.gz", url),
                 },
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "checksums.txt".into(),
                     size: 100,
                     download_url: format!("{}/checksums.txt", url),
@@ -1327,10 +1327,10 @@ mod tests {
         };
 
         // Release with single archive asset
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/tarball", url), // Should NOT be downloaded
-            assets: vec![crate::source::ReleaseAsset {
+            assets: vec![crate::provider::ReleaseAsset {
                 name: "app-linux-x86_64.tar.gz".into(),
                 size: 1000,
                 download_url: format!("{}/asset1.tar.gz", url),
@@ -1423,10 +1423,10 @@ mod tests {
         };
 
         // Release with single non-archive asset (a binary)
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/tarball", url), // Should NOT be downloaded
-            assets: vec![crate::source::ReleaseAsset {
+            assets: vec![crate::provider::ReleaseAsset {
                 name: "app-linux-x86_64".into(), // No archive extension
                 size: 1000,
                 download_url: format!("{}/binary", url),
@@ -1527,7 +1527,7 @@ mod tests {
         };
 
         // Release with NO assets (empty vec)
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/tarball.tar.gz", url), // Should be downloaded
             assets: vec![],                                 // Empty!
@@ -1616,16 +1616,16 @@ mod tests {
         };
 
         // Release with 2 assets
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1".into(),
             tarball_url: format!("{}/tarball", url),
             assets: vec![
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "asset1.tar.gz".into(),
                     size: 1000,
                     download_url: format!("{}/asset1.tar.gz", url),
                 },
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "asset2.tar.gz".into(),
                     size: 2000,
                     download_url: format!("{}/asset2.tar.gz", url), // This will fail
@@ -1723,16 +1723,16 @@ mod tests {
             owner: "owner".into(),
             repo: "repo".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1.0.0".into(),
             tarball_url: "http://example.com/tarball.tar.gz".into(),
             assets: vec![
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "app-linux-x86_64.tar.gz".into(),
                     size: 1000,
                     download_url: "http://example.com/linux-x86_64".into(),
                 },
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "app-darwin-aarch64.tar.gz".into(),
                     size: 1000,
                     download_url: "http://example.com/darwin-aarch64".into(),
@@ -1802,16 +1802,16 @@ mod tests {
             owner: "owner".into(),
             repo: "repo".into(),
         };
-        let release = SourceRelease {
+        let release = Release {
             tag: "v1.0.0".into(),
             tarball_url: "http://example.com/tarball.tar.gz".into(),
             assets: vec![
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "app-linux-x86_64.tar.gz".into(),
                     size: 1000,
                     download_url: "http://example.com/linux-x86_64".into(),
                 },
-                crate::source::ReleaseAsset {
+                crate::provider::ReleaseAsset {
                     name: "app-darwin-aarch64.tar.gz".into(),
                     size: 1000,
                     download_url: "http://example.com/darwin-aarch64".into(),

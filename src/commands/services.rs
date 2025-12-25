@@ -1,6 +1,6 @@
 //! Service factory for building application dependencies.
 //!
-//! This module separates the construction of service dependencies (Source client,
+//! This module separates the construction of service dependencies (Provider client,
 //! downloader, extractor) from the configuration. Services are built based on
 //! configuration values but are not part of the configuration itself.
 
@@ -17,7 +17,7 @@ use crate::{
     archive::ArchiveExtractorImpl,
     download::HttpDownloader,
     http::HttpClient,
-    source::{GitHubSource, Source, SourceKind, SourceRegistry},
+    provider::{GitHubProvider, Provider, ProviderKind, ProviderRegistry},
 };
 
 use super::config::Config;
@@ -41,23 +41,26 @@ pub fn build_http_client(token: Option<&str>) -> Result<HttpClient> {
     Ok(HttpClient::new(client))
 }
 
-/// Build a Source (GitHub) client from configuration
-pub fn build_source(config: &Config) -> Result<GitHubSource> {
+/// Build a Provider (GitHub) client from configuration
+pub fn build_provider(config: &Config) -> Result<GitHubProvider> {
     let http_client = build_http_client(config.token.as_deref())?;
-    Ok(GitHubSource::from_http_client(http_client, &config.api_url))
+    Ok(GitHubProvider::from_http_client(
+        http_client,
+        &config.api_url,
+    ))
 }
 
-/// Build a SourceRegistry with all available sources
-pub fn build_source_registry(config: &Config) -> Result<SourceRegistry> {
-    let mut registry = SourceRegistry::new();
+/// Build a ProviderRegistry with all available providers
+pub fn build_provider_registry(config: &Config) -> Result<ProviderRegistry> {
+    let mut registry = ProviderRegistry::new();
 
-    // Register GitHub source (default)
-    let github_source = build_source(config)?;
-    registry.register(Arc::new(github_source));
+    // Register GitHub provider (default)
+    let github_provider = build_provider(config)?;
+    registry.register(Arc::new(github_provider));
 
-    // Future: Register GitLab, Gitee sources here
-    // registry.register(Arc::new(build_gitlab_source(config)?));
-    // registry.register(Arc::new(build_gitee_source(config)?));
+    // Future: Register GitLab, Gitee providers here
+    // registry.register(Arc::new(build_gitlab_provider(config)?));
+    // registry.register(Arc::new(build_gitee_provider(config)?));
 
     Ok(registry)
 }
@@ -73,30 +76,30 @@ pub fn build_extractor() -> ArchiveExtractorImpl {
     ArchiveExtractorImpl::new()
 }
 
-/// Container for services using SourceRegistry for multi-platform support.
+/// Container for services using ProviderRegistry for multi-platform support.
 pub struct RegistryServices {
-    pub registry: SourceRegistry,
+    pub registry: ProviderRegistry,
     pub downloader: HttpDownloader,
     pub extractor: ArchiveExtractorImpl,
 }
 
 impl RegistryServices {
-    /// Build services with a source registry from configuration
+    /// Build services with a provider registry from configuration
     pub fn from_config(config: &Config) -> Result<Self> {
         Ok(Self {
-            registry: build_source_registry(config)?,
+            registry: build_provider_registry(config)?,
             downloader: build_downloader(config)?,
             extractor: build_extractor(),
         })
     }
 
-    /// Get a source by kind from the registry
-    pub fn get_source(&self, kind: SourceKind) -> Option<&Arc<dyn Source>> {
+    /// Get a provider by kind from the registry
+    pub fn get_provider(&self, kind: ProviderKind) -> Option<&Arc<dyn Provider>> {
         self.registry.get(kind)
     }
 
-    /// Get the default source (GitHub)
-    pub fn default_source(&self) -> Option<&Arc<dyn Source>> {
+    /// Get the default provider (GitHub)
+    pub fn default_provider(&self) -> Option<&Arc<dyn Provider>> {
         self.registry.get(self.registry.default_kind())
     }
 }
@@ -140,18 +143,18 @@ mod tests {
     }
 
     #[test]
-    fn test_build_source_registry() {
+    fn test_build_provider_registry() {
         let config = Config {
             install_root: std::path::PathBuf::from("/test"),
             api_url: "https://api.github.com".to_string(),
             token: None,
         };
 
-        let registry = build_source_registry(&config).unwrap();
+        let registry = build_provider_registry(&config).unwrap();
 
         // Should have GitHub registered
-        assert!(registry.has(SourceKind::GitHub));
-        assert_eq!(registry.default_kind(), SourceKind::GitHub);
+        assert!(registry.has(ProviderKind::GitHub));
+        assert_eq!(registry.default_kind(), ProviderKind::GitHub);
     }
 
     #[test]
@@ -164,8 +167,8 @@ mod tests {
 
         let services = RegistryServices::from_config(&config).unwrap();
 
-        // Should have default source available
-        assert!(services.default_source().is_some());
-        assert!(services.get_source(SourceKind::GitHub).is_some());
+        // Should have default provider available
+        assert!(services.default_provider().is_some());
+        assert!(services.get_provider(ProviderKind::GitHub).is_some());
     }
 }

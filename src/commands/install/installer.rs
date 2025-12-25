@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     package::Meta,
-    source::{RepoId, SourceRelease},
+    provider::{Release, RepoId},
 };
 
 use super::download::DownloadPlan;
@@ -11,7 +11,7 @@ use super::download::DownloadPlan;
 #[allow(clippy::too_many_arguments)]
 pub fn show_install_plan(
     repo: &RepoId,
-    release: &SourceRelease,
+    release: &Release,
     target_dir: &Path,
     meta_path: &Path,
     plan: &DownloadPlan,

@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 
-use crate::source::RepoId;
+use crate::provider::RepoId;
 
 /// A link specification that may include version and path
 /// Format: "owner/repo", "owner/repo@version", "owner/repo:path", or "owner/repo@version:path"

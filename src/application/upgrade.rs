@@ -11,8 +11,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::package::{Meta, PackageRepository};
+use crate::provider::{Provider, ProviderRegistry, RepoId};
 use crate::runtime::Runtime;
-use crate::source::{RepoId, Source, SourceRegistry};
 
 use super::install::InstallUseCase;
 
@@ -40,17 +40,21 @@ pub struct UpdateCheck<'a> {
 pub struct UpgradeUseCase<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
-    source_registry: &'a SourceRegistry,
+    provider_registry: &'a ProviderRegistry,
     install_root: PathBuf,
 }
 
 impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
     /// Create a new upgrade use case
-    pub fn new(runtime: &'a R, source_registry: &'a SourceRegistry, install_root: PathBuf) -> Self {
+    pub fn new(
+        runtime: &'a R,
+        provider_registry: &'a ProviderRegistry,
+        install_root: PathBuf,
+    ) -> Self {
         Self {
             runtime,
             package_repo: PackageRepository::new(runtime, install_root.clone()),
-            source_registry,
+            provider_registry,
             install_root,
         }
     }
@@ -59,7 +63,7 @@ impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
     pub fn install_use_case(&self) -> InstallUseCase<'a, R> {
         InstallUseCase::new(
             self.runtime,
-            self.source_registry,
+            self.provider_registry,
             self.install_root.clone(),
         )
     }
@@ -122,8 +126,8 @@ impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
     }
 
     /// Resolve the source for a package from its metadata
-    pub fn resolve_source(&self, meta: &Meta) -> Result<&Arc<dyn Source>> {
-        self.source_registry.resolve_from_meta(meta)
+    pub fn resolve_source(&self, meta: &Meta) -> Result<&Arc<dyn Provider>> {
+        self.provider_registry.resolve_from_meta(meta)
     }
 
     /// Parse repository strings into RepoIds
@@ -139,14 +143,14 @@ impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
 mod tests {
     use super::*;
     use crate::package::MetaRelease;
+    use crate::provider::{MockProvider, ProviderKind};
     use crate::runtime::MockRuntime;
-    use crate::source::{MockSource, SourceKind};
     use std::sync::Arc;
 
-    fn make_test_registry() -> SourceRegistry {
-        let mut registry = SourceRegistry::new();
-        let mut mock = MockSource::new();
-        mock.expect_kind().return_const(SourceKind::GitHub);
+    fn make_test_registry() -> ProviderRegistry {
+        let mut registry = ProviderRegistry::new();
+        let mut mock = MockProvider::new();
+        mock.expect_kind().return_const(ProviderKind::GitHub);
         mock.expect_api_url()
             .return_const("https://api.github.com".to_string());
         registry.register(Arc::new(mock));
