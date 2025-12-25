@@ -6,16 +6,15 @@ use crate::package::VersionResolver;
 use crate::provider::RepoId;
 use crate::runtime::Runtime;
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::services::Services;
 
-#[tracing::instrument(skip(runtime, overrides, repos))]
+#[tracing::instrument(skip(runtime, config, repos))]
 pub async fn update<R: Runtime + 'static>(
     runtime: R,
-    overrides: ConfigOverrides,
+    config: Config,
     repos: Vec<String>,
 ) -> Result<()> {
-    let config = Config::load(&runtime, overrides)?;
     let services = Services::from_config(&config)?;
     run_update(&config, runtime, services, repos).await
 }
@@ -160,7 +159,7 @@ mod tests {
 
         // --- Execute ---
 
-        update(runtime, ConfigOverrides::default(), vec![])
+        update(runtime, Config::for_test("/home/user/.ghri"), vec![])
             .await
             .unwrap();
     }

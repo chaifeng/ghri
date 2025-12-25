@@ -7,21 +7,20 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::install::RepoSpec;
 
 /// Remove a package or specific version
-#[tracing::instrument(skip(runtime, overrides))]
+#[tracing::instrument(skip(runtime, config))]
 pub fn remove<R: Runtime>(
     runtime: R,
     repo_str: &str,
     force: bool,
     yes: bool,
-    overrides: ConfigOverrides,
+    config: Config,
 ) -> Result<()> {
     debug!("Removing {} force={}", repo_str, force);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let config = Config::load(&runtime, overrides)?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
@@ -473,16 +472,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(
-            runtime,
-            "owner/repo",
-            false,
-            true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -593,10 +583,7 @@ mod tests {
             "owner/repo@v1",
             false,
             true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
+            Config::for_test(root),
         );
         assert!(result.is_ok());
     }
@@ -665,10 +652,7 @@ mod tests {
             "owner/repo@v1",
             false,
             true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
+            Config::for_test(root),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--force"));
@@ -695,16 +679,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = remove(
-            runtime,
-            "owner/repo",
-            false,
-            true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -801,16 +776,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(
-            runtime,
-            "owner/repo",
-            false,
-            true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -900,16 +866,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = remove(
-            runtime,
-            "owner/repo",
-            false,
-            true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_ok());
     }
 }

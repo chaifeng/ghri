@@ -4,19 +4,13 @@ use std::path::Path;
 
 use crate::{package::PackageRepository, runtime::Runtime};
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::install::RepoSpec;
 use super::remove_version;
 
 /// Prune unused versions, keeping only the current version
-#[tracing::instrument(skip(runtime, overrides))]
-pub fn prune<R: Runtime>(
-    runtime: R,
-    repos: Vec<String>,
-    yes: bool,
-    overrides: ConfigOverrides,
-) -> Result<()> {
-    let config = Config::load(&runtime, overrides)?;
+#[tracing::instrument(skip(runtime, config))]
+pub fn prune<R: Runtime>(runtime: R, repos: Vec<String>, yes: bool, config: Config) -> Result<()> {
     debug!("Using install root: {:?}", config.install_root);
 
     if repos.is_empty() {
@@ -461,31 +455,6 @@ mod tests {
         assert_eq!(result.unwrap(), 0);
     }
 
-    // Helper to configure simple home dir and user
-    fn configure_runtime_basics(runtime: &mut MockRuntime) {
-        #[cfg(not(windows))]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-
-        #[cfg(windows)]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
-
-        runtime
-            .expect_env_var()
-            .with(eq("USER"))
-            .returning(|_| Ok("user".to_string()));
-
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        runtime.expect_is_privileged().returning(|| false);
-    }
-
     #[test]
     fn test_prune_with_specific_repo() {
         // Test prune command with a specific repo argument
@@ -519,10 +488,7 @@ mod tests {
             runtime,
             vec!["owner/repo".to_string()],
             true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
+            Config::for_test(root),
         );
         assert!(result.is_ok());
     }
@@ -637,41 +603,7 @@ mod tests {
             .with(eq(root.clone()))
             .returning(|_| Ok(vec![]));
 
-        let result = prune(
-            runtime,
-            vec![],
-            true,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_prune_with_default_install_root() {
-        // Test prune() uses default_install_root when install_root is None
-
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-
-        #[cfg(not(windows))]
-        let root = PathBuf::from("/home/user/.ghri");
-        #[cfg(windows)]
-        let root = PathBuf::from("C:\\Users\\user\\.ghri");
-
-        // Root exists but is empty - no packages
-        runtime
-            .expect_exists()
-            .with(eq(root.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(root))
-            .returning(|_| Ok(vec![]));
-
-        let result = prune(runtime, vec![], true, ConfigOverrides::default()); // None triggers default_install_root
+        let result = prune(runtime, vec![], true, Config::for_test(root));
         assert!(result.is_ok());
     }
 }

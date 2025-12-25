@@ -6,19 +6,13 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::link_spec::LinkSpec;
 
 /// Link a package's current version to a destination directory
-#[tracing::instrument(skip(runtime, overrides))]
-pub fn link<R: Runtime>(
-    runtime: R,
-    repo_str: &str,
-    dest: PathBuf,
-    overrides: ConfigOverrides,
-) -> Result<()> {
+#[tracing::instrument(skip(runtime, config))]
+pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Config) -> Result<()> {
     let spec = repo_str.parse::<LinkSpec>()?;
-    let config = Config::load(&runtime, overrides)?;
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root);
     let link_mgr = LinkManager::new(&runtime);
@@ -302,15 +296,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest_dir,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest_dir, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -409,15 +395,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo@v2",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo@v2", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -461,15 +439,7 @@ mod tests {
 
         // --- Execute & Verify ---
         // Should fail because v2 is not installed
-        let result = link(
-            runtime,
-            "owner/repo@v2",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo@v2", dest, Config::for_test(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -514,15 +484,7 @@ mod tests {
 
         // --- Execute & Verify ---
         // Should fail because no current version and none specified
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest, Config::for_test(root));
         assert!(result.is_err());
         assert!(
             result
@@ -617,15 +579,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo:bin/tool",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo:bin/tool", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -689,10 +643,7 @@ mod tests {
             runtime,
             "owner/repo:bin/notfound",
             dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
+            Config::for_test(root),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
@@ -778,15 +729,7 @@ mod tests {
 
         // --- Execute & Verify ---
         // Should fail because dest exists and is not a symlink
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest, Config::for_test(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a symlink"));
     }
@@ -879,15 +822,7 @@ mod tests {
 
         // --- Execute & Verify ---
         // Should fail because symlink points to different package
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest, Config::for_test(root));
         assert!(result.is_err());
         assert!(
             result
@@ -994,10 +929,7 @@ mod tests {
             runtime,
             "owner/repo:bin/tool",
             dest_dir,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
+            Config::for_test(root),
         );
         assert!(result.is_ok());
     }
@@ -1093,15 +1025,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -1225,15 +1149,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo@v2",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo@v2", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -1366,15 +1282,7 @@ mod tests {
         runtime.expect_rename().returning(|_, _| Ok(()));
 
         // --- Execute ---
-        let result = link(
-            runtime,
-            "owner/repo@v2",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo@v2", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -1502,15 +1410,7 @@ mod tests {
 
         // --- Execute ---
         // No version specified -> creates default link
-        let result = link(
-            runtime,
-            "owner/repo",
-            dest,
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = link(runtime, "owner/repo", dest, Config::for_test(root));
         assert!(result.is_ok());
     }
 }

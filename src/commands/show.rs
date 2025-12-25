@@ -3,16 +3,15 @@ use log::debug;
 
 use crate::{package::PackageRepository, runtime::Runtime};
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::install::RepoSpec;
 use super::{print_links, print_versioned_links};
 
 /// Show detailed information about a package
-#[tracing::instrument(skip(runtime, overrides))]
-pub fn show<R: Runtime>(runtime: R, repo_str: &str, overrides: ConfigOverrides) -> Result<()> {
+#[tracing::instrument(skip(runtime, config))]
+pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()> {
     debug!("Showing info for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let config = Config::load(&runtime, overrides)?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root);
@@ -262,14 +261,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -294,14 +286,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -362,14 +347,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -458,14 +436,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -531,14 +502,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -630,14 +594,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 
@@ -756,14 +713,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = show(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(root),
-                ..Default::default()
-            },
-        );
+        let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
     }
 }

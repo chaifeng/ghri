@@ -7,7 +7,7 @@ use crate::{
     runtime::Runtime,
 };
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 use super::install::RepoSpec;
 
 /// Convert LinkManager's LinkStatus to display string
@@ -80,11 +80,10 @@ pub(crate) fn print_versioned_links<R: Runtime>(
 }
 
 /// Show link rules for a package
-#[tracing::instrument(skip(runtime, overrides))]
-pub fn links<R: Runtime>(runtime: R, repo_str: &str, overrides: ConfigOverrides) -> Result<()> {
+#[tracing::instrument(skip(runtime, config))]
+pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()> {
     debug!("Showing link rules for {}", repo_str);
     let spec = repo_str.parse::<RepoSpec>()?;
-    let config = Config::load(&runtime, overrides)?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root);
@@ -196,18 +195,7 @@ mod tests {
         // --- Setup Paths ---
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // --- 1. Get Default Install Root ---
-
-        runtime.expect_is_privileged().returning(|| false);
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        // --- 2. Check Package Exists (is_installed checks meta.json) ---
+        // --- Check Package Exists (is_installed checks meta.json) ---
 
         // File exists: /home/user/.ghri/owner/repo/meta.json -> false (not installed!)
         runtime
@@ -217,7 +205,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = links(runtime, "owner/repo", ConfigOverrides::default());
+        let result = links(runtime, "owner/repo", Config::for_test("/home/user/.ghri"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -231,18 +219,7 @@ mod tests {
         // --- Setup Paths ---
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // --- 1. Get Default Install Root ---
-
-        runtime.expect_is_privileged().returning(|| false);
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        // --- 2. Check Package Exists (is_installed) ---
+        // --- Check Package Exists (is_installed) ---
 
         // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
@@ -250,7 +227,7 @@ mod tests {
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // --- 3. Load Metadata (load_required) ---
+        // --- Load Metadata (load_required) ---
 
         // Read meta.json -> package with NO link rules
         let meta = Meta {
@@ -268,7 +245,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = links(runtime, "owner/repo", ConfigOverrides::default());
+        let result = links(runtime, "owner/repo", Config::for_test("/home/user/.ghri"));
         assert!(result.is_ok());
     }
 
@@ -298,14 +275,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = links(
-            runtime,
-            "owner/repo",
-            ConfigOverrides {
-                install_root: Some(install_root),
-                ..Default::default()
-            },
-        );
+        let result = links(runtime, "owner/repo", Config::for_test(install_root));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }

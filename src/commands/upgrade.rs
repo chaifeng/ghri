@@ -6,19 +6,18 @@ use crate::cleanup::CleanupContext;
 use crate::provider::RepoId;
 use crate::runtime::Runtime;
 
-use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
+use super::config::{Config, InstallOptions, UpgradeOptions};
 use super::install::{DefaultReleaseInstaller, run_install};
 use super::prune::prune_package_dir;
 use super::services::Services;
 
-#[tracing::instrument(skip(runtime, overrides, repos, options))]
+#[tracing::instrument(skip(runtime, config, repos, options))]
 pub async fn upgrade<R: Runtime + 'static>(
     runtime: R,
-    overrides: ConfigOverrides,
+    config: Config,
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
-    let config = Config::load(&runtime, overrides)?;
     let services = Services::from_config(&config)?;
     run_upgrade(&config, runtime, services, repos, options).await
 }
@@ -215,7 +214,7 @@ mod tests {
 
         upgrade(
             runtime,
-            ConfigOverrides::default(),
+            Config::for_test("/home/user/.ghri"),
             vec![],
             UpgradeOptions {
                 yes: true,

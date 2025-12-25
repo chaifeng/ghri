@@ -3,13 +3,11 @@ use log::debug;
 
 use crate::{package::PackageRepository, runtime::Runtime};
 
-use super::config::{Config, ConfigOverrides};
+use super::config::Config;
 
 /// List all installed packages
-#[tracing::instrument(skip(runtime, overrides))]
-pub fn list<R: Runtime>(runtime: R, overrides: ConfigOverrides) -> Result<()> {
-    let config = Config::load(&runtime, overrides)?;
-
+#[tracing::instrument(skip(runtime, config))]
+pub fn list<R: Runtime>(runtime: R, config: Config) -> Result<()> {
     debug!("Listing packages from {:?}", config.install_root);
 
     let repo = PackageRepository::new(&runtime, config.install_root);
@@ -78,7 +76,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = list(runtime, ConfigOverrides::default());
+        let result = list(runtime, Config::for_test("/home/user/.ghri"));
         assert!(result.is_ok());
     }
 
@@ -159,7 +157,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(runtime, ConfigOverrides::default());
+        let result = list(runtime, Config::for_test("/home/user/.ghri"));
         assert!(result.is_ok());
     }
 
@@ -194,13 +192,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(
-            runtime,
-            ConfigOverrides {
-                install_root: Some(PathBuf::from("/custom/root")),
-                ..Default::default()
-            },
-        );
+        let result = list(runtime, Config::for_test("/custom/root"));
         assert!(result.is_ok());
     }
 
@@ -289,7 +281,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = list(runtime, ConfigOverrides::default());
+        let result = list(runtime, Config::for_test("/home/user/.ghri"));
         assert!(result.is_ok());
     }
 
@@ -364,7 +356,7 @@ mod tests {
         // --- Execute & Verify ---
 
         // Should still succeed, just skip the failed package
-        let result = list(runtime, ConfigOverrides::default());
+        let result = list(runtime, Config::for_test("/home/user/.ghri"));
         assert!(result.is_ok());
     }
 }

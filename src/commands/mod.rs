@@ -12,7 +12,7 @@ mod unlink;
 mod update;
 mod upgrade;
 
-pub use config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
+pub use config::{Config, InstallOptions, UpgradeOptions};
 pub use install::{RepoSpec, install};
 pub use link::link;
 pub use link_spec::LinkSpec;

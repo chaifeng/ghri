@@ -16,31 +16,29 @@ pub struct Config {
     pub token: Option<String>,
 }
 
-/// Overrides that can be provided via CLI arguments
-#[derive(Debug, Default)]
-pub struct ConfigOverrides {
-    /// Override the default install root
-    pub install_root: Option<PathBuf>,
-    /// Override the default GitHub API URL
-    pub api_url: Option<String>,
-}
-
 impl Config {
     /// Default GitHub API URL
     pub const DEFAULT_API_URL: &'static str = "https://api.github.com";
 
     /// Load configuration from runtime environment with optional CLI overrides
-    pub fn load<R: Runtime>(runtime: &R, overrides: ConfigOverrides) -> Result<Self> {
+    ///
+    /// # Arguments
+    /// * `runtime` - Runtime for environment access
+    /// * `install_root` - Override the default install root (None = use default)
+    /// * `api_url` - Override the default GitHub API URL (None = use default)
+    pub fn load<R: Runtime>(
+        runtime: &R,
+        install_root: Option<PathBuf>,
+        api_url: Option<String>,
+    ) -> Result<Self> {
         // Determine install root: CLI override > default based on privilege
-        let install_root = match overrides.install_root {
+        let install_root = match install_root {
             Some(path) => path,
             None => Self::default_install_root(runtime)?,
         };
 
         // Determine API URL: CLI override > default
-        let api_url = overrides
-            .api_url
-            .unwrap_or_else(|| Self::DEFAULT_API_URL.to_string());
+        let api_url = api_url.unwrap_or_else(|| Self::DEFAULT_API_URL.to_string());
 
         // Load token from environment
         let token = runtime.env_var("GITHUB_TOKEN").ok();
@@ -101,6 +99,16 @@ impl Config {
     pub fn version_dir(&self, owner: &str, repo: &str, version: &str) -> PathBuf {
         self.package_dir(owner, repo).join(version)
     }
+
+    /// Create a Config for testing with a specific install root
+    #[cfg(test)]
+    pub fn for_test(install_root: impl Into<PathBuf>) -> Self {
+        Self {
+            install_root: install_root.into(),
+            api_url: Self::DEFAULT_API_URL.to_string(),
+            token: None,
+        }
+    }
 }
 
 /// Options for the install command (behavior parameters)
@@ -149,7 +157,7 @@ mod tests {
             .with(eq("GITHUB_TOKEN"))
             .returning(|_| Err(std::env::VarError::NotPresent));
 
-        let config = Config::load(&runtime, ConfigOverrides::default()).unwrap();
+        let config = Config::load(&runtime, None, None).unwrap();
 
         assert_eq!(config.install_root, PathBuf::from("/home/user/.ghri"));
         assert_eq!(config.api_url, Config::DEFAULT_API_URL);
@@ -166,12 +174,12 @@ mod tests {
             .with(eq("GITHUB_TOKEN"))
             .returning(|_| Ok("test_token".to_string()));
 
-        let overrides = ConfigOverrides {
-            install_root: Some(PathBuf::from("/custom/root")),
-            api_url: Some("https://github.example.com/api/v3".to_string()),
-        };
-
-        let config = Config::load(&runtime, overrides).unwrap();
+        let config = Config::load(
+            &runtime,
+            Some(PathBuf::from("/custom/root")),
+            Some("https://github.example.com/api/v3".to_string()),
+        )
+        .unwrap();
 
         assert_eq!(config.install_root, PathBuf::from("/custom/root"));
         assert_eq!(config.api_url, "https://github.example.com/api/v3");
@@ -189,7 +197,7 @@ mod tests {
             .with(eq("GITHUB_TOKEN"))
             .returning(|_| Err(std::env::VarError::NotPresent));
 
-        let config = Config::load(&runtime, ConfigOverrides::default()).unwrap();
+        let config = Config::load(&runtime, None, None).unwrap();
 
         #[cfg(target_os = "macos")]
         assert_eq!(config.install_root, PathBuf::from("/opt/ghri"));
@@ -207,7 +215,7 @@ mod tests {
         runtime.expect_is_privileged().returning(|| false);
         runtime.expect_home_dir().returning(|| None);
 
-        let result = Config::load(&runtime, ConfigOverrides::default());
+        let result = Config::load(&runtime, None, None);
         assert!(result.is_err());
     }
 

@@ -7,7 +7,7 @@ use crate::cleanup::CleanupContext;
 use crate::provider::Release;
 use crate::runtime::Runtime;
 
-use super::config::{Config, ConfigOverrides, InstallOptions};
+use super::config::{Config, InstallOptions};
 use super::prune::prune_package_dir;
 use super::services::Services;
 
@@ -26,18 +26,15 @@ pub use download::MockReleaseInstaller;
 use download::get_download_plan;
 use external_links::update_external_links;
 
-#[tracing::instrument(skip(runtime, overrides, options))]
+#[tracing::instrument(skip(runtime, config, options))]
 pub async fn install<R: Runtime + 'static>(
     runtime: R,
     repo_str: &str,
-    overrides: ConfigOverrides,
+    config: Config,
     options: InstallOptions,
 ) -> Result<()> {
     // Wrap runtime in Arc first for shared ownership
     let runtime = Arc::new(runtime);
-
-    // Load configuration
-    let config = Config::load(runtime.as_ref(), overrides)?;
 
     // Build services from config
     let services = Services::from_config(&config)?;
