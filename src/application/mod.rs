@@ -4,12 +4,14 @@
 //! the flow of data between the CLI layer and domain services.
 
 mod install;
+mod link;
 mod list;
 mod prune;
 mod show;
 mod upgrade;
 
 pub use install::{InstallAction, InstallOperations};
+pub use link::LinkAction;
 pub use list::{ListAction, PackageInfo};
 pub use prune::{PruneAction, PruneInfo};
 pub use show::{PackageDetails, ShowAction};

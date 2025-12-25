@@ -1,10 +1,9 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::{
-    package::{LinkManager, LinkRule, PackageRepository, VersionedLink},
-    runtime::Runtime,
-};
+use crate::application::LinkAction;
+use crate::package::{LinkRule, VersionedLink};
+use crate::runtime::Runtime;
 
 use super::config::Config;
 use super::link_spec::LinkSpec;
@@ -14,11 +13,10 @@ use super::link_spec::LinkSpec;
 pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Config) -> Result<()> {
     let spec = repo_str.parse::<LinkSpec>()?;
 
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
-    let link_mgr = LinkManager::new(&runtime);
+    let action = LinkAction::new(&runtime, config.install_root);
 
     // Check package is installed
-    if !pkg_repo.is_installed(&spec.repo.owner, &spec.repo.repo) {
+    if !action.is_installed(&spec.repo.owner, &spec.repo.repo) {
         anyhow::bail!(
             "Package {} is not installed. Install it first with: ghri install {}",
             spec.repo,
@@ -26,13 +24,13 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
         );
     }
 
-    let mut meta = pkg_repo.load_required(&spec.repo.owner, &spec.repo.repo)?;
-    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
+    let mut meta = action.load_meta(&spec.repo.owner, &spec.repo.repo)?;
+    let package_dir = action.package_dir(&spec.repo.owner, &spec.repo.repo);
 
     // Determine which version to link
     let version = if let Some(ref v) = spec.version {
         // Check if specified version exists
-        if !pkg_repo.is_version_installed(&spec.repo.owner, &spec.repo.repo, v) {
+        if !action.is_version_installed(&spec.repo.owner, &spec.repo.repo, v) {
             anyhow::bail!(
                 "Version {} is not installed for {}. Install it first with: ghri install {}@{}",
                 v,
@@ -52,8 +50,8 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
         meta.current_version.clone()
     };
 
-    let version_dir = pkg_repo.version_dir(&spec.repo.owner, &spec.repo.repo, &version);
-    if !runtime.exists(&version_dir) {
+    let version_dir = action.version_dir(&spec.repo.owner, &spec.repo.repo, &version);
+    if !action.exists(&version_dir) {
         anyhow::bail!(
             "Version directory {:?} does not exist. The package may be corrupted.",
             version_dir
@@ -63,7 +61,7 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
     // Determine link target based on spec.path or default behavior
     let link_target = if let Some(ref path) = spec.path {
         let target = version_dir.join(path);
-        if !runtime.exists(&target) {
+        if !action.exists(&target) {
             anyhow::bail!(
                 "Path '{}' does not exist in version {} of {}",
                 path,
@@ -73,12 +71,12 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
         }
         target
     } else {
-        link_mgr.find_default_target(&version_dir)?
+        action.find_default_target(&version_dir)?
     };
 
     // If dest is an existing directory, create link inside it
     // Use the filename from the link target (either specified path or detected file)
-    let final_dest = if runtime.exists(&dest) && runtime.is_dir(&dest) {
+    let final_dest = if action.exists(&dest) && action.is_dir(&dest) {
         let filename = if let Some(ref path) = spec.path {
             // Use the filename from the specified path
             Path::new(path)
@@ -101,10 +99,10 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
     };
 
     // Prepare destination (check if can update and remove existing if needed)
-    link_mgr.prepare_link_destination(&final_dest, &package_dir)?;
+    action.prepare_link_destination(&final_dest, &package_dir)?;
 
     // Create the symlink
-    link_mgr.create_link(&link_target, &final_dest)?;
+    action.create_link(&link_target, &final_dest)?;
 
     // Add or update link rule in meta.json
     // If a version was explicitly specified, save to versioned_links (not updated on install/update)
@@ -159,7 +157,7 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
     meta.linked_path = None;
 
     // Save metadata
-    pkg_repo.save(&spec.repo.owner, &spec.repo.repo, &meta)?;
+    action.save_meta(&spec.repo.owner, &spec.repo.repo, &meta)?;
 
     println!("Linked {} {} -> {:?}", spec.repo, version, final_dest);
 

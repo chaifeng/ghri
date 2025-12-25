@@ -2,11 +2,10 @@ use anyhow::Result;
 use log::debug;
 use std::path::Path;
 
-use crate::{
-    package::{LinkManager, LinkRule, LinkStatus, PackageRepository, VersionedLink},
-    provider::PackageSpec,
-    runtime::Runtime,
-};
+use crate::application::LinkAction;
+use crate::package::{LinkRule, LinkStatus, VersionedLink};
+use crate::provider::PackageSpec;
+use crate::runtime::Runtime;
 
 use super::config::Config;
 
@@ -36,9 +35,9 @@ pub(crate) fn print_links<R: Runtime>(
         println!("{}", h);
     }
 
-    let link_manager = LinkManager::new(runtime);
+    let action = LinkAction::new(runtime, std::path::PathBuf::new());
     for rule in links {
-        let status = link_manager.check_link(&rule.dest, expected_prefix);
+        let status = action.check_link(&rule.dest, expected_prefix);
         let source = rule.path.as_deref().unwrap_or("(default)");
         println!(
             "  {} -> {:?}{}",
@@ -64,10 +63,10 @@ pub(crate) fn print_versioned_links<R: Runtime>(
         println!("{}", h);
     }
 
-    let link_manager = LinkManager::new(runtime);
+    let action = LinkAction::new(runtime, std::path::PathBuf::new());
     for link in links {
         let version_dir = package_dir.join(&link.version);
-        let status = link_manager.check_link(&link.dest, &version_dir);
+        let status = action.check_link(&link.dest, &version_dir);
         let source = link.path.as_deref().unwrap_or("(default)");
         println!(
             "  @{} {} -> {:?}{}",
@@ -86,14 +85,14 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<(
     let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
+    let action = LinkAction::new(&runtime, config.install_root);
 
-    if !pkg_repo.is_installed(&spec.repo.owner, &spec.repo.repo) {
+    if !action.is_installed(&spec.repo.owner, &spec.repo.repo) {
         debug!("Package not installed");
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
-    let meta = pkg_repo.load_required(&spec.repo.owner, &spec.repo.repo)?;
+    let meta = action.load_meta(&spec.repo.owner, &spec.repo.repo)?;
     debug!(
         "Found {} link rules, {} versioned links",
         meta.links.len(),
@@ -105,8 +104,10 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<(
         return Ok(());
     }
 
-    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
-    let current_dir = pkg_repo.current_link(&spec.repo.owner, &spec.repo.repo);
+    let package_dir = action.package_dir(&spec.repo.owner, &spec.repo.repo);
+    let current_dir = action
+        .package_repo()
+        .current_link(&spec.repo.owner, &spec.repo.repo);
     let header = format!(
         "Link rules for {} (current: {}):",
         spec.repo, meta.current_version

@@ -2,10 +2,9 @@ use anyhow::Result;
 use log::{debug, info, warn};
 use std::path::PathBuf;
 
-use crate::{
-    package::{LinkManager, LinkRule, PackageRepository, RemoveLinkResult},
-    runtime::Runtime,
-};
+use crate::application::LinkAction;
+use crate::package::{LinkRule, RemoveLinkResult};
+use crate::runtime::Runtime;
 
 use super::config::Config;
 use super::link_spec::LinkSpec;
@@ -24,17 +23,16 @@ pub fn unlink<R: Runtime>(
     let spec = repo_str.parse::<LinkSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
-    let link_mgr = LinkManager::new(&runtime);
+    let action = LinkAction::new(&runtime, config.install_root);
     let owner = &spec.repo.owner;
     let repo = &spec.repo.repo;
 
-    if !pkg_repo.is_installed(owner, repo) {
+    if !action.is_installed(owner, repo) {
         debug!("Package not installed");
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
-    let mut meta = pkg_repo.load_required(owner, repo)?;
+    let mut meta = action.load_meta(owner, repo)?;
     debug!("Found {} link rules before unlink", meta.links.len());
 
     if meta.links.is_empty() {
@@ -117,13 +115,16 @@ pub fn unlink<R: Runtime>(
     let mut removed_count = 0;
     let mut error_count = 0;
     let mut skipped_external = Vec::new();
-    let package_dir = pkg_repo.package_dir(owner, repo);
+    let package_dir = action.package_dir(owner, repo);
 
     for rule in &rules_to_remove {
         debug!("Processing rule: {:?}", rule);
 
         // Try to safely remove the symlink
-        match link_mgr.remove_link_safely(&rule.dest, &package_dir)? {
+        match action
+            .link_manager()
+            .remove_link_safely(&rule.dest, &package_dir)?
+        {
             RemoveLinkResult::Removed => {
                 info!("Removed symlink {:?}", rule.dest);
                 println!("Removed symlink {:?}", rule.dest);
@@ -197,7 +198,7 @@ pub fn unlink<R: Runtime>(
 
     // Save updated meta
     debug!("Saving updated meta with {} rules", meta.links.len());
-    pkg_repo.save(owner, repo, &meta)?;
+    action.save_meta(owner, repo, &meta)?;
     info!("Saved updated meta.json");
 
     println!(
