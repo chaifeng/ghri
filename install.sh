@@ -273,10 +273,10 @@ create_meta_json() {
   "current_version": "$VERSION",
   "releases": [
     {
-      "version": "$VERSION",
-      "title": "$VERSION",
+      "tag": "$VERSION",
+      "name": "$VERSION",
       "published_at": "${PUBLISHED_AT:-$NOW}",
-      "is_prerelease": false,
+      "prerelease": false,
       "tarball_url": "$TARBALL_URL",
       "assets": [
         {
