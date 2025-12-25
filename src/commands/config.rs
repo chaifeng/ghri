@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use log::debug;
 use std::path::PathBuf;
 
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, resolve_relative_path};
 
 /// Application configuration loaded from environment and CLI overrides.
 /// This struct contains only configuration values, not service dependencies.
@@ -35,6 +35,14 @@ impl Config {
         let install_root = match install_root {
             Some(path) => path,
             None => Self::default_install_root(runtime)?,
+        };
+
+        // Convert relative install_root to absolute using current working directory
+        let install_root = if install_root.is_relative() {
+            let cwd = runtime.current_dir()?;
+            resolve_relative_path(&cwd, &install_root)
+        } else {
+            install_root
         };
 
         // Determine API URL: CLI override > default

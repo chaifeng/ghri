@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::application::LinkAction;
 use crate::package::{LinkRule, VersionedLink};
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, resolve_relative_path};
 
 use super::config::Config;
 use super::link_spec::LinkSpec;
@@ -12,6 +12,14 @@ use super::link_spec::LinkSpec;
 #[tracing::instrument(skip(runtime, config))]
 pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Config) -> Result<()> {
     let spec = repo_str.parse::<LinkSpec>()?;
+
+    // Convert relative dest path to absolute using current working directory
+    let dest = if dest.is_relative() {
+        let cwd = runtime.current_dir()?;
+        resolve_relative_path(&cwd, &dest)
+    } else {
+        dest
+    };
 
     let action = LinkAction::new(&runtime, config.install_root);
 

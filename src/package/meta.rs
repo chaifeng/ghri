@@ -221,26 +221,33 @@ impl Meta {
         if let Some(package_dir) = meta_path.parent() {
             use crate::runtime::resolve_relative_path;
 
-            // Get absolute package_dir for resolving relative paths
-            let abs_package_dir = if package_dir.is_relative() {
-                runtime
-                    .canonicalize(package_dir)
-                    .unwrap_or(package_dir.to_path_buf())
-            } else {
-                package_dir.to_path_buf()
-            };
+            // Check if any links have relative destinations
+            let has_relative_links = self.links.iter().any(|l| l.dest.is_relative())
+                || self.versioned_links.iter().any(|l| l.dest.is_relative());
 
-            // For all links, resolve relative to package directory
-            for link in &mut self.links {
-                if link.dest.is_relative() {
-                    link.dest = resolve_relative_path(&abs_package_dir, &link.dest);
+            // Only compute absolute package_dir if needed (avoid unnecessary canonicalize calls)
+            if has_relative_links {
+                // Get absolute package_dir for resolving relative paths
+                let abs_package_dir = if package_dir.is_relative() {
+                    runtime
+                        .canonicalize(package_dir)
+                        .unwrap_or(package_dir.to_path_buf())
+                } else {
+                    package_dir.to_path_buf()
+                };
+
+                // For all links, resolve relative to package directory
+                for link in &mut self.links {
+                    if link.dest.is_relative() {
+                        link.dest = resolve_relative_path(&abs_package_dir, &link.dest);
+                    }
                 }
-            }
 
-            // For versioned links, also resolve relative to package directory
-            for link in &mut self.versioned_links {
-                if link.dest.is_relative() {
-                    link.dest = resolve_relative_path(&abs_package_dir, &link.dest);
+                // For versioned links, also resolve relative to package directory
+                for link in &mut self.versioned_links {
+                    if link.dest.is_relative() {
+                        link.dest = resolve_relative_path(&abs_package_dir, &link.dest);
+                    }
                 }
             }
         }

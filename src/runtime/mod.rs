@@ -17,7 +17,7 @@ pub mod path;
 mod symlink;
 mod user;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::env as std_env;
 use std::path::{Path, PathBuf};
@@ -78,6 +78,7 @@ pub trait Runtime: Send + Sync {
     fn home_dir(&self) -> Option<PathBuf>;
     fn config_dir(&self) -> Option<PathBuf>;
     fn temp_dir(&self) -> PathBuf;
+    fn current_dir(&self) -> Result<PathBuf>;
 
     // Privilege
     fn is_privileged(&self) -> bool;
@@ -170,6 +171,9 @@ impl<R: Runtime + ?Sized> Runtime for &R {
     }
     fn temp_dir(&self) -> PathBuf {
         (*self).temp_dir()
+    }
+    fn current_dir(&self) -> Result<PathBuf> {
+        (*self).current_dir()
     }
     fn is_privileged(&self) -> bool {
         (*self).is_privileged()
@@ -286,6 +290,10 @@ impl Runtime for RealRuntime {
 
     fn temp_dir(&self) -> PathBuf {
         self.temp_dir_impl()
+    }
+
+    fn current_dir(&self) -> Result<PathBuf> {
+        std::env::current_dir().context("Failed to get current directory")
     }
 
     fn is_privileged(&self) -> bool {

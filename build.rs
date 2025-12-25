@@ -6,6 +6,15 @@ use std::{
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
+    println!("cargo:rerun-if-env-changed=GHRI_ROOT");
+
+    // Declare the custom cfg for check-cfg lint
+    println!("cargo::rustc-check-cfg=cfg(ghri_root_set)");
+
+    // Set cfg flag if GHRI_ROOT environment variable is set
+    if std::env::var("GHRI_ROOT").is_ok() {
+        println!("cargo:rustc-cfg=ghri_root_set");
+    }
 
     let output = Command::new("git")
         .args(["describe", "--tags", "--always", "--dirty"])

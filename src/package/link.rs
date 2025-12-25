@@ -312,6 +312,7 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
     /// Create a symlink from `dest` to `target`.
     ///
     /// Uses relative paths when possible for portability.
+    /// Both `target` and `dest` are expected to be absolute paths.
     pub fn create_link(&self, target: &Path, dest: &Path) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = dest.parent()
@@ -320,22 +321,11 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
             self.runtime.create_dir_all(parent)?;
         }
 
-        // For relative path calculation to work correctly, both paths should be
-        // either absolute or relative. If they're mixed, canonicalize the target.
-        let effective_target = if dest.is_absolute() && target.is_relative() {
-            // Try to canonicalize the relative target to absolute
-            self.runtime
-                .canonicalize(target)
-                .unwrap_or(target.to_path_buf())
-        } else {
-            target.to_path_buf()
-        };
-
         // Calculate relative path if possible (from symlink location to target)
-        if let Some(link_target) = relative_symlink_path(dest, &effective_target) {
+        if let Some(link_target) = relative_symlink_path(dest, target) {
             self.runtime.symlink(&link_target, dest)
         } else {
-            self.runtime.symlink(&effective_target, dest)
+            self.runtime.symlink(target, dest)
         }
     }
 

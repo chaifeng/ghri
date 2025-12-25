@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::application::LinkAction;
 use crate::package::{LinkRule, RemoveLinkResult};
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, resolve_relative_path};
 
 use super::config::Config;
 use super::link_spec::LinkSpec;
@@ -19,6 +19,19 @@ pub fn unlink<R: Runtime>(
     config: Config,
 ) -> Result<()> {
     debug!("Unlinking {} dest={:?} all={}", repo_str, dest, all);
+
+    // Convert relative dest path to absolute using current working directory
+    let dest = if let Some(d) = dest {
+        if d.is_relative() {
+            let cwd = runtime.current_dir()?;
+            Some(resolve_relative_path(&cwd, &d))
+        } else {
+            Some(d)
+        }
+    } else {
+        None
+    };
+
     // Use LinkSpec to handle "owner/repo:path" format
     let spec = repo_str.parse::<LinkSpec>()?;
     debug!("Using install root: {:?}", config.install_root);

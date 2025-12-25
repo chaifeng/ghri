@@ -77,15 +77,15 @@ log_section() {
 setup() {
     log_section "Setting up test environment"
 
-    # Find ghri binary
+    # Find ghri binary (use absolute path to work with pushd/popd)
     if [[ -x "./target/debug/ghri" ]]; then
-        GHRI_BIN="./target/debug/ghri"
+        GHRI_BIN="$(pwd)/target/debug/ghri"
     elif [[ -x "./target/release/ghri" ]]; then
-        GHRI_BIN="./target/release/ghri"
+        GHRI_BIN="$(pwd)/target/release/ghri"
     else
         log_info "Building ghri..."
         cargo build --quiet
-        GHRI_BIN="./target/debug/ghri"
+        GHRI_BIN="$(pwd)/target/debug/ghri"
     fi
 
     log_info "Using ghri binary: $GHRI_BIN"
@@ -692,22 +692,199 @@ test_symlink_target_is_relative() {
 test_external_link_uses_relative_path() {
     log_section "Test: external link (ghri link) uses relative path"
 
+    # Structure:
+    #   $TEST_ROOT/
+    #     external_link_relative/        <- install_root
+    #       bach-sh/bach/
+    #         $version/
+    #         current -> $version
+    #         meta.json
+    #     external_link_relative_bin/    <- bin_dir
+    #       bach -> ../external_link_relative/bach-sh/bach/$version
     local install_root="$TEST_ROOT/external_link_relative"
     local bin_dir="$TEST_ROOT/external_link_relative_bin"
     mkdir -p "$install_root" "$bin_dir"
 
     "$GHRI_BIN" install -y bach-sh/bach --root "$install_root" >/dev/null 2>&1
+
+    # Get installed version
+    local current_version
+    current_version=$(readlink "$install_root/bach-sh/bach/current")
+    log_info "Installed version: $current_version"
+
     "$GHRI_BIN" link bach-sh/bach "$bin_dir" --root "$install_root" >/dev/null 2>&1
 
     local link="$bin_dir/bach"
     local target
     target=$(readlink "$link")
 
-    # Target should NOT start with / (should be relative like ../external_link_relative/bach-sh/bach/...)
-    if [[ "$target" != /* ]]; then
-        log_success "External link target is relative: $target"
+    # Expected: ../external_link_relative/bach-sh/bach/$version
+    local expected_target="../external_link_relative/bach-sh/bach/$current_version"
+    if [[ "$target" == "$expected_target" ]]; then
+        log_success "External link target is correct: $target"
     else
-        log_fail "External link target is absolute (should be relative): $target"
+        log_fail "External link target mismatch: expected '$expected_target', got '$target'"
+        return 1
+    fi
+
+    # Verify symlink resolves correctly
+    if [[ -e "$link" ]]; then
+        log_success "Symlink resolves to existing target"
+    else
+        log_fail "Symlink does not resolve to existing target"
+        return 1
+    fi
+
+    # Verify meta.json stores relative path
+    # From external_link_relative/bach-sh/bach to external_link_relative_bin/bach
+    # Expected: ../../../external_link_relative_bin/bach
+    local meta_file="$install_root/bach-sh/bach/meta.json"
+    local link_dest_in_meta
+    link_dest_in_meta=$(grep -o '"dest": *"[^"]*"' "$meta_file" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+    local expected_meta_dest="../../../external_link_relative_bin/bach"
+    if [[ "$link_dest_in_meta" == "$expected_meta_dest" ]]; then
+        log_success "meta.json stores correct relative path: $link_dest_in_meta"
+    else
+        log_fail "meta.json dest mismatch: expected '$expected_meta_dest', got '$link_dest_in_meta'"
+        return 1
+    fi
+}
+
+test_link_with_relative_paths() {
+    log_section "Test: Link with relative paths from command line"
+
+    # Create test directories
+    # Structure:
+    #   $test_dir/
+    #     ghri-root/
+    #       bach-sh/bach/
+    #         $version/
+    #         current -> $version
+    #         meta.json
+    #     bin/
+    #       bach -> ../ghri-root/bach-sh/bach/$version
+    local test_dir="$TEST_ROOT/link_relative_cli"
+    local install_subdir="$test_dir/ghri-root"
+    local bin_subdir="$test_dir/bin"
+    mkdir -p "$install_subdir" "$bin_subdir"
+
+    # Install bach using relative path for --root
+    log_info "Installing bach-sh/bach with relative --root..."
+    pushd "$test_dir" > /dev/null
+    if ! "$GHRI_BIN" install -y bach-sh/bach --root "ghri-root"; then
+        popd > /dev/null
+        log_fail "Install with relative root failed"
+        return 1
+    fi
+    log_success "Install with relative root succeeded"
+
+    # Get the installed version
+    local current_version
+    current_version=$(readlink "$install_subdir/bach-sh/bach/current")
+    log_info "Installed version: $current_version"
+
+    # Link using relative path for destination
+    log_info "Linking bach-sh/bach to relative path bin/bach..."
+    if ! "$GHRI_BIN" link bach-sh/bach "bin/bach" --root "ghri-root"; then
+        popd > /dev/null
+        log_fail "Link with relative dest failed"
+        return 1
+    fi
+    log_success "Link with relative dest succeeded"
+    popd > /dev/null
+
+    # Verify symlink was created at absolute path
+    local link_path="$bin_subdir/bach"
+    if [[ -L "$link_path" ]]; then
+        log_success "Symlink created at expected location"
+    else
+        log_fail "Symlink not found at $link_path"
+        return 1
+    fi
+
+    # Verify symlink target is the expected relative path
+    # From bin/bach to ghri-root/bach-sh/bach/$version, expect: ../ghri-root/bach-sh/bach/$version
+    local link_target
+    link_target=$(readlink "$link_path")
+    local expected_target="../ghri-root/bach-sh/bach/$current_version"
+    if [[ "$link_target" == "$expected_target" ]]; then
+        log_success "Symlink target is correct: $link_target"
+    else
+        log_fail "Symlink target mismatch: expected '$expected_target', got '$link_target'"
+        return 1
+    fi
+
+    # Verify symlink resolves correctly
+    if [[ -e "$link_path" ]]; then
+        log_success "Symlink resolves to existing target"
+    else
+        log_fail "Symlink does not resolve to existing target"
+        return 1
+    fi
+
+    # Verify meta.json stores relative path for link dest
+    # From ghri-root/bach-sh/bach to bin/bach, expect: ../../../bin/bach
+    local meta_file="$install_subdir/bach-sh/bach/meta.json"
+    if [[ -f "$meta_file" ]]; then
+        local link_dest_in_meta
+        link_dest_in_meta=$(grep -o '"dest": *"[^"]*"' "$meta_file" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+        local expected_meta_dest="../../../bin/bach"
+        if [[ "$link_dest_in_meta" == "$expected_meta_dest" ]]; then
+            log_success "meta.json stores correct relative path: $link_dest_in_meta"
+        else
+            log_fail "meta.json dest mismatch: expected '$expected_meta_dest', got '$link_dest_in_meta'"
+            return 1
+        fi
+    else
+        log_fail "meta.json not found"
+        return 1
+    fi
+
+    # Verify show command displays correct absolute path (not relative)
+    pushd "$test_dir" > /dev/null
+    local show_output
+    show_output=$("$GHRI_BIN" show bach-sh/bach --root "ghri-root" 2>&1)
+    popd > /dev/null
+
+    # Show should display absolute path
+    if echo "$show_output" | grep -q "$link_path"; then
+        log_success "Show command displays absolute link path"
+    else
+        log_info "Show output: $show_output"
+        log_fail "Show command should display absolute path $link_path"
+        return 1
+    fi
+
+    # Verify show command does NOT show "wrong target" or "missing"
+    if echo "$show_output" | grep -qi "wrong target\|missing"; then
+        log_fail "Show command incorrectly reports link problem"
+        log_info "Show output: $show_output"
+        return 1
+    else
+        log_success "Show command correctly shows valid link"
+    fi
+
+    # Verify links command also works correctly
+    pushd "$test_dir" > /dev/null
+    local links_output
+    links_output=$("$GHRI_BIN" links bach-sh/bach --root "ghri-root" 2>&1)
+    popd > /dev/null
+
+    # Links command should show absolute path
+    if echo "$links_output" | grep -q "$link_path"; then
+        log_success "Links command displays absolute link path"
+    else
+        log_info "Links output: $links_output"
+        log_fail "Links command should display absolute path $link_path"
+        return 1
+    fi
+
+    if echo "$links_output" | grep -qi "wrong target\|missing"; then
+        log_fail "Links command incorrectly reports link problem"
+        log_info "Links output: $links_output"
+        return 1
+    else
+        log_success "Links command correctly shows valid link"
     fi
 }
 
@@ -753,6 +930,15 @@ test_concurrent_installs() {
 test_link_to_file_path() {
     log_section "Test: Link to specific file path"
 
+    # Structure:
+    #   $TEST_ROOT/
+    #     link_file_path/                <- install_root
+    #       bach-sh/bach/
+    #         $version/
+    #         current -> $version
+    #         meta.json
+    #     link_file_path_bin/            <- link_dir
+    #       my-bach -> ../link_file_path/bach-sh/bach/$version
     local install_root="$TEST_ROOT/link_file_path"
     local link_dir="$TEST_ROOT/link_file_path_bin"
     mkdir -p "$install_root" "$link_dir"
@@ -763,6 +949,11 @@ test_link_to_file_path() {
         log_fail "Install command failed"
         return 1
     fi
+
+    # Get the installed version
+    local current_version
+    current_version=$(readlink "$install_root/bach-sh/bach/current")
+    log_info "Installed version: $current_version"
 
     # Link to a specific file path
     local link_path="$link_dir/my-bach"
@@ -777,28 +968,83 @@ test_link_to_file_path() {
     # Verify symlink was created
     assert_symlink_exists "$link_path" "Symlink created at $link_path"
 
-    # Verify symlink points to somewhere in the package
+    # Verify symlink target is the expected relative path
+    # From link_file_path_bin/my-bach to link_file_path/bach-sh/bach/$version
+    # Expected: ../link_file_path/bach-sh/bach/$version
     local link_target
     link_target=$(readlink "$link_path")
-    if [[ "$link_target" == *"bach-sh/bach"* ]]; then
-        log_success "Symlink points to package directory"
+    local expected_target="../link_file_path/bach-sh/bach/$current_version"
+    if [[ "$link_target" == "$expected_target" ]]; then
+        log_success "Symlink target is correct: $link_target"
     else
-        log_fail "Symlink target unexpected: $link_target"
+        log_fail "Symlink target mismatch: expected '$expected_target', got '$link_target'"
+        return 1
     fi
 
-    # Verify meta.json has links field
-    assert_file_contains "$install_root/bach-sh/bach/meta.json" "links" "meta.json contains links"
-    assert_file_contains "$install_root/bach-sh/bach/meta.json" "my-bach" "meta.json contains link path"
+    # Verify symlink resolves to existing file/directory
+    if [[ -e "$link_path" ]]; then
+        log_success "Symlink resolves to existing target"
+    else
+        log_fail "Symlink does not resolve (broken link)"
+        return 1
+    fi
 
-    # Verify show command does not show "wrong target" for valid link
+    # Verify meta.json has links field with correct relative path
+    # From link_file_path/bach-sh/bach to link_file_path_bin/my-bach
+    # Expected: ../../../link_file_path_bin/my-bach
+    local meta_file="$install_root/bach-sh/bach/meta.json"
+    assert_file_contains "$meta_file" "links" "meta.json contains links"
+    
+    local link_dest_in_meta
+    link_dest_in_meta=$(grep -o '"dest": *"[^"]*"' "$meta_file" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+    local expected_meta_dest="../../../link_file_path_bin/my-bach"
+    if [[ "$link_dest_in_meta" == "$expected_meta_dest" ]]; then
+        log_success "meta.json stores correct relative path: $link_dest_in_meta"
+    else
+        log_fail "meta.json dest mismatch: expected '$expected_meta_dest', got '$link_dest_in_meta'"
+        return 1
+    fi
+
+    # Verify show command displays correct info
     local show_output
     show_output=$("$GHRI_BIN" show bach-sh/bach --root "$install_root" 2>&1)
-    if echo "$show_output" | grep -q "wrong target"; then
-        log_fail "Show command incorrectly reports 'wrong target' for valid link"
+    
+    # Show should display the absolute link path
+    if echo "$show_output" | grep -q "$link_path"; then
+        log_success "Show command displays absolute link path"
+    else
+        log_info "Show output: $show_output"
+        log_fail "Show command should display absolute path $link_path"
+        return 1
+    fi
+
+    # Verify show command does not show "missing" for existing link
+    if echo "$show_output" | grep -qi "missing"; then
+        log_fail "Show command incorrectly reports 'missing' for existing link"
         log_info "Show output: $show_output"
         return 1
     else
-        log_success "Show command correctly displays valid link"
+        log_success "Show command correctly displays valid link (not missing)"
+    fi
+
+    # Verify links command shows correct info
+    local links_output
+    links_output=$("$GHRI_BIN" links bach-sh/bach --root "$install_root" 2>&1)
+    
+    if echo "$links_output" | grep -q "$link_path"; then
+        log_success "Links command displays absolute link path"
+    else
+        log_info "Links output: $links_output"
+        log_fail "Links command should display absolute path $link_path"
+        return 1
+    fi
+
+    if echo "$links_output" | grep -qi "wrong target\|missing"; then
+        log_fail "Links command incorrectly reports link problem"
+        log_info "Links output: $links_output"
+        return 1
+    else
+        log_success "Links command correctly shows valid link"
     fi
 }
 
@@ -2202,6 +2448,7 @@ main() {
     test_meta_json_structure
     test_symlink_target_is_relative
     test_external_link_uses_relative_path
+    test_link_with_relative_paths
     test_concurrent_installs
 
     # Link command tests

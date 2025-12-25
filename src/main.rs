@@ -257,6 +257,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    #[cfg_attr(ghri_root_set, ignore = "GHRI_ROOT environment variable is set")]
     fn test_cli_install_parsing() {
         let cli = Cli::try_parse_from(["ghri", "install", "owner/repo"]).unwrap();
         match cli.command {
@@ -271,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(ghri_root_set, ignore = "GHRI_ROOT environment variable is set")]
     fn test_cli_update_parsing() {
         let cli = Cli::try_parse_from(["ghri", "update"]).unwrap();
         assert_eq!(cli.install_root, None);
