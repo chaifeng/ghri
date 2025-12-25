@@ -131,20 +131,6 @@ impl ProviderFactory {
         create_provider(self.http_client.clone(), kind, api_url)
     }
 
-    /// Create a provider from a package specification.
-    ///
-    /// Resolution:
-    /// 1. Use `spec.provider_kind` if specified, otherwise use GitHub (default)
-    /// 2. Use `spec.api_url` if specified, otherwise use default for the kind
-    pub fn from_spec(&self, spec: &PackageSpec) -> Arc<dyn Provider> {
-        let kind = spec.provider_kind.unwrap_or(ProviderKind::GitHub);
-        let api_url = spec
-            .api_url
-            .as_deref()
-            .unwrap_or_else(|| self.default_api_url(kind));
-        self.create(kind, api_url)
-    }
-
     /// Create a provider from installed package metadata.
     ///
     /// The provider kind is inferred from the stored API URL, and the
@@ -194,27 +180,6 @@ mod tests {
         let provider = factory.default_provider();
         assert_eq!(provider.kind(), ProviderKind::GitHub);
         assert_eq!(provider.api_url(), "https://api.github.com");
-    }
-
-    #[test]
-    fn test_from_spec_default() {
-        let factory = make_test_factory();
-        let spec = PackageSpec::new("owner/repo".parse().unwrap());
-
-        let provider = factory.from_spec(&spec);
-        assert_eq!(provider.kind(), ProviderKind::GitHub);
-        assert_eq!(provider.api_url(), "https://api.github.com");
-    }
-
-    #[test]
-    fn test_from_spec_with_custom_api_url() {
-        let factory = make_test_factory();
-        let spec = PackageSpec::new("owner/repo".parse().unwrap())
-            .api_url("https://github.enterprise.com/api/v3");
-
-        let provider = factory.from_spec(&spec);
-        assert_eq!(provider.kind(), ProviderKind::GitHub);
-        assert_eq!(provider.api_url(), "https://github.enterprise.com/api/v3");
     }
 
     #[test]
