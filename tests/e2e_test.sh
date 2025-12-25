@@ -789,6 +789,17 @@ test_link_to_file_path() {
     # Verify meta.json has links field
     assert_file_contains "$install_root/bach-sh/bach/meta.json" "links" "meta.json contains links"
     assert_file_contains "$install_root/bach-sh/bach/meta.json" "my-bach" "meta.json contains link path"
+
+    # Verify show command does not show "wrong target" for valid link
+    local show_output
+    show_output=$("$GHRI_BIN" show bach-sh/bach --root "$install_root" 2>&1)
+    if echo "$show_output" | grep -q "wrong target"; then
+        log_fail "Show command incorrectly reports 'wrong target' for valid link"
+        log_info "Show output: $show_output"
+        return 1
+    else
+        log_success "Show command correctly displays valid link"
+    fi
 }
 
 test_link_to_directory() {

@@ -79,14 +79,18 @@ pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()
     }
 
     // Links
-    if !details.links.is_empty() {
-        println!();
-        print_links(
-            &runtime,
-            &details.links,
-            &details.current_link_path,
-            Some("Links:"),
-        );
+    if let Some(current_version_path) = details.current_version_path {
+        if !details.links.is_empty() {
+            println!();
+            print_links(
+                &runtime,
+                &details.links,
+                &current_version_path,
+                Some("Links:"),
+            );
+        }
+    } else {
+        println!("  (current version symlink not found, cannot show links)");
     }
 
     // Versioned links (historical)
@@ -215,6 +219,9 @@ mod tests {
             .returning(|_| true);
 
         // --- 5. Check Link Status (for printing links) ---
+        // The link dest (/usr/local/bin/tool) should be checked against the
+        // current version directory (/home/user/.ghri/owner/repo/v1.0.0),
+        // NOT the current symlink path (/home/user/.ghri/owner/repo/current)
 
         // File exists: /usr/local/bin/tool -> true
         runtime
@@ -228,15 +235,12 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Resolve link: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/current/bin/tool
+        // Resolve link: /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1.0.0/bin/tool
+        // Note: This should point to the VERSION directory (v1.0.0), not the current symlink
         runtime
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
-            .returning(|_| {
-                Ok(PathBuf::from(
-                    "/home/user/.ghri/owner/repo/current/bin/tool",
-                ))
-            });
+            .returning(|_| Ok(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0/bin/tool")));
 
         // Canonicalize paths for link status check
         runtime
@@ -701,5 +705,113 @@ mod tests {
 
         let result = show(runtime, "owner/repo", Config::for_test(root));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_link_checked_against_version_dir_not_current_symlink() {
+        // This test verifies the fix for the "wrong target" bug.
+        // Links should be checked against the actual version directory (e.g., /root/owner/repo/v1.0.0)
+        // NOT the current symlink path (e.g., /root/owner/repo/current).
+        //
+        // The bug was: check_link was called with expected_prefix = current_link_path
+        // (which is the path TO the symlink), instead of the version directory
+        // (which is what the symlink POINTS TO).
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = PathBuf::from("/home/user/.ghri");
+        let package_dir = root.join("owner/repo");
+        let meta_path = package_dir.join("meta.json");
+        let current_link = package_dir.join("current");
+        let version_dir = package_dir.join("v1.0.0");
+        let link_dest = PathBuf::from("/usr/local/bin/tool");
+
+        // --- 1. Check Package Exists ---
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        // --- 2. Load Metadata ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1.0.0".into(),
+            links: vec![LinkRule {
+                dest: link_dest.clone(),
+                path: Some("bin/tool".into()),
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 3. Get Current Version (read_link returns relative path "v1.0.0") ---
+        // This is critical: the symlink target is relative, like "v1.0.0"
+        runtime
+            .expect_read_link()
+            .with(eq(current_link.clone()))
+            .returning(|_| Ok(PathBuf::from("v1.0.0")));
+
+        // --- 4. List Installed Versions ---
+        runtime
+            .expect_exists()
+            .with(eq(package_dir.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_read_dir()
+            .with(eq(package_dir.clone()))
+            .returning(move |_| {
+                Ok(vec![
+                    PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/meta.json"),
+                    PathBuf::from("/home/user/.ghri/owner/repo/current"),
+                ])
+            });
+
+        runtime
+            .expect_is_dir()
+            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0")))
+            .returning(|_| true);
+
+        // --- 5. Check Link Status ---
+        // The link exists and is a symlink
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // The link resolves to a path UNDER the version directory
+        // /usr/local/bin/tool -> /home/user/.ghri/owner/repo/v1.0.0/bin/tool
+        // This should be Valid because it's under version_dir (/home/user/.ghri/owner/repo/v1.0.0)
+        // Before the fix, it was checked against current_link (/home/user/.ghri/owner/repo/current)
+        // which would result in WrongTarget
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(version_dir.join("bin/tool")));
+
+        runtime
+            .expect_canonicalize()
+            .returning(|p| Ok(p.to_path_buf()));
+
+        // --- Execute ---
+        let result = show(runtime, "owner/repo", Config::for_test(root));
+        assert!(result.is_ok());
+        // If this test passes, it means the link was correctly identified as Valid
+        // because it was checked against the version directory, not the current symlink path
     }
 }

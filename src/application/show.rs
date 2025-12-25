@@ -34,7 +34,7 @@ pub struct PackageDetails {
     /// Versioned links
     pub versioned_links: Vec<crate::package::VersionedLink>,
     /// Path to current symlink
-    pub current_link_path: PathBuf,
+    pub current_version_path: Option<PathBuf>,
 }
 
 /// Show action - retrieves package details
@@ -62,7 +62,7 @@ impl<'a, R: Runtime> ShowAction<'a, R> {
         }
 
         let package_dir = self.package_repo.package_dir(owner, repo);
-        let current_link_path = self.package_repo.current_link(owner, repo);
+        let current_version_path = self.package_repo.current_version_dir(owner, repo);
         let current_version = self.package_repo.current_version(owner, repo);
         let mut installed_versions = self.package_repo.installed_versions(owner, repo)?;
         installed_versions.sort();
@@ -98,7 +98,7 @@ impl<'a, R: Runtime> ShowAction<'a, R> {
                 .as_ref()
                 .map(|m| m.versioned_links.clone())
                 .unwrap_or_default(),
-            current_link_path,
+            current_version_path,
         })
     }
 

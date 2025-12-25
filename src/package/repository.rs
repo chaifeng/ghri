@@ -49,6 +49,19 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
         self.package_dir(owner, repo).join(version)
     }
 
+    /// Get the version directory for the current version of a package.
+    ///
+    /// Returns `None` if the current symlink doesn't exist or is invalid.
+    /// The returned path is relative to install_root, constructed from
+    /// the package directory and the symlink target (version name).
+    pub fn current_version_dir(&self, owner: &str, repo: &str) -> Option<PathBuf> {
+        let current_link = self.current_link(owner, repo);
+        let link_target = self.runtime.read_link(&current_link).ok()?;
+        // The link target is typically a relative path like "v1.2.0"
+        // Join it with the package directory to get the full path
+        Some(self.package_dir(owner, repo).join(link_target))
+    }
+
     /// Get the meta.json path for a package.
     ///
     /// Returns: `<install_root>/<owner>/<repo>/meta.json`
@@ -439,5 +452,63 @@ mod tests {
 
         let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
         assert!(!repo.is_current_version("owner", "repo", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_current_version_dir_returns_full_path() {
+        // When current symlink points to a relative path like "v1.2.3",
+        // current_version_dir should return the full path: /root/owner/repo/v1.2.3
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        // Symlink target is a relative path (as created by the installer)
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("v1.2.3")));
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        let version_dir = repo.current_version_dir("owner", "repo");
+
+        assert_eq!(version_dir, Some(PathBuf::from("/root/owner/repo/v1.2.3")));
+    }
+
+    #[test]
+    fn test_current_version_dir_with_absolute_symlink_target() {
+        // Even if symlink points to an absolute path, we should still construct
+        // the path from package_dir + link_target for consistency
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        // Symlink target is already an absolute path
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| Ok(PathBuf::from("/root/owner/repo/v1.2.3")));
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        let version_dir = repo.current_version_dir("owner", "repo");
+
+        // Note: join with absolute path returns the absolute path itself
+        assert_eq!(version_dir, Some(PathBuf::from("/root/owner/repo/v1.2.3")));
+    }
+
+    #[test]
+    fn test_current_version_dir_no_symlink() {
+        // When current symlink doesn't exist, should return None
+        let mut runtime = MockRuntime::new();
+        let current_link = PathBuf::from("/root/owner/repo/current");
+
+        runtime
+            .expect_read_link()
+            .with(eq(current_link))
+            .returning(|_| {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
+            });
+
+        let repo = PackageRepository::new(&runtime, PathBuf::from("/root"));
+        let version_dir = repo.current_version_dir("owner", "repo");
+
+        assert_eq!(version_dir, None);
     }
 }
