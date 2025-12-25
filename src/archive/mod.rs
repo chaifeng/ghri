@@ -1,4 +1,5 @@
 mod tar_gz;
+mod zip;
 
 use crate::cleanup::SharedCleanupContext;
 use crate::runtime::Runtime;
@@ -6,6 +7,7 @@ use anyhow::{Result, anyhow};
 use std::path::Path;
 
 pub use tar_gz::TarGzExtractor;
+pub use zip::ZipExtractor;
 
 /// Trait for format-specific archive extractors
 #[cfg_attr(test, mockall::automock)]
@@ -35,8 +37,7 @@ pub trait ArchiveExtractor: Send + Sync {
 /// Holds all available extractors and dispatches to the correct one.
 pub struct ArchiveExtractorImpl {
     tar_gz: TarGzExtractor,
-    // Add new extractors here, e.g.:
-    // zip: ZipExtractor,
+    zip: ZipExtractor,
 }
 
 impl Default for ArchiveExtractorImpl {
@@ -49,14 +50,14 @@ impl ArchiveExtractorImpl {
     pub fn new() -> Self {
         Self {
             tar_gz: TarGzExtractor,
+            zip: ZipExtractor,
         }
     }
 }
 
 impl ArchiveExtractor for ArchiveExtractorImpl {
     fn can_handle(&self, archive_path: &Path) -> bool {
-        self.tar_gz.can_handle(archive_path)
-        // || self.zip.can_handle(archive_path)
+        self.tar_gz.can_handle(archive_path) || self.zip.can_handle(archive_path)
     }
 
     #[tracing::instrument(skip(self, runtime, archive_path, extract_to))]
@@ -69,9 +70,9 @@ impl ArchiveExtractor for ArchiveExtractorImpl {
         if self.tar_gz.can_handle(archive_path) {
             return self.tar_gz.extract(runtime, archive_path, extract_to);
         }
-        // if self.zip.can_handle(archive_path) {
-        //     return self.zip.extract(runtime, archive_path, extract_to);
-        // }
+        if self.zip.can_handle(archive_path) {
+            return self.zip.extract(runtime, archive_path, extract_to);
+        }
         Err(anyhow!(
             "Unsupported archive format: {}",
             archive_path.display()
@@ -94,9 +95,11 @@ impl ArchiveExtractor for ArchiveExtractorImpl {
                 cleanup_ctx,
             );
         }
-        // if self.zip.can_handle(archive_path) {
-        //     return self.zip.extract_with_cleanup(runtime, archive_path, extract_to, cleanup_ctx);
-        // }
+        if self.zip.can_handle(archive_path) {
+            return self
+                .zip
+                .extract_with_cleanup(runtime, archive_path, extract_to, cleanup_ctx);
+        }
         Err(anyhow!(
             "Unsupported archive format: {}",
             archive_path.display()
@@ -138,7 +141,7 @@ mod tests {
         let extractor = ArchiveExtractorImpl::new();
         assert!(extractor.can_handle(Path::new("file.tar.gz")));
         assert!(extractor.can_handle(Path::new("file.tgz")));
-        assert!(!extractor.can_handle(Path::new("file.zip")));
+        assert!(extractor.can_handle(Path::new("file.zip")));
         assert!(!extractor.can_handle(Path::new("file.unknown")));
     }
 
@@ -179,5 +182,47 @@ mod tests {
                 .to_string()
                 .contains("Unsupported archive format")
         );
+    }
+
+    fn create_test_zip_archive(path: &Path, files: HashMap<&str, &str>) -> Result<()> {
+        use ::zip::CompressionMethod;
+        use ::zip::ZipWriter;
+        use ::zip::write::FileOptions;
+        use std::io::Write;
+
+        let file = File::create(path)?;
+        let mut zip = ZipWriter::new(file);
+        let options: FileOptions<()> =
+            FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        for (name, content) in files.iter() {
+            zip.start_file(*name, options)?;
+            zip.write_all(content.as_bytes())?;
+        }
+
+        zip.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_extractor_impl_dispatches_to_zip() -> Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("test.zip");
+        let extract_path = dir.path().join("extracted");
+        fs::create_dir(&extract_path)?;
+
+        create_test_zip_archive(
+            &archive_path,
+            HashMap::from([("test_dir/file1.txt", "test content from zip")]),
+        )?;
+
+        let extractor = ArchiveExtractorImpl::new();
+        extractor.extract(&RealRuntime, &archive_path, &extract_path)?;
+
+        let extracted_file = extract_path.join("file1.txt");
+        assert!(extracted_file.exists());
+        assert_eq!(fs::read_to_string(extracted_file)?, "test content from zip");
+
+        Ok(())
     }
 }
