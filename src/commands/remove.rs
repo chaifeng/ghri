@@ -2,11 +2,10 @@ use anyhow::Result;
 use log::debug;
 use std::path::Path;
 
-use crate::{
-    package::{LinkManager, Meta, PackageRepository},
-    provider::PackageSpec,
-    runtime::Runtime,
-};
+use crate::application::LinkAction;
+use crate::package::{LinkManager, Meta, PackageRepository};
+use crate::provider::PackageSpec;
+use crate::runtime::Runtime;
 
 use super::config::Config;
 
@@ -23,17 +22,22 @@ pub fn remove<R: Runtime>(
     let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
-    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
+    let action = LinkAction::new(&runtime, config.install_root.clone());
+    let package_dir = action.package_dir(&spec.repo.owner, &spec.repo.repo);
     debug!("Package directory: {:?}", package_dir);
 
-    if !pkg_repo.package_exists(&spec.repo.owner, &spec.repo.repo) {
+    if !action
+        .package_repo()
+        .package_exists(&spec.repo.owner, &spec.repo.repo)
+    {
         debug!("Package directory not found");
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
     // Load meta if exists
-    let meta = pkg_repo.load(&spec.repo.owner, &spec.repo.repo)?;
+    let meta = action
+        .package_repo()
+        .load(&spec.repo.owner, &spec.repo.repo)?;
 
     if let Some(ref version) = spec.version {
         // Remove specific version only
@@ -41,7 +45,7 @@ pub fn remove<R: Runtime>(
 
         // Show removal plan and confirm
         if !yes {
-            show_version_removal_plan(&runtime, &pkg_repo, &spec.repo, version, meta.as_ref())?;
+            show_version_removal_plan(&action, &spec.repo, version, meta.as_ref())?;
             if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
@@ -50,7 +54,7 @@ pub fn remove<R: Runtime>(
 
         remove_version(
             &runtime,
-            &pkg_repo,
+            action.package_repo(),
             &spec.repo.owner,
             &spec.repo.repo,
             version,
@@ -63,27 +67,21 @@ pub fn remove<R: Runtime>(
 
         // Show removal plan and confirm
         if !yes {
-            show_package_removal_plan(&runtime, &spec.repo, &package_dir, meta.as_ref());
+            show_package_removal_plan(&action, &spec.repo, &package_dir, meta.as_ref());
             if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
         }
 
-        remove_package(
-            &runtime,
-            &pkg_repo,
-            &spec.repo.owner,
-            &spec.repo.repo,
-            meta.as_ref(),
-        )?;
+        remove_package(&action, &spec.repo.owner, &spec.repo.repo, meta.as_ref())?;
     }
 
     Ok(())
 }
 
 fn show_package_removal_plan<R: Runtime>(
-    runtime: &R,
+    action: &LinkAction<'_, R>,
     repo: &crate::provider::RepoId,
     package_dir: &Path,
     meta: Option<&Meta>,
@@ -98,14 +96,14 @@ fn show_package_removal_plan<R: Runtime>(
     println!("  [DEL] {}", package_dir.display());
 
     if let Some(meta) = meta {
-        let link_manager = LinkManager::new(runtime);
-
         // Check regular links
-        let (valid_links, invalid_links) = link_manager.check_links(&meta.links, package_dir);
+        let (valid_links, invalid_links) =
+            action.link_manager().check_links(&meta.links, package_dir);
 
         // Check versioned links
-        let (valid_versioned, invalid_versioned) =
-            link_manager.check_versioned_links(&meta.versioned_links, package_dir);
+        let (valid_versioned, invalid_versioned) = action
+            .link_manager()
+            .check_versioned_links(&meta.versioned_links, package_dir);
 
         // Combine valid links (only those that actually exist and point to package)
         let all_valid: Vec<_> = valid_links
@@ -146,17 +144,18 @@ fn show_package_removal_plan<R: Runtime>(
 }
 
 fn show_version_removal_plan<R: Runtime>(
-    runtime: &R,
-    pkg_repo: &PackageRepository<'_, R>,
+    action: &LinkAction<'_, R>,
     repo: &crate::provider::RepoId,
     version: &str,
     meta: Option<&Meta>,
 ) -> Result<()> {
-    let package_dir = pkg_repo.package_dir(&repo.owner, &repo.repo);
+    let package_dir = action.package_dir(&repo.owner, &repo.repo);
     let version_dir = package_dir.join(version);
 
     // Check if this is the current version
-    let is_current = pkg_repo.is_current_version(&repo.owner, &repo.repo, version);
+    let is_current = action
+        .package_repo()
+        .is_current_version(&repo.owner, &repo.repo, version);
 
     println!();
     println!("=== Removal Plan ===");
@@ -179,18 +178,14 @@ fn show_version_removal_plan<R: Runtime>(
 
     // Show links that will be removed
     if let Some(meta) = meta {
-        let link_manager = LinkManager::new(runtime);
-
         // Check regular links pointing to this version
-        let (valid_links, _) = link_manager.check_links(&meta.links, &version_dir);
+        let (valid_links, _) = action.link_manager().check_links(&meta.links, &version_dir);
         let regular_valid: Vec<_> = valid_links.iter().filter(|l| l.status.is_valid()).collect();
 
         // Check versioned links for this version
-        let (valid_versioned, invalid_versioned) = link_manager.check_versioned_links_for_version(
-            &meta.versioned_links,
-            version,
-            &version_dir,
-        );
+        let (valid_versioned, invalid_versioned) = action
+            .link_manager()
+            .check_versioned_links_for_version(&meta.versioned_links, version, &version_dir);
         let versioned_valid: Vec<_> = valid_versioned
             .iter()
             .filter(|l| l.status.is_valid())
@@ -308,31 +303,33 @@ pub(crate) fn remove_version<R: Runtime>(
 
 /// Remove an entire package
 fn remove_package<R: Runtime>(
-    runtime: &R,
-    pkg_repo: &PackageRepository<'_, R>,
+    action: &LinkAction<'_, R>,
     owner: &str,
     repo: &str,
     meta: Option<&Meta>,
 ) -> Result<()> {
-    let package_dir = pkg_repo.package_dir(owner, repo);
+    let package_dir = action.package_dir(owner, repo);
 
     // Remove all external links first using LinkManager
-    let link_manager = LinkManager::new(runtime);
     if let Some(meta) = meta {
         debug!("Removing {} link(s)", meta.links.len());
         for rule in &meta.links {
-            let _ = link_manager.remove_link_if_under(&rule.dest, &package_dir);
+            let _ = action
+                .link_manager()
+                .remove_link_if_under(&rule.dest, &package_dir);
         }
         // Also remove versioned links
         debug!("Removing {} versioned link(s)", meta.versioned_links.len());
         for link in &meta.versioned_links {
-            let _ = link_manager.remove_link_if_under(&link.dest, &package_dir);
+            let _ = action
+                .link_manager()
+                .remove_link_if_under(&link.dest, &package_dir);
         }
     }
 
     // Remove the package directory (also cleans up empty owner directory)
     debug!("Removing package directory {:?}", package_dir);
-    pkg_repo.remove_package_dir(owner, repo)?;
+    action.package_repo().remove_package_dir(owner, repo)?;
 
     println!("Removed package {}/{}", owner, repo);
 
