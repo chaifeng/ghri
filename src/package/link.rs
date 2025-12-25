@@ -121,7 +121,25 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
     pub fn check_link(&self, dest: &Path, expected_prefix: &Path) -> LinkStatus {
         if self.runtime.is_symlink(dest) {
             if let Ok(resolved_target) = self.runtime.resolve_link(dest) {
-                if is_path_under(&resolved_target, expected_prefix) {
+                // Ensure both paths are absolute for correct comparison
+                // If resolved_target is relative, canonicalize it
+                let abs_target = if resolved_target.is_relative() {
+                    self.runtime
+                        .canonicalize(&resolved_target)
+                        .unwrap_or(resolved_target)
+                } else {
+                    resolved_target
+                };
+
+                let abs_prefix = if expected_prefix.is_relative() {
+                    self.runtime
+                        .canonicalize(expected_prefix)
+                        .unwrap_or(expected_prefix.to_path_buf())
+                } else {
+                    expected_prefix.to_path_buf()
+                };
+
+                if is_path_under(&abs_target, &abs_prefix) {
                     LinkStatus::Valid
                 } else {
                     LinkStatus::WrongTarget
@@ -302,11 +320,22 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
             self.runtime.create_dir_all(parent)?;
         }
 
+        // For relative path calculation to work correctly, both paths should be
+        // either absolute or relative. If they're mixed, canonicalize the target.
+        let effective_target = if dest.is_absolute() && target.is_relative() {
+            // Try to canonicalize the relative target to absolute
+            self.runtime
+                .canonicalize(target)
+                .unwrap_or(target.to_path_buf())
+        } else {
+            target.to_path_buf()
+        };
+
         // Calculate relative path if possible (from symlink location to target)
-        if let Some(link_target) = relative_symlink_path(dest, target) {
+        if let Some(link_target) = relative_symlink_path(dest, &effective_target) {
             self.runtime.symlink(&link_target, dest)
         } else {
-            self.runtime.symlink(target, dest)
+            self.runtime.symlink(&effective_target, dest)
         }
     }
 

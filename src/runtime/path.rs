@@ -73,6 +73,40 @@ pub fn relative_symlink_path(from_link: &Path, to_target: &Path) -> Option<PathB
     Some(result)
 }
 
+/// Calculate the relative path from a directory to a target path.
+/// This is used to store link destinations relative to the version directory.
+///
+/// For example, if version_dir is `/home/user/.ghri/owner/repo/v1.0.0` and
+/// dest is `/home/user/.local/bin/tool`, this returns `../../../.local/bin/tool`.
+///
+/// Returns `None` if a relative path cannot be computed (e.g., different drive letters on Windows).
+pub fn relative_path_from_dir(from_dir: &Path, to_path: &Path) -> Option<PathBuf> {
+    let result = pathdiff::diff_paths(to_path, from_dir)?;
+
+    // If the result is an absolute path, it means we couldn't compute a relative path
+    // (e.g., different drives on Windows). Return None in this case.
+    if result.is_absolute() {
+        return None;
+    }
+
+    Some(result)
+}
+
+/// Resolve a relative path against a base directory to get an absolute path.
+/// This is used to convert stored relative link destinations back to absolute paths.
+///
+/// For example, if base_dir is `/home/user/.ghri/owner/repo/v1.0.0` and
+/// relative_path is `../../../.local/bin/tool`, this returns `/home/user/.local/bin/tool`.
+pub fn resolve_relative_path(base_dir: &Path, relative_path: &Path) -> PathBuf {
+    if relative_path.is_absolute() {
+        // Already absolute, return as-is
+        relative_path.to_path_buf()
+    } else {
+        // Join and normalize to resolve .. components
+        normalize_path(&base_dir.join(relative_path))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +391,82 @@ mod tests {
             Path::new("D:\\Programs\\tool.exe"),
         );
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_relative_path_from_dir_basic() {
+        // From package dir to link destination
+        // Package dir: /home/user/.ghri/owner/repo
+        // Link dest: /home/user/.local/bin/tool
+        // Need to go up 3 levels (.ghri/owner/repo) then down to .local/bin/tool
+        let result = relative_path_from_dir(
+            Path::new("/home/user/.ghri/owner/repo"),
+            Path::new("/home/user/.local/bin/tool"),
+        );
+        assert_eq!(result, Some(PathBuf::from("../../../.local/bin/tool")));
+    }
+
+    #[test]
+    fn test_relative_path_from_dir_same_directory() {
+        // Link in same directory as package
+        let result = relative_path_from_dir(
+            Path::new("/home/user/.ghri/owner/repo"),
+            Path::new("/home/user/.ghri/owner/repo/latest"),
+        );
+        assert_eq!(result, Some(PathBuf::from("latest")));
+    }
+
+    #[test]
+    fn test_relative_path_from_dir_sibling() {
+        // Link in sibling directory
+        let result = relative_path_from_dir(
+            Path::new("/home/user/.ghri/owner/repo"),
+            Path::new("/home/user/.ghri/owner/repo-latest"),
+        );
+        assert_eq!(result, Some(PathBuf::from("../repo-latest")));
+    }
+
+    #[test]
+    fn test_resolve_relative_path_basic() {
+        // Resolve ../../../.local/bin/tool from /home/user/.ghri/owner/repo
+        let result = resolve_relative_path(
+            Path::new("/home/user/.ghri/owner/repo"),
+            Path::new("../../../.local/bin/tool"),
+        );
+        assert_eq!(result, PathBuf::from("/home/user/.local/bin/tool"));
+    }
+
+    #[test]
+    fn test_resolve_relative_path_absolute_passthrough() {
+        // If the path is already absolute, return it unchanged
+        let result = resolve_relative_path(
+            Path::new("/home/user/.ghri/owner/repo/v1.0.0"),
+            Path::new("/usr/local/bin/tool"),
+        );
+        assert_eq!(result, PathBuf::from("/usr/local/bin/tool"));
+    }
+
+    #[test]
+    fn test_resolve_relative_path_no_parent_dir() {
+        // Relative path without .. components (link in same dir)
+        let result = resolve_relative_path(
+            Path::new("/home/user/.ghri/owner/repo"),
+            Path::new("latest"),
+        );
+        assert_eq!(result, PathBuf::from("/home/user/.ghri/owner/repo/latest"));
+    }
+
+    #[test]
+    fn test_roundtrip_relative_path() {
+        // Test that converting to relative and back gives the original path
+        let package_dir = Path::new("/home/user/.ghri/owner/repo");
+        let original_dest = Path::new("/home/user/.local/bin/tool");
+
+        let relative = relative_path_from_dir(package_dir, original_dest).unwrap();
+        // Should be ../../../.local/bin/tool
+        assert_eq!(relative, PathBuf::from("../../../.local/bin/tool"));
+
+        let resolved = resolve_relative_path(package_dir, &relative);
+        assert_eq!(resolved, original_dest);
     }
 }

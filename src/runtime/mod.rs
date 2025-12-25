@@ -22,7 +22,9 @@ use async_trait::async_trait;
 use std::env as std_env;
 use std::path::{Path, PathBuf};
 
-pub use path::{is_path_under, relative_symlink_path};
+pub use path::{
+    is_path_under, relative_path_from_dir, relative_symlink_path, resolve_relative_path,
+};
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]

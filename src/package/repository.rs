@@ -112,8 +112,19 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
     }
 
     /// Save package metadata.
+    ///
+    /// Link destinations (`links` and `versioned_links`) are converted to relative paths
+    /// before saving. The relative paths are calculated from the package directory
+    /// (parent of version directories), making them portable if the install root is moved.
+    ///
+    /// For example, if version_dir is `~/.ghri/owner/repo/v1.0.0` and link dest is
+    /// `~/.local/bin/tool`, the stored relative path is `../../.local/bin/tool`
+    /// (relative to `~/.ghri/owner/repo`, not `~/.ghri/owner/repo/v1.0.0`).
     pub fn save(&self, owner: &str, repo: &str, meta: &Meta) -> Result<()> {
+        use crate::runtime::relative_path_from_dir;
+
         let meta_path = self.meta_path(owner, repo);
+        let package_dir = self.package_dir(owner, repo);
 
         // Ensure parent directory exists
         if let Some(parent) = meta_path.parent()
@@ -122,7 +133,50 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
             self.runtime.create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(meta)?;
+        // Clone meta and convert link destinations to relative paths
+        let mut meta_to_save = meta.clone();
+
+        // Helper to get canonical package_dir only when needed
+        // (when link.dest is absolute but package_dir is relative)
+        let get_canonical_package_dir = || -> PathBuf {
+            if package_dir.is_relative() {
+                self.runtime
+                    .canonicalize(&package_dir)
+                    .unwrap_or_else(|_| package_dir.clone())
+            } else {
+                package_dir.clone()
+            }
+        };
+
+        // Convert links destinations to relative paths (relative to package dir)
+        for link in &mut meta_to_save.links {
+            if link.dest.is_absolute() {
+                let base_dir = if package_dir.is_relative() {
+                    get_canonical_package_dir()
+                } else {
+                    package_dir.clone()
+                };
+                if let Some(relative) = relative_path_from_dir(&base_dir, &link.dest) {
+                    link.dest = relative;
+                }
+            }
+        }
+
+        // Convert versioned_links destinations to relative paths (relative to package dir)
+        for link in &mut meta_to_save.versioned_links {
+            if link.dest.is_absolute() {
+                let base_dir = if package_dir.is_relative() {
+                    get_canonical_package_dir()
+                } else {
+                    package_dir.clone()
+                };
+                if let Some(relative) = relative_path_from_dir(&base_dir, &link.dest) {
+                    link.dest = relative;
+                }
+            }
+        }
+
+        let content = serde_json::to_string_pretty(&meta_to_save)?;
         self.runtime
             .write(&meta_path, content.as_bytes())
             .with_context(|| format!("Failed to save metadata to {:?}", meta_path))
