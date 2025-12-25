@@ -1,7 +1,9 @@
 use anyhow::Result;
 use log::debug;
 
-use crate::{package::PackageRepository, provider::PackageSpec, runtime::Runtime};
+use crate::application::ShowAction;
+use crate::provider::PackageSpec;
+use crate::runtime::Runtime;
 
 use super::config::Config;
 use super::{print_links, print_versioned_links};
@@ -13,106 +15,89 @@ pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()
     let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let pkg_repo = PackageRepository::new(&runtime, config.install_root);
-    let package_dir = pkg_repo.package_dir(&spec.repo.owner, &spec.repo.repo);
-    debug!("Package directory: {:?}", package_dir);
-
-    if !pkg_repo.package_exists(&spec.repo.owner, &spec.repo.repo) {
-        anyhow::bail!("Package {} is not installed.", spec.repo);
-    }
-
-    // Load meta (may be None if meta.json doesn't exist)
-    let meta = pkg_repo.load(&spec.repo.owner, &spec.repo.repo)?;
+    let action = ShowAction::new(&runtime, config.install_root);
+    let details = action.get_package_details(&spec)?;
 
     // Package name
-    println!("Package: {}", spec.repo);
-    println!("Directory: {}", package_dir.display());
+    println!("Package: {}", details.name);
+    println!("Directory: {}", details.package_dir.display());
 
     // Current version
-    let current_link = pkg_repo.current_link(&spec.repo.owner, &spec.repo.repo);
-    let current_version = pkg_repo.current_version(&spec.repo.owner, &spec.repo.repo);
-
-    if let Some(ref version) = current_version {
+    if let Some(ref version) = details.current_version {
         println!("Current version: {}", version);
-    } else if let Some(ref meta) = meta
-        && !meta.current_version.is_empty()
-    {
-        println!("Current version: {}", meta.current_version);
     }
 
     // List installed versions
     println!("\nInstalled versions:");
-    let mut versions = pkg_repo.installed_versions(&spec.repo.owner, &spec.repo.repo)?;
-    versions.sort();
-
-    for version in &versions {
-        if Some(version) == current_version.as_ref() {
+    for version in &details.installed_versions {
+        if Some(version) == details.current_version.as_ref() {
             println!("  {} (current)", version);
         } else {
             println!("  {}", version);
         }
     }
 
-    if versions.is_empty() {
+    if details.installed_versions.is_empty() {
         println!("  (none)");
     }
 
-    // Show meta info
-    if let Some(ref meta) = meta {
-        // Description
-        if let Some(ref desc) = meta.description {
-            println!("\nDescription: {}", desc);
-        }
+    // Description
+    if let Some(ref desc) = details.description {
+        println!("\nDescription: {}", desc);
+    }
 
-        // Homepage
-        if let Some(ref homepage) = meta.homepage {
-            println!("Homepage: {}", homepage);
-        }
+    // Homepage
+    if let Some(ref homepage) = details.homepage {
+        println!("Homepage: {}", homepage);
+    }
 
-        // License
-        if let Some(ref license) = meta.license {
-            println!("License: {}", license);
-        }
+    // License
+    if let Some(ref license) = details.license {
+        println!("License: {}", license);
+    }
 
-        // Last updated
-        if !meta.updated_at.is_empty() {
-            println!("Last updated: {}", meta.updated_at);
-        }
+    // Last updated
+    if let Some(ref updated_at) = details.updated_at {
+        println!("Last updated: {}", updated_at);
+    }
 
-        // Available versions (from releases)
-        // meta.releases is already sorted by published_at (newest first)
-        if !meta.releases.is_empty() {
-            println!("\nAvailable versions (from cache):");
-            for (i, release) in meta.releases.iter().enumerate() {
-                if i >= 10 {
-                    println!("  ... and {} more", meta.releases.len() - 10);
-                    break;
-                }
-                let installed = versions.contains(&release.tag);
-                if installed {
-                    println!("  {} (installed)", release.tag);
-                } else {
-                    println!("  {}", release.tag);
-                }
+    // Available versions (from releases)
+    if !details.releases.is_empty() {
+        println!("\nAvailable versions (from cache):");
+        for (i, release) in details.releases.iter().enumerate() {
+            if i >= 10 {
+                println!("  ... and {} more", details.releases.len() - 10);
+                break;
+            }
+            let installed = details.installed_versions.contains(&release.tag);
+            if installed {
+                println!("  {} (installed)", release.tag);
+            } else {
+                println!("  {}", release.tag);
             }
         }
+    }
 
-        // Links
-        if !meta.links.is_empty() {
-            println!();
-            print_links(&runtime, &meta.links, &current_link, Some("Links:"));
-        }
+    // Links
+    if !details.links.is_empty() {
+        println!();
+        print_links(
+            &runtime,
+            &details.links,
+            &details.current_link_path,
+            Some("Links:"),
+        );
+    }
 
-        // Versioned links (historical)
-        if !meta.versioned_links.is_empty() {
-            println!();
-            print_versioned_links(
-                &runtime,
-                &meta.versioned_links,
-                &package_dir,
-                Some("Versioned links (historical):"),
-            );
-        }
+    // Versioned links (historical)
+    if !details.versioned_links.is_empty() {
+        println!();
+        print_versioned_links(
+            &runtime,
+            &details.versioned_links,
+            &details.package_dir,
+            Some("Versioned links (historical):"),
+        );
     }
 
     Ok(())

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use log::debug;
 
-use crate::{package::PackageRepository, runtime::Runtime};
+use crate::application::ListAction;
+use crate::runtime::Runtime;
 
 use super::config::Config;
 
@@ -10,8 +11,8 @@ use super::config::Config;
 pub fn list<R: Runtime>(runtime: R, config: Config) -> Result<()> {
     debug!("Listing packages from {:?}", config.install_root);
 
-    let repo = PackageRepository::new(&runtime, config.install_root);
-    let packages = repo.find_all_with_meta()?;
+    let action = ListAction::new(&runtime, config.install_root);
+    let packages = action.list_packages()?;
 
     if packages.is_empty() {
         println!("No packages installed.");
@@ -20,13 +21,8 @@ pub fn list<R: Runtime>(runtime: R, config: Config) -> Result<()> {
 
     debug!("Found {} package(s)", packages.len());
 
-    for (_meta_path, meta) in packages {
-        let version = if meta.current_version.is_empty() {
-            "(unknown)".to_string()
-        } else {
-            meta.current_version.clone()
-        };
-        println!("{} {}", meta.name, version);
+    for pkg in packages {
+        println!("{} {}", pkg.name, pkg.version);
     }
 
     Ok(())
