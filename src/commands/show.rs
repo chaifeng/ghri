@@ -1,17 +1,16 @@
 use anyhow::Result;
 use log::debug;
 
-use crate::{package::PackageRepository, runtime::Runtime};
+use crate::{package::PackageRepository, provider::PackageSpec, runtime::Runtime};
 
 use super::config::Config;
-use super::install::RepoSpec;
 use super::{print_links, print_versioned_links};
 
 /// Show detailed information about a package
 #[tracing::instrument(skip(runtime, config))]
 pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()> {
     debug!("Showing info for {}", repo_str);
-    let spec = repo_str.parse::<RepoSpec>()?;
+    let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root);

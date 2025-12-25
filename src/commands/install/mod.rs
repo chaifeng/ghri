@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::{InstallAction, InstallOperations};
 use crate::cleanup::CleanupContext;
-use crate::provider::Release;
+use crate::provider::{PackageSpec, Release};
 use crate::runtime::Runtime;
 
 use super::config::{Config, InstallOptions};
@@ -14,10 +14,8 @@ use super::services::Services;
 mod download;
 mod external_links;
 mod installer;
-mod repo_spec;
 
 pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
-pub use repo_spec::RepoSpec;
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -80,7 +78,7 @@ pub async fn run_install<R: Runtime + 'static>(
     repo_str: &str,
     options: InstallOptions,
 ) -> Result<()> {
-    let spec = repo_str.parse::<RepoSpec>()?;
+    let spec = repo_str.parse::<PackageSpec>()?;
     let repo = &spec.repo;
 
     println!("   resolving {}", repo);

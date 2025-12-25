@@ -2,10 +2,9 @@ use anyhow::Result;
 use log::{debug, info};
 use std::path::Path;
 
-use crate::{package::PackageRepository, runtime::Runtime};
+use crate::{package::PackageRepository, provider::PackageSpec, runtime::Runtime};
 
 use super::config::Config;
-use super::install::RepoSpec;
 use super::remove_version;
 
 /// Prune unused versions, keeping only the current version
@@ -20,7 +19,7 @@ pub fn prune<R: Runtime>(runtime: R, repos: Vec<String>, yes: bool, config: Conf
         // Prune specific packages
         let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
         for repo_str in &repos {
-            let spec = repo_str.parse::<RepoSpec>()?;
+            let spec = repo_str.parse::<PackageSpec>()?;
             prune_package(
                 &runtime,
                 &pkg_repo,

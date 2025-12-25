@@ -4,11 +4,11 @@ use std::path::Path;
 
 use crate::{
     package::{LinkManager, LinkRule, LinkStatus, PackageRepository, VersionedLink},
+    provider::PackageSpec,
     runtime::Runtime,
 };
 
 use super::config::Config;
-use super::install::RepoSpec;
 
 /// Convert LinkManager's LinkStatus to display string
 fn format_link_status(status: &LinkStatus) -> String {
@@ -83,7 +83,7 @@ pub(crate) fn print_versioned_links<R: Runtime>(
 #[tracing::instrument(skip(runtime, config))]
 pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()> {
     debug!("Showing link rules for {}", repo_str);
-    let spec = repo_str.parse::<RepoSpec>()?;
+    let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root);

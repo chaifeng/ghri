@@ -3,14 +3,18 @@
 //! This module provides a factory that creates providers on demand
 //! based on PackageSpec or Meta information.
 
+use std::str::FromStr;
 use std::sync::Arc;
+
+use anyhow::{Result, anyhow};
 
 use super::{Provider, ProviderKind, RepoId, create_provider};
 use crate::http::HttpClient;
 use crate::package::Meta;
 
 /// Package specification for identifying a package and its provider.
-#[derive(Debug, Clone)]
+/// Format: "owner/repo" or "owner/repo@version"
+#[derive(Debug, Clone, PartialEq)]
 pub struct PackageSpec {
     /// Repository identifier (owner/repo format)
     pub repo: RepoId,
@@ -20,6 +24,43 @@ pub struct PackageSpec {
     pub provider_kind: Option<ProviderKind>,
     /// Custom API URL (overrides default for the provider kind)
     pub api_url: Option<String>,
+}
+
+impl std::fmt::Display for PackageSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.version {
+            Some(v) => write!(f, "{}@{}", self.repo, v),
+            None => write!(f, "{}", self.repo),
+        }
+    }
+}
+
+impl FromStr for PackageSpec {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Split by @ to get optional version
+        let (repo_part, version) = if let Some(at_pos) = s.rfind('@') {
+            let (repo, ver) = s.split_at(at_pos);
+            let ver = &ver[1..]; // Skip the @
+            if ver.is_empty() {
+                return Err(anyhow!(
+                    "Invalid format: version after @ cannot be empty. Expected 'owner/repo@version'."
+                ));
+            }
+            (repo, Some(ver.to_string()))
+        } else {
+            (s, None)
+        };
+
+        let repo = repo_part.parse::<RepoId>()?;
+        Ok(PackageSpec {
+            repo,
+            version,
+            provider_kind: None,
+            api_url: None,
+        })
+    }
 }
 
 impl PackageSpec {
@@ -243,5 +284,72 @@ mod tests {
     fn test_package_spec_with_version() {
         let spec = PackageSpec::with_version("owner/repo".parse().unwrap(), "v1.0.0");
         assert_eq!(spec.version, Some("v1.0.0".into()));
+    }
+
+    // Tests migrated from repo_spec.rs
+
+    #[test]
+    fn test_parse_package_spec_without_version() {
+        let spec = PackageSpec::from_str("owner/repo").unwrap();
+        assert_eq!(spec.repo.owner, "owner");
+        assert_eq!(spec.repo.repo, "repo");
+        assert_eq!(spec.version, None);
+    }
+
+    #[test]
+    fn test_parse_package_spec_with_version() {
+        let spec = PackageSpec::from_str("owner/repo@v1.0.0").unwrap();
+        assert_eq!(spec.repo.owner, "owner");
+        assert_eq!(spec.repo.repo, "repo");
+        assert_eq!(spec.version, Some("v1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_package_spec_with_version_no_v_prefix() {
+        let spec = PackageSpec::from_str("bach-sh/bach@0.7.2").unwrap();
+        assert_eq!(spec.repo.owner, "bach-sh");
+        assert_eq!(spec.repo.repo, "bach");
+        assert_eq!(spec.version, Some("0.7.2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_package_spec_empty_version_fails() {
+        let result = PackageSpec::from_str("owner/repo@");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_parse_package_spec_invalid_repo_fails() {
+        let result = PackageSpec::from_str("invalid@v1.0.0");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_package_spec_display_without_version() {
+        let spec = PackageSpec {
+            repo: RepoId {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            },
+            version: None,
+            provider_kind: None,
+            api_url: None,
+        };
+        assert_eq!(format!("{}", spec), "owner/repo");
+    }
+
+    #[test]
+    fn test_package_spec_display_with_version() {
+        let spec = PackageSpec {
+            repo: RepoId {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            },
+            version: Some("v1.0.0".to_string()),
+            provider_kind: None,
+            api_url: None,
+        };
+        assert_eq!(format!("{}", spec), "owner/repo@v1.0.0");
     }
 }

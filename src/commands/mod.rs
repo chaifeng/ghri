@@ -13,7 +13,7 @@ mod update;
 mod upgrade;
 
 pub use config::{Config, InstallOptions, UpgradeOptions};
-pub use install::{RepoSpec, install};
+pub use install::install;
 pub use link::link;
 pub use link_spec::LinkSpec;
 pub use links::links;

@@ -4,11 +4,11 @@ use std::path::Path;
 
 use crate::{
     package::{LinkManager, Meta, PackageRepository},
+    provider::PackageSpec,
     runtime::Runtime,
 };
 
 use super::config::Config;
-use super::install::RepoSpec;
 
 /// Remove a package or specific version
 #[tracing::instrument(skip(runtime, config))]
@@ -20,7 +20,7 @@ pub fn remove<R: Runtime>(
     config: Config,
 ) -> Result<()> {
     debug!("Removing {} force={}", repo_str, force);
-    let spec = repo_str.parse::<RepoSpec>()?;
+    let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
     let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
