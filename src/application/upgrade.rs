@@ -79,10 +79,10 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
 
         match latest {
             Some(release) => {
-                let has_update = meta.current_version != release.version;
+                let has_update = meta.current_version != release.tag;
                 UpdateCheck {
                     meta,
-                    latest_version: Some(release.version.clone()),
+                    latest_version: Some(release.tag.clone()),
                     has_update,
                 }
             }
@@ -134,7 +134,7 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
 mod tests {
     use super::*;
     use crate::http::HttpClient;
-    use crate::package::MetaRelease;
+    use crate::provider::Release;
     use crate::runtime::MockRuntime;
 
     fn make_test_factory() -> ProviderFactory {
@@ -149,9 +149,9 @@ mod tests {
             current_version: current.into(),
             releases: releases
                 .into_iter()
-                .map(|(v, pre)| MetaRelease {
-                    version: v.into(),
-                    is_prerelease: pre,
+                .map(|(v, pre)| Release {
+                    tag: v.into(),
+                    prerelease: pre,
                     ..Default::default()
                 })
                 .collect(),

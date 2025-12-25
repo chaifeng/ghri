@@ -1,11 +1,11 @@
-use crate::package::MetaAsset;
+use crate::provider::ReleaseAsset;
 
 /// Trait for selecting an asset from a list of available assets
 pub trait AssetPicker: Send + Sync {
     /// Pick the most appropriate asset from the given list
     ///
     /// Returns `None` if no suitable asset is found
-    fn pick<'a>(&self, assets: &'a [MetaAsset]) -> Option<&'a MetaAsset>;
+    fn pick<'a>(&self, assets: &'a [ReleaseAsset]) -> Option<&'a ReleaseAsset>;
 }
 
 /// Default asset picker that uses platform detection to select assets
@@ -102,7 +102,7 @@ impl Default for DefaultAssetPicker {
 }
 
 impl AssetPicker for DefaultAssetPicker {
-    fn pick<'a>(&self, assets: &'a [MetaAsset]) -> Option<&'a MetaAsset> {
+    fn pick<'a>(&self, assets: &'a [ReleaseAsset]) -> Option<&'a ReleaseAsset> {
         let mut candidates: Vec<_> = assets
             .iter()
             .filter(|a| self.matches_platform(&a.name))
@@ -124,7 +124,7 @@ impl AssetPicker for DefaultAssetPicker {
 pub struct NoOpAssetPicker;
 
 impl AssetPicker for NoOpAssetPicker {
-    fn pick<'a>(&self, _assets: &'a [MetaAsset]) -> Option<&'a MetaAsset> {
+    fn pick<'a>(&self, _assets: &'a [ReleaseAsset]) -> Option<&'a ReleaseAsset> {
         None
     }
 }
@@ -182,7 +182,7 @@ impl PatternAssetPicker {
 }
 
 impl AssetPicker for PatternAssetPicker {
-    fn pick<'a>(&self, assets: &'a [MetaAsset]) -> Option<&'a MetaAsset> {
+    fn pick<'a>(&self, assets: &'a [ReleaseAsset]) -> Option<&'a ReleaseAsset> {
         assets.iter().find(|a| self.matches(&a.name))
     }
 }
@@ -192,10 +192,10 @@ mod tests {
     use super::*;
 
     /// Helper function to create test assets from names
-    fn make_assets(names: &[&str]) -> Vec<MetaAsset> {
+    fn make_assets(names: &[&str]) -> Vec<ReleaseAsset> {
         names
             .iter()
-            .map(|name| MetaAsset {
+            .map(|name| ReleaseAsset {
                 name: name.to_string(),
                 size: 1000,
                 download_url: format!("https://example.com/{}", name),

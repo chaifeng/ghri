@@ -88,11 +88,11 @@ pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()
                     println!("  ... and {} more", meta.releases.len() - 10);
                     break;
                 }
-                let installed = versions.contains(&release.version);
+                let installed = versions.contains(&release.tag);
                 if installed {
-                    println!("  {} (installed)", release.version);
+                    println!("  {} (installed)", release.tag);
                 } else {
-                    println!("  {}", release.version);
+                    println!("  {}", release.tag);
                 }
             }
         }
@@ -378,18 +378,18 @@ mod tests {
             .returning(|_| true);
 
         // Read meta.json -> package with cached releases
-        use crate::package::MetaRelease;
+        use crate::provider::Release;
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1.0.0".into(),
             releases: vec![
-                MetaRelease {
-                    version: "v1.1.0".into(), // Newer version available
+                Release {
+                    tag: "v1.1.0".into(), // Newer version available
                     published_at: Some("2023-02-01T00:00:00Z".into()),
                     ..Default::default()
                 },
-                MetaRelease {
-                    version: "v1.0.0".into(), // Current installed version
+                Release {
+                    tag: "v1.0.0".into(), // Current installed version
                     published_at: Some("2023-01-01T00:00:00Z".into()),
                     ..Default::default()
                 },

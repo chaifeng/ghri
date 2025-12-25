@@ -96,7 +96,7 @@ async fn run_update<R: Runtime + 'static>(
             &meta.current_version,
             false, // don't include prereleases
         ) {
-            print_update_available(&repo, &meta.current_version, &latest.version);
+            print_update_available(&repo, &meta.current_version, &latest.tag);
         }
     }
 

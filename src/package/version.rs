@@ -3,7 +3,7 @@
 //! This module provides utilities for resolving version constraints
 //! and selecting appropriate releases from a list.
 
-use crate::package::MetaRelease;
+use crate::provider::Release;
 
 /// Version constraint for selecting a release.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -27,9 +27,9 @@ impl VersionResolver {
     ///
     /// Returns the release that best matches the constraint, or None if no match found.
     pub fn resolve<'a>(
-        releases: &'a [MetaRelease],
+        releases: &'a [Release],
         constraint: &VersionConstraint,
-    ) -> Option<&'a MetaRelease> {
+    ) -> Option<&'a Release> {
         match constraint {
             VersionConstraint::Exact(version) => Self::find_exact(releases, version),
             VersionConstraint::LatestStable => Self::find_latest_stable(releases),
@@ -40,26 +40,26 @@ impl VersionResolver {
     /// Find a release with exact version match.
     ///
     /// Supports matching with or without 'v' prefix (e.g., "1.0.0" matches "v1.0.0").
-    pub fn find_exact<'a>(releases: &'a [MetaRelease], version: &str) -> Option<&'a MetaRelease> {
+    pub fn find_exact<'a>(releases: &'a [Release], version: &str) -> Option<&'a Release> {
         releases
             .iter()
-            .find(|r| Self::versions_match(&r.version, version))
+            .find(|r| Self::versions_match(&r.tag, version))
     }
 
     /// Find the latest stable (non-prerelease) release.
     ///
     /// Uses `published_at` for comparison when available, falls back to version string.
-    pub fn find_latest_stable(releases: &[MetaRelease]) -> Option<&MetaRelease> {
+    pub fn find_latest_stable(releases: &[Release]) -> Option<&Release> {
         releases
             .iter()
-            .filter(|r| !r.is_prerelease)
+            .filter(|r| !r.prerelease)
             .max_by(|a, b| Self::compare_releases(a, b))
     }
 
     /// Find the latest release including prereleases.
     ///
     /// Uses `published_at` for comparison when available, falls back to version string.
-    pub fn find_latest(releases: &[MetaRelease]) -> Option<&MetaRelease> {
+    pub fn find_latest(releases: &[Release]) -> Option<&Release> {
         releases.iter().max_by(|a, b| Self::compare_releases(a, b))
     }
 
@@ -67,17 +67,17 @@ impl VersionResolver {
     ///
     /// Returns the newer release if available, None if current is latest.
     pub fn check_update<'a>(
-        releases: &'a [MetaRelease],
+        releases: &'a [Release],
         current_version: &str,
         include_prerelease: bool,
-    ) -> Option<&'a MetaRelease> {
+    ) -> Option<&'a Release> {
         let latest = if include_prerelease {
             Self::find_latest(releases)
         } else {
             Self::find_latest_stable(releases)
         };
 
-        latest.filter(|r| !Self::versions_match(&r.version, current_version))
+        latest.filter(|r| !Self::versions_match(&r.tag, current_version))
     }
 
     /// Check if two version strings match.
@@ -92,12 +92,12 @@ impl VersionResolver {
     /// Compare two releases for ordering.
     ///
     /// Primary sort by `published_at` (descending), fallback to version string.
-    fn compare_releases(a: &MetaRelease, b: &MetaRelease) -> std::cmp::Ordering {
+    fn compare_releases(a: &Release, b: &Release) -> std::cmp::Ordering {
         match (&a.published_at, &b.published_at) {
             (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
             (Some(_), None) => std::cmp::Ordering::Greater,
             (None, Some(_)) => std::cmp::Ordering::Less,
-            (None, None) => a.version.cmp(&b.version),
+            (None, None) => a.tag.cmp(&b.tag),
         }
     }
 }
@@ -106,11 +106,11 @@ impl VersionResolver {
 mod tests {
     use super::*;
 
-    fn make_release(version: &str, published_at: Option<&str>, is_prerelease: bool) -> MetaRelease {
-        MetaRelease {
-            version: version.to_string(),
+    fn make_release(tag: &str, published_at: Option<&str>, prerelease: bool) -> Release {
+        Release {
+            tag: tag.to_string(),
             published_at: published_at.map(String::from),
-            is_prerelease,
+            prerelease,
             ..Default::default()
         }
     }
@@ -142,12 +142,12 @@ mod tests {
 
         let result = VersionResolver::find_exact(&releases, "v1.0.0");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v1.0.0");
+        assert_eq!(result.unwrap().tag, "v1.0.0");
 
         // Match without v prefix
         let result = VersionResolver::find_exact(&releases, "2.0.0");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v2.0.0");
+        assert_eq!(result.unwrap().tag, "v2.0.0");
 
         // No match
         let result = VersionResolver::find_exact(&releases, "v3.0.0");
@@ -164,7 +164,7 @@ mod tests {
 
         let result = VersionResolver::find_latest_stable(&releases);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v2.0.0"); // Should skip prerelease
+        assert_eq!(result.unwrap().tag, "v2.0.0"); // Should skip prerelease
     }
 
     #[test]
@@ -188,12 +188,12 @@ mod tests {
 
         let result = VersionResolver::find_latest(&releases);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v3.0.0-rc1"); // Should include prerelease
+        assert_eq!(result.unwrap().tag, "v3.0.0-rc1"); // Should include prerelease
     }
 
     #[test]
     fn test_find_latest_empty() {
-        let releases: Vec<MetaRelease> = vec![];
+        let releases: Vec<Release> = vec![];
         assert!(VersionResolver::find_latest(&releases).is_none());
         assert!(VersionResolver::find_latest_stable(&releases).is_none());
     }
@@ -208,7 +208,7 @@ mod tests {
         let constraint = VersionConstraint::Exact("v1.0.0".into());
         let result = VersionResolver::resolve(&releases, &constraint);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v1.0.0");
+        assert_eq!(result.unwrap().tag, "v1.0.0");
     }
 
     #[test]
@@ -221,7 +221,7 @@ mod tests {
         let constraint = VersionConstraint::LatestStable;
         let result = VersionResolver::resolve(&releases, &constraint);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v1.0.0");
+        assert_eq!(result.unwrap().tag, "v1.0.0");
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
         let constraint = VersionConstraint::Latest;
         let result = VersionResolver::resolve(&releases, &constraint);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().version, "v2.0.0-rc1");
+        assert_eq!(result.unwrap().tag, "v2.0.0-rc1");
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
 
         let update = VersionResolver::check_update(&releases, "v1.0.0", false);
         assert!(update.is_some());
-        assert_eq!(update.unwrap().version, "v2.0.0");
+        assert_eq!(update.unwrap().tag, "v2.0.0");
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
         // With prerelease - has update
         let update = VersionResolver::check_update(&releases, "v1.0.0", true);
         assert!(update.is_some());
-        assert_eq!(update.unwrap().version, "v2.0.0-rc1");
+        assert_eq!(update.unwrap().tag, "v2.0.0-rc1");
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         // v0.9.0 is "newer" by published_at despite lower version number
         let releases = vec![older, newer];
         let latest = VersionResolver::find_latest(&releases);
-        assert_eq!(latest.unwrap().version, "v0.9.0");
+        assert_eq!(latest.unwrap().tag, "v0.9.0");
     }
 
     #[test]
@@ -305,6 +305,6 @@ mod tests {
         // Without published_at, should fall back to version string comparison
         let releases = vec![v1, v2];
         let latest = VersionResolver::find_latest(&releases);
-        assert_eq!(latest.unwrap().version, "v2.0.0");
+        assert_eq!(latest.unwrap().tag, "v2.0.0");
     }
 }

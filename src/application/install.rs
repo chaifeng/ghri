@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use log::{info, warn};
 
 use crate::commands::InstallOptions;
-use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionResolver};
-use crate::provider::{Provider, ProviderFactory, RepoId};
+use crate::package::{LinkManager, Meta, PackageRepository, VersionResolver};
+use crate::provider::{Provider, ProviderFactory, Release, RepoId};
 use crate::runtime::Runtime;
 
 /// Result of resolving a version to install
@@ -24,7 +24,7 @@ use crate::runtime::Runtime;
 #[allow(dead_code)]
 pub struct ResolvedInstall {
     /// The resolved release to install
-    pub release: MetaRelease,
+    pub release: Release,
     /// Target directory for installation
     pub target_dir: PathBuf,
     /// Effective filters to use
@@ -65,13 +65,8 @@ pub trait InstallOperations: Send + Sync {
     -> Result<(Meta, bool)>;
 
     /// Resolve the version to install based on constraints
-    /// Returns a cloned MetaRelease to avoid lifetime issues
-    fn resolve_version(
-        &self,
-        meta: &Meta,
-        version: Option<String>,
-        pre: bool,
-    ) -> Result<MetaRelease>;
+    /// Returns a cloned Release to avoid lifetime issues
+    fn resolve_version(&self, meta: &Meta, version: Option<String>, pre: bool) -> Result<Release>;
 
     /// Get effective filters (user-provided or from saved meta)
     fn effective_filters(&self, options: &InstallOptions, meta: &Meta) -> Vec<String>;
@@ -214,7 +209,7 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
         meta: &'m Meta,
         version: Option<&str>,
         pre: bool,
-    ) -> Result<&'m MetaRelease> {
+    ) -> Result<&'m Release> {
         if let Some(ver) = version {
             // Find specific version
             VersionResolver::find_exact(&meta.releases, ver).ok_or_else(|| {
@@ -225,7 +220,7 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
                     meta.releases
                         .iter()
                         .take(5)
-                        .map(|r| r.version.as_str())
+                        .map(|r| r.tag.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -417,12 +412,7 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
         }
     }
 
-    fn resolve_version(
-        &self,
-        meta: &Meta,
-        version: Option<String>,
-        pre: bool,
-    ) -> Result<MetaRelease> {
+    fn resolve_version(&self, meta: &Meta, version: Option<String>, pre: bool) -> Result<Release> {
         if let Some(ver) = version {
             VersionResolver::find_exact(&meta.releases, &ver)
                 .cloned()
@@ -434,7 +424,7 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
                         meta.releases
                             .iter()
                             .take(5)
-                            .map(|r| r.version.as_str())
+                            .map(|r| r.tag.as_str())
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -504,7 +494,6 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
 mod tests {
     use super::*;
     use crate::http::HttpClient;
-    use crate::package::MetaRelease;
     use crate::runtime::MockRuntime;
 
     fn make_test_factory() -> ProviderFactory {
@@ -518,19 +507,19 @@ mod tests {
             api_url: "https://api.github.com".into(),
             current_version: "v1.0.0".into(),
             releases: vec![
-                MetaRelease {
-                    version: "v2.0.0".into(),
-                    is_prerelease: false,
+                Release {
+                    tag: "v2.0.0".into(),
+                    prerelease: false,
                     ..Default::default()
                 },
-                MetaRelease {
-                    version: "v2.0.0-rc1".into(),
-                    is_prerelease: true,
+                Release {
+                    tag: "v2.0.0-rc1".into(),
+                    prerelease: true,
                     ..Default::default()
                 },
-                MetaRelease {
-                    version: "v1.0.0".into(),
-                    is_prerelease: false,
+                Release {
+                    tag: "v1.0.0".into(),
+                    prerelease: false,
                     ..Default::default()
                 },
             ],
@@ -552,7 +541,7 @@ mod tests {
 
         let result = action.resolve_version(&meta, Some("v1.0.0"), false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().version, "v1.0.0");
+        assert_eq!(result.unwrap().tag, "v1.0.0");
     }
 
     #[test]
@@ -568,7 +557,7 @@ mod tests {
 
         let result = action.resolve_version(&meta, None, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().version, "v2.0.0");
+        assert_eq!(result.unwrap().tag, "v2.0.0");
     }
 
     #[test]
@@ -585,14 +574,14 @@ mod tests {
         let meta = Meta {
             name: "owner/repo".into(),
             releases: vec![
-                MetaRelease {
-                    version: "v2.0.0-rc1".into(),
-                    is_prerelease: true,
+                Release {
+                    tag: "v2.0.0-rc1".into(),
+                    prerelease: true,
                     ..Default::default()
                 },
-                MetaRelease {
-                    version: "v1.0.0".into(),
-                    is_prerelease: false,
+                Release {
+                    tag: "v1.0.0".into(),
+                    prerelease: false,
                     ..Default::default()
                 },
             ],
@@ -602,12 +591,12 @@ mod tests {
         // Without --pre, should get v1.0.0
         let result = action.resolve_version(&meta, None, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().version, "v1.0.0");
+        assert_eq!(result.unwrap().tag, "v1.0.0");
 
         // With --pre, should get v2.0.0-rc1
         let result = action.resolve_version(&meta, None, true);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().version, "v2.0.0-rc1");
+        assert_eq!(result.unwrap().tag, "v2.0.0-rc1");
     }
 
     #[test]

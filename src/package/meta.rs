@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::provider::{Release, ReleaseAsset, RepoId, RepoMetadata};
+use crate::provider::{Release, RepoId, RepoMetadata};
 use crate::runtime::Runtime;
 
 use super::LinkRule;
@@ -39,7 +39,7 @@ pub struct Meta {
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub current_version: String,
     #[serde(default)]
-    pub releases: Vec<MetaRelease>,
+    pub releases: Vec<Release>,
     /// List of link rules for creating external symlinks (updated on install/update)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkRule>,
@@ -80,7 +80,7 @@ impl Meta {
             updated_at: info.updated_at.unwrap_or_default(),
             current_version: current.to_string(),
             releases: {
-                let mut r: Vec<MetaRelease> = releases.into_iter().map(MetaRelease::from).collect();
+                let mut r: Vec<Release> = releases;
                 Meta::sort_releases_internal(&mut r);
                 r
             },
@@ -92,13 +92,13 @@ impl Meta {
         }
     }
 
-    fn sort_releases_internal(releases: &mut [MetaRelease]) {
+    fn sort_releases_internal(releases: &mut [Release]) {
         releases.sort_by(|a, b| {
             match (&a.published_at, &b.published_at) {
                 (Some(at_a), Some(at_b)) => at_b.cmp(at_a),  // Descending
                 (Some(_), None) => std::cmp::Ordering::Less, // Published comes before unpublished
                 (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.version.cmp(&a.version), // Version descending fallback
+                (None, None) => b.tag.cmp(&a.tag), // Version descending fallback
             }
         });
     }
@@ -107,28 +107,28 @@ impl Meta {
         Self::sort_releases_internal(&mut self.releases);
     }
 
-    pub fn get_latest_stable_release(&self) -> Option<&MetaRelease> {
+    pub fn get_latest_stable_release(&self) -> Option<&Release> {
         self.releases
             .iter()
-            .filter(|r| !r.is_prerelease)
+            .filter(|r| !r.prerelease)
             .max_by(|a, b| {
                 // Simplified version comparison: tag_name might not be semver-compliant,
                 // but published_at is a good proxy for "latest".
                 // If published_at is missing, fall back to version string comparison.
                 match (&a.published_at, &b.published_at) {
                     (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                    _ => a.version.cmp(&b.version),
+                    _ => a.tag.cmp(&b.tag),
                 }
             })
     }
 
     /// Get the latest release including pre-releases
-    pub fn get_latest_release(&self) -> Option<&MetaRelease> {
+    pub fn get_latest_release(&self) -> Option<&Release> {
         self.releases
             .iter()
             .max_by(|a, b| match (&a.published_at, &b.published_at) {
                 (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                _ => a.version.cmp(&b.version),
+                _ => a.tag.cmp(&b.tag),
             })
     }
 
@@ -244,11 +244,7 @@ impl Meta {
         }
 
         for new_release in other.releases {
-            if let Some(existing) = self
-                .releases
-                .iter_mut()
-                .find(|r| r.version == new_release.version)
-            {
+            if let Some(existing) = self.releases.iter_mut().find(|r| r.tag == new_release.tag) {
                 if existing != &new_release {
                     *existing = new_release;
                     changed = true;
@@ -267,81 +263,10 @@ impl Meta {
     }
 }
 
-/// Release metadata
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct MetaRelease {
-    pub version: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub published_at: Option<String>,
-    #[serde(default)]
-    pub is_prerelease: bool,
-    #[serde(default)]
-    pub tarball_url: String,
-    #[serde(default)]
-    pub assets: Vec<MetaAsset>,
-}
-
-impl From<Release> for MetaRelease {
-    fn from(r: Release) -> Self {
-        MetaRelease {
-            version: r.tag,
-            title: r.name,
-            published_at: r.published_at,
-            is_prerelease: r.prerelease,
-            tarball_url: r.tarball_url,
-            assets: r.assets.into_iter().map(MetaAsset::from).collect(),
-        }
-    }
-}
-
-impl From<MetaRelease> for Release {
-    fn from(r: MetaRelease) -> Self {
-        Release {
-            tag: r.version,
-            tarball_url: r.tarball_url,
-            name: r.title,
-            published_at: r.published_at,
-            prerelease: r.is_prerelease,
-            assets: r.assets.into_iter().map(ReleaseAsset::from).collect(),
-        }
-    }
-}
-
-/// Asset metadata
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct MetaAsset {
-    pub name: String,
-    #[serde(default)]
-    pub size: u64,
-    #[serde(default)]
-    pub download_url: String,
-}
-
-impl From<ReleaseAsset> for MetaAsset {
-    fn from(a: ReleaseAsset) -> Self {
-        MetaAsset {
-            name: a.name,
-            size: a.size,
-            download_url: a.download_url,
-        }
-    }
-}
-
-impl From<MetaAsset> for ReleaseAsset {
-    fn from(a: MetaAsset) -> Self {
-        ReleaseAsset {
-            name: a.name,
-            size: a.size,
-            download_url: a.download_url,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::ReleaseAsset;
     use crate::runtime::MockRuntime;
     use mockall::predicate::eq;
     use std::path::PathBuf;
@@ -420,9 +345,9 @@ mod tests {
         // --- Verify ---
 
         // Releases should be sorted by published_at descending (newest first)
-        assert_eq!(meta.releases[0].version, "v2.0.0"); // 2023-02-01 (newest)
-        assert_eq!(meta.releases[1].version, "v1.0.0"); // 2023-01-01
-        assert_eq!(meta.releases[2].version, "v0.9.0"); // 2022-12-01 (oldest)
+        assert_eq!(meta.releases[0].tag, "v2.0.0"); // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].tag, "v1.0.0"); // 2023-01-01
+        assert_eq!(meta.releases[2].tag, "v0.9.0"); // 2022-12-01 (oldest)
     }
 
     #[test]
@@ -437,14 +362,11 @@ mod tests {
             api_url: "api".into(),
             updated_at: "t1".into(),
             current_version: "v1".into(),
-            releases: vec![
-                Release {
-                    tag: "v1".into(),
-                    published_at: Some("2023-01-01".into()), // Older
-                    ..Default::default()
-                }
-                .into(),
-            ],
+            releases: vec![Release {
+                tag: "v1".into(),
+                published_at: Some("2023-01-01".into()), // Older
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -454,14 +376,11 @@ mod tests {
             api_url: "api".into(),
             updated_at: "t2".into(),
             current_version: "v1".into(),
-            releases: vec![
-                Release {
-                    tag: "v2".into(),
-                    published_at: Some("2023-02-01".into()), // Newer
-                    ..Default::default()
-                }
-                .into(),
-            ],
+            releases: vec![Release {
+                tag: "v2".into(),
+                published_at: Some("2023-02-01".into()), // Newer
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -472,8 +391,8 @@ mod tests {
         // --- Verify ---
 
         // After merge, releases should be sorted (newest first)
-        assert_eq!(meta.releases[0].version, "v2"); // 2023-02-01 (newest)
-        assert_eq!(meta.releases[1].version, "v1"); // 2023-01-01 (oldest)
+        assert_eq!(meta.releases[0].tag, "v2"); // 2023-02-01 (newest)
+        assert_eq!(meta.releases[1].tag, "v1"); // 2023-01-01 (oldest)
     }
 
     #[test]
@@ -484,27 +403,27 @@ mod tests {
         // --- Setup ---
 
         let mut releases = vec![
-            MetaRelease {
-                version: "v1".into(),
+            Release {
+                tag: "v1".into(),
                 published_at: None, // No date - will be sorted by version
-                title: None,
-                is_prerelease: false,
+                name: None,
+                prerelease: false,
                 tarball_url: "".into(),
                 assets: vec![],
             },
-            MetaRelease {
-                version: "v2".into(),
+            Release {
+                tag: "v2".into(),
                 published_at: None, // No date - will be sorted by version
-                title: None,
-                is_prerelease: false,
+                name: None,
+                prerelease: false,
                 tarball_url: "".into(),
                 assets: vec![],
             },
-            MetaRelease {
-                version: "v1.5".into(),
+            Release {
+                tag: "v1.5".into(),
                 published_at: Some("2023".into()), // Has date - comes first
-                title: None,
-                is_prerelease: false,
+                name: None,
+                prerelease: false,
                 tarball_url: "".into(),
                 assets: vec![],
             },
@@ -517,10 +436,10 @@ mod tests {
         // --- Verify ---
 
         // v1.5 has published_at, so it comes first
-        assert_eq!(releases[0].version, "v1.5");
+        assert_eq!(releases[0].tag, "v1.5");
         // v1 and v2 have no published_at, sorted by version descending
-        assert_eq!(releases[1].version, "v2");
-        assert_eq!(releases[2].version, "v1");
+        assert_eq!(releases[1].tag, "v2");
+        assert_eq!(releases[2].tag, "v1");
     }
 
     #[test]
@@ -535,17 +454,17 @@ mod tests {
         };
 
         // Add stable release v1 (older)
-        meta.releases.push(MetaRelease {
-            version: "v1".into(),
-            is_prerelease: false,
+        meta.releases.push(Release {
+            tag: "v1".into(),
+            prerelease: false,
             published_at: Some("2023".into()),
             ..Default::default()
         });
 
         // Add prerelease v2-rc (newer, but prerelease)
-        meta.releases.push(MetaRelease {
-            version: "v2-rc".into(),
-            is_prerelease: true, // This is a prerelease!
+        meta.releases.push(Release {
+            tag: "v2-rc".into(),
+            prerelease: true, // This is a prerelease!
             published_at: Some("2024".into()),
             ..Default::default()
         });
@@ -557,7 +476,7 @@ mod tests {
         // --- Verify ---
 
         // Should return v1 (the only stable release), not v2-rc (prerelease)
-        assert_eq!(latest.version, "v1");
+        assert_eq!(latest.tag, "v1");
     }
 
     #[test]
@@ -590,9 +509,9 @@ mod tests {
         };
 
         // Add only a prerelease version
-        meta.releases.push(MetaRelease {
-            version: "v1-rc".into(),
-            is_prerelease: true, // Only prerelease available
+        meta.releases.push(Release {
+            tag: "v1-rc".into(),
+            prerelease: true, // Only prerelease available
             ..Default::default()
         });
 
@@ -614,17 +533,17 @@ mod tests {
         };
 
         // Add stable release v1 (older)
-        meta.releases.push(MetaRelease {
-            version: "v1".into(),
-            is_prerelease: false,
+        meta.releases.push(Release {
+            tag: "v1".into(),
+            prerelease: false,
             published_at: Some("2023".into()),
             ..Default::default()
         });
 
         // Add prerelease v2-rc (newer)
-        meta.releases.push(MetaRelease {
-            version: "v2-rc".into(),
-            is_prerelease: true,
+        meta.releases.push(Release {
+            tag: "v2-rc".into(),
+            prerelease: true,
             published_at: Some("2024".into()),
             ..Default::default()
         });
@@ -636,7 +555,7 @@ mod tests {
         // --- Verify ---
 
         // Should return v2-rc (the latest including prereleases)
-        assert_eq!(latest.version, "v2-rc");
+        assert_eq!(latest.tag, "v2-rc");
     }
 
     #[test]
@@ -651,9 +570,9 @@ mod tests {
         };
 
         // Add only a prerelease version
-        meta.releases.push(MetaRelease {
-            version: "v1-rc".into(),
-            is_prerelease: true,
+        meta.releases.push(Release {
+            tag: "v1-rc".into(),
+            prerelease: true,
             ..Default::default()
         });
 
@@ -661,48 +580,42 @@ mod tests {
 
         // Should return v1-rc (the only release)
         let latest = meta.get_latest_release().unwrap();
-        assert_eq!(latest.version, "v1-rc");
+        assert_eq!(latest.tag, "v1-rc");
     }
 
     #[test]
-    fn test_meta_conversions() {
-        // Test conversion between Meta types and Source types (MetaAsset <-> ReleaseAsset, MetaRelease <-> Release)
+    fn test_release_serialization() {
+        // Test that Release serializes and deserializes correctly
 
-        // --- Test MetaAsset -> ReleaseAsset ---
+        // --- Setup ---
 
-        let meta_asset = MetaAsset {
-            name: "app.tar.gz".into(),
-            size: 1024,
-            download_url: "https://example.com/app.tar.gz".into(),
-        };
-
-        let asset: ReleaseAsset = meta_asset.clone().into();
-
-        // Verify conversion preserves all fields
-        assert_eq!(asset.name, "app.tar.gz");
-        assert_eq!(asset.size, 1024);
-        assert_eq!(asset.download_url, "https://example.com/app.tar.gz");
-
-        // --- Test MetaRelease -> Release ---
-
-        let meta_release = MetaRelease {
-            version: "v1.0.0".into(),
-            title: Some("Release 1.0.0".into()),
+        let release = Release {
+            tag: "v1.0.0".into(),
+            name: Some("Release 1.0.0".into()),
             published_at: Some("2023-01-01".into()),
-            is_prerelease: false,
+            prerelease: false,
             tarball_url: "https://example.com/tarball".into(),
-            assets: vec![meta_asset],
+            assets: vec![ReleaseAsset {
+                name: "app.tar.gz".into(),
+                size: 1024,
+                download_url: "https://example.com/app.tar.gz".into(),
+            }],
         };
 
-        let release: Release = meta_release.clone().into();
+        // --- Execute ---
 
-        // Verify conversion preserves all fields
-        assert_eq!(release.tag, "v1.0.0");
-        assert_eq!(release.name, Some("Release 1.0.0".into()));
-        assert_eq!(release.published_at, Some("2023-01-01".into()));
-        assert!(!release.prerelease);
-        assert_eq!(release.tarball_url, "https://example.com/tarball");
-        assert_eq!(release.assets.len(), 1);
+        let json = serde_json::to_string(&release).unwrap();
+        let deserialized: Release = serde_json::from_str(&json).unwrap();
+
+        // --- Verify ---
+
+        assert_eq!(deserialized.tag, "v1.0.0");
+        assert_eq!(deserialized.name, Some("Release 1.0.0".into()));
+        assert_eq!(deserialized.published_at, Some("2023-01-01".into()));
+        assert!(!deserialized.prerelease);
+        assert_eq!(deserialized.tarball_url, "https://example.com/tarball");
+        assert_eq!(deserialized.assets.len(), 1);
+        assert_eq!(deserialized.assets[0].name, "app.tar.gz");
     }
 
     #[test]
@@ -838,8 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn test_meta_load_partial_fields_backward_compat() {
-        // Test backward compatibility: loading meta.json with some fields missing
+    fn test_meta_load_partial_fields() {
+        // Test loading meta.json with some fields missing
         // Missing fields should get default values
 
         let mut runtime = MockRuntime::new();
@@ -858,7 +771,7 @@ mod tests {
                     "name": "owner/repo",
                     "current_version": "v1.0.0",
                     "releases": [
-                        {"version": "v1.0.0"}
+                        {"tag": "v1.0.0"}
                     ]
                 }"#
                 .into())
@@ -879,37 +792,37 @@ mod tests {
         // Should have 1 release with minimal fields defaulted
         assert!(meta.releases.len() == 1);
         let release = &meta.releases[0];
-        assert_eq!(release.version, "v1.0.0");
+        assert_eq!(release.tag, "v1.0.0");
         assert_eq!(release.tarball_url, ""); // Defaulted to empty
-        assert!(!release.is_prerelease); // Defaulted to false
+        assert!(!release.prerelease); // Defaulted to false
         assert!(release.assets.is_empty()); // Defaulted to empty
     }
 
     #[test]
-    fn test_meta_release_minimal_backward_compat() {
-        // Test backward compatibility: deserializing a release with only version field
+    fn test_release_minimal_fields() {
+        // Test deserializing a release with only tag field
         // Missing fields should get default values
 
         // --- Setup ---
 
-        let json = r#"{"version": "v2.0.0"}"#;
+        let json = r#"{"tag": "v2.0.0"}"#;
 
         // --- Execute ---
 
-        let release: MetaRelease = serde_json::from_str(json).unwrap();
+        let release: Release = serde_json::from_str(json).unwrap();
 
         // --- Verify Defaults Applied ---
 
-        assert_eq!(release.version, "v2.0.0");
-        assert_eq!(release.title, None); // Default: None
+        assert_eq!(release.tag, "v2.0.0");
+        assert_eq!(release.name, None); // Default: None
         assert_eq!(release.published_at, None); // Default: None
-        assert!(!release.is_prerelease); // Default: false
+        assert!(!release.prerelease); // Default: false
         assert_eq!(release.tarball_url, ""); // Default: empty string
         assert!(release.assets.is_empty()); // Default: empty vec
     }
 
     #[test]
-    fn test_meta_asset_minimal_backward_compat() {
+    fn test_release_asset_minimal_backward_compat() {
         // Test backward compatibility: deserializing an asset with only name field
         // Missing fields should get default values
 
@@ -919,7 +832,7 @@ mod tests {
 
         // --- Execute ---
 
-        let asset: MetaAsset = serde_json::from_str(json).unwrap();
+        let asset: ReleaseAsset = serde_json::from_str(json).unwrap();
 
         // --- Verify Defaults Applied ---
 

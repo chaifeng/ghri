@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::{InstallAction, InstallOperations};
 use crate::cleanup::CleanupContext;
-use crate::provider::{PackageSpec, Release};
+use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
 use super::config::{Config, InstallOptions};
@@ -91,8 +91,7 @@ pub async fn run_install<R: Runtime + 'static>(
     let effective_filters = action.effective_filters(&options, &meta);
 
     // Resolve version
-    let meta_release = action.resolve_version(&meta, spec.version.clone(), options.pre)?;
-    let release: Release = meta_release.into();
+    let release = action.resolve_version(&meta, spec.version.clone(), options.pre)?;
 
     // Check if already installed
     if action.is_installed(repo, &release.tag) {
@@ -175,8 +174,8 @@ pub async fn run_install<R: Runtime + 'static>(
 mod tests {
     use super::*;
     use crate::application::MockInstallOperations;
-    use crate::package::{Meta, MetaRelease};
-    use crate::provider::{MockProvider, RepoId};
+    use crate::package::Meta;
+    use crate::provider::{MockProvider, Release, RepoId};
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;
@@ -204,13 +203,13 @@ mod tests {
             name: "owner/repo".into(),
             api_url: "https://api.github.com".into(),
             current_version: String::new(),
-            releases: vec![MetaRelease {
-                version: "v1.0.0".into(),
+            releases: vec![Release {
+                tag: "v1.0.0".into(),
                 published_at: Some("2024-01-01T00:00:00Z".into()),
-                is_prerelease: false,
+                prerelease: false,
                 assets: vec![],
                 tarball_url: "https://example.com/tarball".into(),
-                title: None,
+                name: None,
             }],
             ..Default::default()
         }
@@ -536,21 +535,21 @@ mod tests {
             api_url: "https://api.github.com".into(),
             current_version: String::new(),
             releases: vec![
-                MetaRelease {
-                    version: "v2.0.0".into(),
+                Release {
+                    tag: "v2.0.0".into(),
                     published_at: Some("2024-02-01T00:00:00Z".into()),
-                    is_prerelease: false,
+                    prerelease: false,
                     assets: vec![],
                     tarball_url: "https://example.com/tarball/v2".into(),
-                    title: None,
+                    name: None,
                 },
-                MetaRelease {
-                    version: "v1.0.0".into(),
+                Release {
+                    tag: "v1.0.0".into(),
                     published_at: Some("2024-01-01T00:00:00Z".into()),
-                    is_prerelease: false,
+                    prerelease: false,
                     assets: vec![],
                     tarball_url: "https://example.com/tarball/v1".into(),
-                    title: None,
+                    name: None,
                 },
             ],
             ..Default::default()
