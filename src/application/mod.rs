@@ -5,11 +5,13 @@
 
 mod install;
 mod list;
+mod prune;
 mod show;
 mod upgrade;
 
 pub use install::{InstallAction, InstallOperations};
 pub use list::{ListAction, PackageInfo};
+pub use prune::{PruneAction, PruneInfo};
 pub use show::{PackageDetails, ShowAction};
 pub use upgrade::{UpdateCheck, UpgradeAction};
 
