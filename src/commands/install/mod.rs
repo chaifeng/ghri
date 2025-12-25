@@ -2,7 +2,7 @@ use anyhow::Result;
 use log::warn;
 use std::sync::{Arc, Mutex};
 
-use crate::application::{InstallOperations, InstallUseCase};
+use crate::application::{InstallAction, InstallOperations};
 use crate::cleanup::CleanupContext;
 use crate::provider::Release;
 use crate::runtime::Runtime;
@@ -42,8 +42,8 @@ pub async fn install<R: Runtime + 'static>(
     // Build services from config
     let services = RegistryServices::from_config(&config)?;
 
-    // Create use case (borrows from Arc)
-    let use_case = InstallUseCase::new(
+    // Create action (borrows from Arc)
+    let action = InstallAction::new(
         runtime.as_ref(),
         &services.registry,
         config.install_root.clone(),
@@ -61,7 +61,7 @@ pub async fn install<R: Runtime + 'static>(
     run_install(
         &config,
         Arc::clone(&runtime),
-        &use_case,
+        &action,
         &release_installer,
         repo_str,
         options,
@@ -74,11 +74,11 @@ pub async fn install<R: Runtime + 'static>(
 /// This function takes all dependencies as parameters, enabling:
 /// - Unit tests with mock InstallOperations and ReleaseInstaller
 /// - Integration tests with real implementations
-#[tracing::instrument(skip(config, runtime, use_case, release_installer, options))]
+#[tracing::instrument(skip(config, runtime, action, release_installer, options))]
 pub async fn run_install<R: Runtime + 'static>(
     config: &Config,
     runtime: Arc<R>,
-    use_case: &dyn InstallOperations,
+    action: &dyn InstallOperations,
     release_installer: &dyn ReleaseInstaller,
     repo_str: &str,
     options: InstallOptions,
@@ -89,8 +89,8 @@ pub async fn run_install<R: Runtime + 'static>(
     println!("   resolving {}", repo);
 
     // Get or fetch metadata
-    let source = use_case.resolve_source_for_new()?;
-    let (mut meta, is_new) = use_case.get_or_fetch_meta(repo, source.as_ref()).await?;
+    let source = action.resolve_source_for_new()?;
+    let (mut meta, is_new) = action.get_or_fetch_meta(repo, source.as_ref()).await?;
 
     // Get effective filters
     let app_options = crate::application::InstallOptions {
@@ -99,20 +99,20 @@ pub async fn run_install<R: Runtime + 'static>(
         yes: options.yes,
         original_args: options.original_args.clone(),
     };
-    let effective_filters = use_case.effective_filters(&app_options, &meta);
+    let effective_filters = action.effective_filters(&app_options, &meta);
 
     // Resolve version
-    let meta_release = use_case.resolve_version(&meta, spec.version.clone(), options.pre)?;
+    let meta_release = action.resolve_version(&meta, spec.version.clone(), options.pre)?;
     let release: Release = meta_release.into();
 
     // Check if already installed
-    if use_case.is_installed(repo, &release.tag) {
+    if action.is_installed(repo, &release.tag) {
         println!("   {} {} is already installed", repo, release.tag);
         return Ok(());
     }
 
-    let target_dir = use_case.version_dir(repo, &release.tag);
-    let meta_path = use_case.meta_path(repo);
+    let target_dir = action.version_dir(repo, &release.tag);
+    let meta_path = action.meta_path(repo);
 
     // Get download plan and show confirmation
     let plan = get_download_plan(&release, &effective_filters)?;
@@ -145,7 +145,7 @@ pub async fn run_install<R: Runtime + 'static>(
         .await?;
 
     // Update 'current' symlink
-    use_case.update_current_link(repo, &release.tag)?;
+    action.update_current_link(repo, &release.tag)?;
 
     // Update external links
     if let Some(package_dir) = target_dir.parent()
@@ -157,7 +157,7 @@ pub async fn run_install<R: Runtime + 'static>(
     // Save metadata
     meta.current_version = release.tag.clone();
     meta.filters = effective_filters;
-    if let Err(e) = use_case.save_meta(repo, &meta) {
+    if let Err(e) = action.save_meta(repo, &meta) {
         warn!("Failed to save package metadata: {}. Continuing.", e);
     }
 
@@ -236,7 +236,7 @@ mod tests {
         // Only need to mock confirm() since we use yes: true in options
         // (confirm is skipped when yes=true)
 
-        let mut use_case = MockInstallOperations::new();
+        let mut action = MockInstallOperations::new();
         let mut release_installer = MockReleaseInstaller::new();
 
         let repo = RepoId {
@@ -247,37 +247,37 @@ mod tests {
         let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // Setup use_case expectations
-        use_case
+        // Setup action expectations
+        action
             .expect_resolve_source_for_new()
             .returning(move || Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
-        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+        action.expect_get_or_fetch_meta().returning(move |_, _| {
             let m = meta_clone.clone();
             Box::pin(async move { Ok((m, true)) })
         });
 
-        use_case.expect_effective_filters().returning(|_, _| vec![]);
+        action.expect_effective_filters().returning(|_, _| vec![]);
 
         let release = meta.releases[0].clone();
-        use_case
+        action
             .expect_resolve_version()
             .returning(move |_, _, _| Ok(release.clone()));
 
-        use_case
+        action
             .expect_is_installed()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(|_, _| false);
 
         let target_dir_clone = target_dir.clone();
-        use_case
+        action
             .expect_version_dir()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(move |_, _| target_dir_clone.clone());
 
         let meta_path_clone = meta_path.clone();
-        use_case
+        action
             .expect_meta_path()
             .with(eq(repo.clone()))
             .returning(move |_| meta_path_clone.clone());
@@ -288,13 +288,13 @@ mod tests {
             .returning(|_, _, _, _, _| Ok(()));
 
         // Mock update_current_link
-        use_case
+        action
             .expect_update_current_link()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(|_, _| Ok(()));
 
         // Mock save_meta
-        use_case.expect_save_meta().returning(|_, _| Ok(()));
+        action.expect_save_meta().returning(|_, _| Ok(()));
 
         // Execute
         let config = test_config();
@@ -302,7 +302,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "owner/repo",
             options,
@@ -317,7 +317,7 @@ mod tests {
         // Test that installation is skipped when version is already installed
 
         let runtime = MockRuntime::new();
-        let mut use_case = MockInstallOperations::new();
+        let mut action = MockInstallOperations::new();
         let release_installer = MockReleaseInstaller::new(); // No install() call expected
 
         let repo = RepoId {
@@ -326,26 +326,26 @@ mod tests {
         };
         let meta = test_meta();
 
-        // Setup use_case expectations
-        use_case
+        // Setup action expectations
+        action
             .expect_resolve_source_for_new()
             .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
-        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+        action.expect_get_or_fetch_meta().returning(move |_, _| {
             let m = meta_clone.clone();
             Box::pin(async move { Ok((m, false)) })
         });
 
-        use_case.expect_effective_filters().returning(|_, _| vec![]);
+        action.expect_effective_filters().returning(|_, _| vec![]);
 
         let release = meta.releases[0].clone();
-        use_case
+        action
             .expect_resolve_version()
             .returning(move |_, _, _| Ok(release.clone()));
 
         // Already installed!
-        use_case
+        action
             .expect_is_installed()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(|_, _| true);
@@ -356,7 +356,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "owner/repo",
             options,
@@ -374,40 +374,40 @@ mod tests {
         let mut runtime = MockRuntime::new();
         runtime.expect_confirm().returning(|_| Ok(false)); // User says no
 
-        let mut use_case = MockInstallOperations::new();
+        let mut action = MockInstallOperations::new();
         let release_installer = MockReleaseInstaller::new(); // No install() call expected
 
         let meta = test_meta();
         let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // Setup use_case expectations
-        use_case
+        // Setup action expectations
+        action
             .expect_resolve_source_for_new()
             .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
-        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+        action.expect_get_or_fetch_meta().returning(move |_, _| {
             let m = meta_clone.clone();
             Box::pin(async move { Ok((m, true)) })
         });
 
-        use_case.expect_effective_filters().returning(|_, _| vec![]);
+        action.expect_effective_filters().returning(|_, _| vec![]);
 
         let release = meta.releases[0].clone();
-        use_case
+        action
             .expect_resolve_version()
             .returning(move |_, _, _| Ok(release.clone()));
 
-        use_case.expect_is_installed().returning(|_, _| false);
+        action.expect_is_installed().returning(|_, _| false);
 
         let target_dir_clone = target_dir.clone();
-        use_case
+        action
             .expect_version_dir()
             .returning(move |_, _| target_dir_clone.clone());
 
         let meta_path_clone = meta_path.clone();
-        use_case
+        action
             .expect_meta_path()
             .returning(move |_| meta_path_clone.clone());
 
@@ -419,7 +419,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "owner/repo",
             options,
@@ -433,7 +433,7 @@ mod tests {
     async fn test_run_install_invalid_repo_spec() {
         // Test that invalid repo spec returns error early
         let runtime = MockRuntime::new();
-        let use_case = MockInstallOperations::new(); // No calls expected
+        let action = MockInstallOperations::new(); // No calls expected
         let release_installer = MockReleaseInstaller::new(); // No calls expected
 
         let config = test_config();
@@ -441,7 +441,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "invalid-repo-string-without-slash",
             options,
@@ -461,7 +461,7 @@ mod tests {
     async fn test_run_install_download_fails() {
         // Test error handling when release_installer fails
         let runtime = MockRuntime::new();
-        let mut use_case = MockInstallOperations::new();
+        let mut action = MockInstallOperations::new();
         let mut release_installer = MockReleaseInstaller::new();
 
         let repo = RepoId {
@@ -472,37 +472,37 @@ mod tests {
         let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // Setup use_case expectations
-        use_case
+        // Setup action expectations
+        action
             .expect_resolve_source_for_new()
             .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
-        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+        action.expect_get_or_fetch_meta().returning(move |_, _| {
             let m = meta_clone.clone();
             Box::pin(async move { Ok((m, true)) })
         });
 
-        use_case.expect_effective_filters().returning(|_, _| vec![]);
+        action.expect_effective_filters().returning(|_, _| vec![]);
 
         let release = meta.releases[0].clone();
-        use_case
+        action
             .expect_resolve_version()
             .returning(move |_, _, _| Ok(release.clone()));
 
-        use_case
+        action
             .expect_is_installed()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(|_, _| false);
 
         let target_dir_clone = target_dir.clone();
-        use_case
+        action
             .expect_version_dir()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(move |_, _| target_dir_clone.clone());
 
         let meta_path_clone = meta_path.clone();
-        use_case
+        action
             .expect_meta_path()
             .with(eq(repo.clone()))
             .returning(move |_| meta_path_clone.clone());
@@ -518,7 +518,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "owner/repo",
             options,
@@ -533,7 +533,7 @@ mod tests {
     async fn test_run_install_with_specific_version() {
         // Test installing a specific version (e.g., owner/repo@v2.0.0)
         let runtime = MockRuntime::new();
-        let mut use_case = MockInstallOperations::new();
+        let mut action = MockInstallOperations::new();
         let mut release_installer = MockReleaseInstaller::new();
 
         let repo = RepoId {
@@ -570,39 +570,39 @@ mod tests {
         let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v2.0.0");
         let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
-        // Setup use_case expectations
-        use_case
+        // Setup action expectations
+        action
             .expect_resolve_source_for_new()
             .returning(|| Ok(Arc::new(MockProvider::new())));
 
         let meta_clone = meta.clone();
-        use_case.expect_get_or_fetch_meta().returning(move |_, _| {
+        action.expect_get_or_fetch_meta().returning(move |_, _| {
             let m = meta_clone.clone();
             Box::pin(async move { Ok((m, true)) })
         });
 
-        use_case.expect_effective_filters().returning(|_, _| vec![]);
+        action.expect_effective_filters().returning(|_, _| vec![]);
 
         // resolve_version should be called with the specified version
         let release = meta.releases[0].clone();
-        use_case
+        action
             .expect_resolve_version()
             .withf(|_, version, _| version == &Some("v2.0.0".to_string()))
             .returning(move |_, _, _| Ok(release.clone()));
 
-        use_case
+        action
             .expect_is_installed()
             .with(eq(repo.clone()), eq("v2.0.0"))
             .returning(|_, _| false);
 
         let target_dir_clone = target_dir.clone();
-        use_case
+        action
             .expect_version_dir()
             .with(eq(repo.clone()), eq("v2.0.0"))
             .returning(move |_, _| target_dir_clone.clone());
 
         let meta_path_clone = meta_path.clone();
-        use_case
+        action
             .expect_meta_path()
             .with(eq(repo.clone()))
             .returning(move |_| meta_path_clone.clone());
@@ -611,12 +611,12 @@ mod tests {
             .expect_install()
             .returning(|_, _, _, _, _| Ok(()));
 
-        use_case
+        action
             .expect_update_current_link()
             .with(eq(repo.clone()), eq("v2.0.0"))
             .returning(|_, _| Ok(()));
 
-        use_case.expect_save_meta().returning(|_, _| Ok(()));
+        action.expect_save_meta().returning(|_, _| Ok(()));
 
         // Execute with version spec
         let config = test_config();
@@ -624,7 +624,7 @@ mod tests {
         let result = run_install(
             &config,
             Arc::new(runtime),
-            &use_case,
+            &action,
             &release_installer,
             "owner/repo@v2.0.0", // Specific version
             options,

@@ -1,9 +1,9 @@
-//! Upgrade use case - orchestrates upgrading installed packages.
+//! Upgrade action - orchestrates upgrading installed packages.
 //!
-//! This use case coordinates:
+//! This action coordinates:
 //! - Finding installed packages
 //! - Checking for available updates
-//! - Delegating to InstallUseCase for actual installation
+//! - Delegating to InstallAction for actual installation
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,9 +14,9 @@ use crate::package::{Meta, PackageRepository};
 use crate::provider::{Provider, ProviderRegistry, RepoId};
 use crate::runtime::Runtime;
 
-use super::install::InstallUseCase;
+use super::install::InstallAction;
 
-/// Options for the upgrade use case
+/// Options for the upgrade action
 #[derive(Debug, Clone, Default)]
 pub struct UpgradeOptions {
     /// Allow upgrading to pre-release versions
@@ -36,16 +36,16 @@ pub struct UpdateCheck<'a> {
     pub has_update: bool,
 }
 
-/// Upgrade use case - checks and performs package upgrades
-pub struct UpgradeUseCase<'a, R: Runtime> {
+/// Upgrade action - checks and performs package upgrades
+pub struct UpgradeAction<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
     provider_registry: &'a ProviderRegistry,
     install_root: PathBuf,
 }
 
-impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
-    /// Create a new upgrade use case
+impl<'a, R: Runtime> UpgradeAction<'a, R> {
+    /// Create a new upgrade action
     pub fn new(
         runtime: &'a R,
         provider_registry: &'a ProviderRegistry,
@@ -59,9 +59,9 @@ impl<'a, R: Runtime> UpgradeUseCase<'a, R> {
         }
     }
 
-    /// Get the install use case for performing actual installations
-    pub fn install_use_case(&self) -> InstallUseCase<'a, R> {
-        InstallUseCase::new(
+    /// Get the install action for performing actual installations
+    pub fn install_action(&self) -> InstallAction<'a, R> {
+        InstallAction::new(
             self.runtime,
             self.provider_registry,
             self.install_root.clone(),
@@ -182,10 +182,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = UpgradeUseCase::new(&runtime, &registry, "/test".into());
+        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![("v2.0.0", false), ("v1.0.0", false)]);
-        let check = use_case.check_update(&meta, false);
+        let check = action.check_update(&meta, false);
 
         assert!(check.has_update);
         assert_eq!(check.latest_version, Some("v2.0.0".into()));
@@ -199,10 +199,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = UpgradeUseCase::new(&runtime, &registry, "/test".into());
+        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
 
         let meta = make_test_meta("v2.0.0", vec![("v2.0.0", false), ("v1.0.0", false)]);
-        let check = use_case.check_update(&meta, false);
+        let check = action.check_update(&meta, false);
 
         assert!(!check.has_update);
         assert_eq!(check.latest_version, Some("v2.0.0".into()));
@@ -216,16 +216,16 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = UpgradeUseCase::new(&runtime, &registry, "/test".into());
+        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![("v2.0.0-rc1", true), ("v1.0.0", false)]);
 
         // Without prerelease flag - no update (stable is v1.0.0)
-        let check = use_case.check_update(&meta, false);
+        let check = action.check_update(&meta, false);
         assert!(!check.has_update);
 
         // With prerelease flag - has update
-        let check = use_case.check_update(&meta, true);
+        let check = action.check_update(&meta, true);
         assert!(check.has_update);
         assert_eq!(check.latest_version, Some("v2.0.0-rc1".into()));
     }
@@ -238,10 +238,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = UpgradeUseCase::new(&runtime, &registry, "/test".into());
+        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![]);
-        let check = use_case.check_update(&meta, false);
+        let check = action.check_update(&meta, false);
 
         assert!(!check.has_update);
         assert!(check.latest_version.is_none());
@@ -255,14 +255,14 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = UpgradeUseCase::new(&runtime, &registry, "/test".into());
+        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
 
         let repos = vec![
             "owner1/repo1".to_string(),
             "owner2/repo2".to_string(),
             "invalid".to_string(), // Should be filtered out
         ];
-        let filters = use_case.parse_repo_filters(&repos);
+        let filters = action.parse_repo_filters(&repos);
 
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].owner, "owner1");

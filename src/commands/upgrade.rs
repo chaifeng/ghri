@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
-use crate::application::{InstallUseCase, UpgradeUseCase};
+use crate::application::{InstallAction, UpgradeAction};
 use crate::cleanup::CleanupContext;
 use crate::provider::RepoId;
 use crate::runtime::Runtime;
@@ -31,13 +31,12 @@ async fn run_upgrade<R: Runtime + 'static>(
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
-    // First, use UpgradeUseCase to find packages and check for updates
+    // First, use UpgradeAction to find packages and check for updates
     let packages_to_upgrade: Vec<_> = {
-        let use_case =
-            UpgradeUseCase::new(&runtime, &services.registry, config.install_root.clone());
+        let action = UpgradeAction::new(&runtime, &services.registry, config.install_root.clone());
 
         // Find all installed packages
-        let packages = use_case.find_all_packages()?;
+        let packages = action.find_all_packages()?;
 
         if packages.is_empty() {
             println!("No packages installed.");
@@ -45,7 +44,7 @@ async fn run_upgrade<R: Runtime + 'static>(
         }
 
         // Parse and filter repositories
-        let filter_repos = use_case.parse_repo_filters(&repos);
+        let filter_repos = action.parse_repo_filters(&repos);
 
         // Collect packages that need upgrading
         packages
@@ -62,7 +61,7 @@ async fn run_upgrade<R: Runtime + 'static>(
                 }
 
                 // Check for available update
-                let update_check = use_case.check_update(&meta, options.pre);
+                let update_check = action.check_update(&meta, options.pre);
 
                 match update_check.latest_version {
                     Some(latest) if update_check.has_update => {
@@ -89,8 +88,8 @@ async fn run_upgrade<R: Runtime + 'static>(
     // Wrap runtime in Arc for shared ownership
     let runtime = Arc::new(runtime);
 
-    // Create InstallUseCase for orchestration
-    let use_case = InstallUseCase::new(
+    // Create InstallAction for orchestration
+    let action = InstallAction::new(
         runtime.as_ref(),
         &services.registry,
         config.install_root.clone(),
@@ -128,7 +127,7 @@ async fn run_upgrade<R: Runtime + 'static>(
         if let Err(e) = run_install(
             config,
             Arc::clone(&runtime),
-            &use_case,
+            &action,
             &release_installer,
             &repo_str,
             install_options,

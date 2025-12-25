@@ -1,6 +1,6 @@
-//! Install use case - orchestrates the package installation flow.
+//! Install action - orchestrates the package installation flow.
 //!
-//! This use case coordinates:
+//! This action coordinates:
 //! - Provider resolution (from registry or package metadata)
 //! - Version resolution
 //! - Download and extraction
@@ -18,7 +18,7 @@ use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionR
 use crate::provider::{Provider, ProviderRegistry, RepoId};
 use crate::runtime::Runtime;
 
-/// Options for the install use case
+/// Options for the install action
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions {
     /// Asset name filters (e.g., ["*linux*", "*x86_64*"])
@@ -43,7 +43,7 @@ pub struct ResolvedInstall {
     pub filters: Vec<String>,
 }
 
-/// Trait for install use case operations
+/// Trait for install action operations
 ///
 /// This trait abstracts the install orchestration logic, enabling:
 /// - Dependency injection for testing
@@ -113,8 +113,8 @@ pub trait InstallOperations: Send + Sync {
     fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Provider>>;
 }
 
-/// Install use case - platform-agnostic installation orchestration
-pub struct InstallUseCase<'a, R: Runtime> {
+/// Install action - platform-agnostic installation orchestration
+pub struct InstallAction<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
     source_registry: &'a ProviderRegistry,
@@ -122,8 +122,8 @@ pub struct InstallUseCase<'a, R: Runtime> {
     install_root: PathBuf,
 }
 
-impl<'a, R: Runtime> InstallUseCase<'a, R> {
-    /// Create a new install use case
+impl<'a, R: Runtime> InstallAction<'a, R> {
+    /// Create a new install action
     pub fn new(
         runtime: &'a R,
         source_registry: &'a ProviderRegistry,
@@ -361,9 +361,9 @@ impl<'a, R: Runtime> InstallUseCase<'a, R> {
     }
 }
 
-// Implement InstallOperations trait for InstallUseCase
+// Implement InstallOperations trait for InstallAction
 #[async_trait]
-impl<'a, R: Runtime + 'static> InstallOperations for InstallUseCase<'a, R> {
+impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
     fn get_cached_meta(&self, repo: &RepoId) -> Result<Option<Meta>> {
         self.package_repo.load(&repo.owner, &repo.repo)
     }
@@ -571,10 +571,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
         let meta = make_test_meta();
 
-        let result = use_case.resolve_version(&meta, Some("v1.0.0"), false);
+        let result = action.resolve_version(&meta, Some("v1.0.0"), false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version, "v1.0.0");
     }
@@ -587,10 +587,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
         let meta = make_test_meta();
 
-        let result = use_case.resolve_version(&meta, None, false);
+        let result = action.resolve_version(&meta, None, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version, "v2.0.0");
     }
@@ -603,7 +603,7 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
 
         // Meta with only pre-release as latest
         let meta = Meta {
@@ -624,12 +624,12 @@ mod tests {
         };
 
         // Without --pre, should get v1.0.0
-        let result = use_case.resolve_version(&meta, None, false);
+        let result = action.resolve_version(&meta, None, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version, "v1.0.0");
 
         // With --pre, should get v2.0.0-rc1
-        let result = use_case.resolve_version(&meta, None, true);
+        let result = action.resolve_version(&meta, None, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version, "v2.0.0-rc1");
     }
@@ -642,10 +642,10 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
         let meta = make_test_meta();
 
-        let result = use_case.resolve_version(&meta, Some("v999.0.0"), false);
+        let result = action.resolve_version(&meta, Some("v999.0.0"), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -658,7 +658,7 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
         let meta = make_test_meta();
 
         // User provides filters -> use them
@@ -666,7 +666,7 @@ mod tests {
             filters: vec!["*darwin*".into()],
             ..Default::default()
         };
-        let filters = use_case.effective_filters(&options, &meta);
+        let filters = action.effective_filters(&options, &meta);
         assert_eq!(filters, vec!["*darwin*"]);
     }
 
@@ -678,12 +678,12 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/test".into());
+        let action = InstallAction::new(&runtime, &registry, "/test".into());
         let meta = make_test_meta();
 
         // User provides no filters -> use saved from meta
         let options = InstallOptions::default();
-        let filters = use_case.effective_filters(&options, &meta);
+        let filters = action.effective_filters(&options, &meta);
         assert_eq!(filters, vec!["*linux*"]);
     }
 
@@ -695,13 +695,13 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/root".into());
+        let action = InstallAction::new(&runtime, &registry, "/root".into());
 
         let repo = RepoId {
             owner: "owner".into(),
             repo: "repo".into(),
         };
-        let dir = use_case.version_dir(&repo, "v1.0.0");
+        let dir = action.version_dir(&repo, "v1.0.0");
         assert_eq!(dir, PathBuf::from("/root/owner/repo/v1.0.0"));
     }
 
@@ -713,13 +713,13 @@ mod tests {
             .returning(|| std::path::PathBuf::from("/tmp"));
 
         let registry = make_test_registry();
-        let use_case = InstallUseCase::new(&runtime, &registry, "/root".into());
+        let action = InstallAction::new(&runtime, &registry, "/root".into());
 
         let repo = RepoId {
             owner: "owner".into(),
             repo: "repo".into(),
         };
-        let dir = use_case.package_dir(&repo);
+        let dir = action.package_dir(&repo);
         assert_eq!(dir, PathBuf::from("/root/owner/repo"));
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log::warn;
 
-use crate::application::InstallUseCase;
+use crate::application::InstallAction;
 use crate::package::VersionResolver;
 use crate::provider::RepoId;
 use crate::runtime::Runtime;
@@ -27,9 +27,9 @@ async fn run_update<R: Runtime + 'static>(
     services: RegistryServices,
     repos: Vec<String>,
 ) -> Result<()> {
-    // Create InstallUseCase for metadata operations
-    let use_case = InstallUseCase::new(&runtime, &services.registry, config.install_root.clone());
-    let pkg_repo = use_case.package_repo();
+    // Create InstallAction for metadata operations
+    let action = InstallAction::new(&runtime, &services.registry, config.install_root.clone());
+    let pkg_repo = action.package_repo();
 
     let packages = pkg_repo.find_all_with_meta()?;
 
@@ -60,8 +60,8 @@ async fn run_update<R: Runtime + 'static>(
 
         println!("   updating {}", repo);
 
-        // Resolve source from package metadata using InstallUseCase
-        let source = match use_case.resolve_source_from_meta(&meta) {
+        // Resolve source from package metadata using InstallAction
+        let source = match action.resolve_source_from_meta(&meta) {
             Ok(s) => s,
             Err(e) => {
                 warn!("Failed to resolve source for {}: {}", repo, e);
@@ -69,8 +69,8 @@ async fn run_update<R: Runtime + 'static>(
             }
         };
 
-        // Fetch new metadata using InstallUseCase with saved API URL
-        let new_meta = match use_case
+        // Fetch new metadata using InstallAction with saved API URL
+        let new_meta = match action
             .fetch_meta_at(&repo, source.as_ref(), &meta.api_url, &meta.current_version)
             .await
         {
@@ -88,7 +88,7 @@ async fn run_update<R: Runtime + 'static>(
         }
 
         // Save updated metadata
-        if let Err(e) = use_case.save_meta(&repo, &final_meta) {
+        if let Err(e) = action.save_meta(&repo, &final_meta) {
             warn!("Failed to save metadata for {}: {}", repo, e);
             continue;
         }
