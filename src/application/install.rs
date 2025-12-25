@@ -1,7 +1,7 @@
 //! Install action - orchestrates the package installation flow.
 //!
 //! This action coordinates:
-//! - Provider resolution (from registry or package metadata)
+//! - Provider resolution (from factory or package metadata)
 //! - Version resolution
 //! - Download and extraction
 //! - Link management
@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use log::{info, warn};
 
 use crate::package::{LinkManager, Meta, MetaRelease, PackageRepository, VersionResolver};
-use crate::provider::{Provider, ProviderRegistry, RepoId};
+use crate::provider::{Provider, ProviderFactory, RepoId};
 use crate::runtime::Runtime;
 
 /// Options for the install action
@@ -117,7 +117,7 @@ pub trait InstallOperations: Send + Sync {
 pub struct InstallAction<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
-    source_registry: &'a ProviderRegistry,
+    provider_factory: &'a ProviderFactory,
     link_manager: LinkManager<'a, R>,
     install_root: PathBuf,
 }
@@ -126,13 +126,13 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
     /// Create a new install action
     pub fn new(
         runtime: &'a R,
-        source_registry: &'a ProviderRegistry,
+        provider_factory: &'a ProviderFactory,
         install_root: PathBuf,
     ) -> Self {
         Self {
             runtime,
             package_repo: PackageRepository::new(runtime, install_root.clone()),
-            source_registry,
+            provider_factory,
             link_manager: LinkManager::new(runtime),
             install_root,
         }
@@ -345,19 +345,16 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
     ///
     /// For new installs, uses the default source.
     /// For updates/upgrades, resolves from package metadata.
-    pub fn resolve_source(&self, meta: Option<&Meta>) -> Result<&Arc<dyn Provider>> {
+    pub fn resolve_source(&self, meta: Option<&Meta>) -> Arc<dyn Provider> {
         match meta {
-            Some(m) => self.source_registry.resolve_from_meta(m),
-            None => self
-                .source_registry
-                .get(self.source_registry.default_kind())
-                .ok_or_else(|| anyhow::anyhow!("No default source available")),
+            Some(m) => self.provider_factory.from_meta(m),
+            None => self.provider_factory.default_provider(),
         }
     }
 
     /// Resolve source from existing metadata (for update/upgrade)
-    pub fn resolve_source_from_meta(&self, meta: &Meta) -> Result<&Arc<dyn Provider>> {
-        self.source_registry.resolve_from_meta(meta)
+    pub fn resolve_source_from_meta(&self, meta: &Meta) -> Arc<dyn Provider> {
+        self.provider_factory.from_meta(meta)
     }
 }
 
@@ -507,33 +504,24 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
     }
 
     fn resolve_source_for_new(&self) -> Result<Arc<dyn Provider>> {
-        self.source_registry
-            .get(self.source_registry.default_kind())
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("No default source available"))
+        Ok(self.provider_factory.default_provider())
     }
 
     fn resolve_source_for_existing(&self, meta: &Meta) -> Result<Arc<dyn Provider>> {
-        self.source_registry.resolve_from_meta(meta).cloned()
+        Ok(self.provider_factory.from_meta(meta))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::HttpClient;
     use crate::package::MetaRelease;
-    use crate::provider::{MockProvider, ProviderKind};
     use crate::runtime::MockRuntime;
-    use std::sync::Arc;
 
-    fn make_test_registry() -> ProviderRegistry {
-        let mut registry = ProviderRegistry::new();
-        let mut mock = MockProvider::new();
-        mock.expect_kind().return_const(ProviderKind::GitHub);
-        mock.expect_api_url()
-            .return_const("https://api.github.com".to_string());
-        registry.register(Arc::new(mock));
-        registry
+    fn make_test_factory() -> ProviderFactory {
+        let http_client = HttpClient::new(reqwest::Client::new());
+        ProviderFactory::new(http_client, "https://api.github.com")
     }
 
     fn make_test_meta() -> Meta {
@@ -570,8 +558,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
         let meta = make_test_meta();
 
         let result = action.resolve_version(&meta, Some("v1.0.0"), false);
@@ -586,8 +574,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
         let meta = make_test_meta();
 
         let result = action.resolve_version(&meta, None, false);
@@ -602,8 +590,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
 
         // Meta with only pre-release as latest
         let meta = Meta {
@@ -641,8 +629,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
         let meta = make_test_meta();
 
         let result = action.resolve_version(&meta, Some("v999.0.0"), false);
@@ -657,8 +645,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
         let meta = make_test_meta();
 
         // User provides filters -> use them
@@ -677,8 +665,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/test".into());
         let meta = make_test_meta();
 
         // User provides no filters -> use saved from meta
@@ -694,8 +682,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/root".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/root".into());
 
         let repo = RepoId {
             owner: "owner".into(),
@@ -712,8 +700,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = InstallAction::new(&runtime, &registry, "/root".into());
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/root".into());
 
         let repo = RepoId {
             owner: "owner".into(),

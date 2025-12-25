@@ -9,7 +9,7 @@ use crate::runtime::Runtime;
 use super::config::{Config, ConfigOverrides, InstallOptions, UpgradeOptions};
 use super::install::{DefaultReleaseInstaller, run_install};
 use super::prune::prune_package_dir;
-use super::services::RegistryServices;
+use super::services::Services;
 
 #[tracing::instrument(skip(runtime, overrides, repos, options))]
 pub async fn upgrade<R: Runtime + 'static>(
@@ -19,7 +19,7 @@ pub async fn upgrade<R: Runtime + 'static>(
     options: UpgradeOptions,
 ) -> Result<()> {
     let config = Config::load(&runtime, overrides)?;
-    let services = RegistryServices::from_config(&config)?;
+    let services = Services::from_config(&config)?;
     run_upgrade(&config, runtime, services, repos, options).await
 }
 
@@ -27,13 +27,17 @@ pub async fn upgrade<R: Runtime + 'static>(
 async fn run_upgrade<R: Runtime + 'static>(
     config: &Config,
     runtime: R,
-    services: RegistryServices,
+    services: Services,
     repos: Vec<String>,
     options: UpgradeOptions,
 ) -> Result<()> {
     // First, use UpgradeAction to find packages and check for updates
     let packages_to_upgrade: Vec<_> = {
-        let action = UpgradeAction::new(&runtime, &services.registry, config.install_root.clone());
+        let action = UpgradeAction::new(
+            &runtime,
+            &services.provider_factory,
+            config.install_root.clone(),
+        );
 
         // Find all installed packages
         let packages = action.find_all_packages()?;
@@ -91,7 +95,7 @@ async fn run_upgrade<R: Runtime + 'static>(
     // Create InstallAction for orchestration
     let action = InstallAction::new(
         runtime.as_ref(),
-        &services.registry,
+        &services.provider_factory,
         config.install_root.clone(),
     );
 

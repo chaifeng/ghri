@@ -22,7 +22,7 @@ pub use list::list;
 pub use prune::prune;
 pub use remove::remove;
 pub(crate) use remove::remove_version;
-pub use services::RegistryServices;
+pub use services::Services;
 pub use show::show;
 pub use unlink::unlink;
 pub use update::update;

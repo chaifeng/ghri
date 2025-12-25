@@ -9,7 +9,7 @@ use crate::runtime::Runtime;
 
 use super::config::{Config, ConfigOverrides, InstallOptions};
 use super::prune::prune_package_dir;
-use super::services::RegistryServices;
+use super::services::Services;
 
 mod download;
 mod external_links;
@@ -40,12 +40,12 @@ pub async fn install<R: Runtime + 'static>(
     let config = Config::load(runtime.as_ref(), overrides)?;
 
     // Build services from config
-    let services = RegistryServices::from_config(&config)?;
+    let services = Services::from_config(&config)?;
 
     // Create action (borrows from Arc)
     let action = InstallAction::new(
         runtime.as_ref(),
-        &services.registry,
+        &services.provider_factory,
         config.install_root.clone(),
     );
 

@@ -3,17 +3,36 @@
 //! This module provides a unified interface for different package providers
 //! (GitHub, GitLab, Gitee, etc.), enabling multi-platform support.
 
+mod factory;
 mod github;
-mod registry;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
-pub use github::GitHubProvider;
-pub use registry::{PackageSpec, ProviderRegistry};
+pub use factory::{PackageSpec, ProviderFactory};
+
+use crate::http::HttpClient;
+
+/// Create a provider instance for the given kind and API URL.
+fn create_provider(
+    http_client: HttpClient,
+    kind: ProviderKind,
+    api_url: &str,
+) -> Arc<dyn Provider> {
+    match kind {
+        ProviderKind::GitHub => Arc::new(github::GitHubProvider::from_http_client(
+            http_client,
+            api_url,
+        )),
+        _ => {
+            unimplemented!("Provider kind {:?} is not yet implemented", kind)
+        }
+    }
+}
 
 /// Repository identifier (owner/repo format).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

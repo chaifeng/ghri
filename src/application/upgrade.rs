@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::package::{Meta, PackageRepository};
-use crate::provider::{Provider, ProviderRegistry, RepoId};
+use crate::provider::{Provider, ProviderFactory, RepoId};
 use crate::runtime::Runtime;
 
 use super::install::InstallAction;
@@ -40,7 +40,7 @@ pub struct UpdateCheck<'a> {
 pub struct UpgradeAction<'a, R: Runtime> {
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
-    provider_registry: &'a ProviderRegistry,
+    provider_factory: &'a ProviderFactory,
     install_root: PathBuf,
 }
 
@@ -48,13 +48,13 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
     /// Create a new upgrade action
     pub fn new(
         runtime: &'a R,
-        provider_registry: &'a ProviderRegistry,
+        provider_factory: &'a ProviderFactory,
         install_root: PathBuf,
     ) -> Self {
         Self {
             runtime,
             package_repo: PackageRepository::new(runtime, install_root.clone()),
-            provider_registry,
+            provider_factory,
             install_root,
         }
     }
@@ -63,7 +63,7 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
     pub fn install_action(&self) -> InstallAction<'a, R> {
         InstallAction::new(
             self.runtime,
-            self.provider_registry,
+            self.provider_factory,
             self.install_root.clone(),
         )
     }
@@ -126,8 +126,8 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
     }
 
     /// Resolve the source for a package from its metadata
-    pub fn resolve_source(&self, meta: &Meta) -> Result<&Arc<dyn Provider>> {
-        self.provider_registry.resolve_from_meta(meta)
+    pub fn resolve_source(&self, meta: &Meta) -> Arc<dyn Provider> {
+        self.provider_factory.from_meta(meta)
     }
 
     /// Parse repository strings into RepoIds
@@ -142,19 +142,13 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::HttpClient;
     use crate::package::MetaRelease;
-    use crate::provider::{MockProvider, ProviderKind};
     use crate::runtime::MockRuntime;
-    use std::sync::Arc;
 
-    fn make_test_registry() -> ProviderRegistry {
-        let mut registry = ProviderRegistry::new();
-        let mut mock = MockProvider::new();
-        mock.expect_kind().return_const(ProviderKind::GitHub);
-        mock.expect_api_url()
-            .return_const("https://api.github.com".to_string());
-        registry.register(Arc::new(mock));
-        registry
+    fn make_test_factory() -> ProviderFactory {
+        let http_client = HttpClient::new(reqwest::Client::new());
+        ProviderFactory::new(http_client, "https://api.github.com")
     }
 
     fn make_test_meta(current: &str, releases: Vec<(&str, bool)>) -> Meta {
@@ -181,8 +175,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![("v2.0.0", false), ("v1.0.0", false)]);
         let check = action.check_update(&meta, false);
@@ -198,8 +192,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
 
         let meta = make_test_meta("v2.0.0", vec![("v2.0.0", false), ("v1.0.0", false)]);
         let check = action.check_update(&meta, false);
@@ -215,8 +209,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![("v2.0.0-rc1", true), ("v1.0.0", false)]);
 
@@ -237,8 +231,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
 
         let meta = make_test_meta("v1.0.0", vec![]);
         let check = action.check_update(&meta, false);
@@ -254,8 +248,8 @@ mod tests {
             .expect_temp_dir()
             .returning(|| std::path::PathBuf::from("/tmp"));
 
-        let registry = make_test_registry();
-        let action = UpgradeAction::new(&runtime, &registry, "/test".into());
+        let factory = make_test_factory();
+        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
 
         let repos = vec![
             "owner1/repo1".to_string(),

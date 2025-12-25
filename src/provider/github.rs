@@ -3,6 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use log::debug;
+#[cfg(test)]
 use reqwest::Client;
 
 use crate::http::HttpClient;
@@ -52,11 +53,15 @@ pub struct GitHubProvider {
 
 impl GitHubProvider {
     /// Create a new GitHub provider with default API URL.
+    /// Used primarily for testing.
+    #[cfg(test)]
     pub fn new(client: Client) -> Self {
         Self::with_api_url(client, "https://api.github.com")
     }
 
     /// Create a new GitHub provider with custom API URL.
+    /// Used primarily for testing.
+    #[cfg(test)]
     pub fn with_api_url(client: Client, api_url: &str) -> Self {
         Self {
             http_client: HttpClient::new(client),

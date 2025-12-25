@@ -7,7 +7,7 @@ use crate::provider::RepoId;
 use crate::runtime::Runtime;
 
 use super::config::{Config, ConfigOverrides};
-use super::services::RegistryServices;
+use super::services::Services;
 
 #[tracing::instrument(skip(runtime, overrides, repos))]
 pub async fn update<R: Runtime + 'static>(
@@ -16,7 +16,7 @@ pub async fn update<R: Runtime + 'static>(
     repos: Vec<String>,
 ) -> Result<()> {
     let config = Config::load(&runtime, overrides)?;
-    let services = RegistryServices::from_config(&config)?;
+    let services = Services::from_config(&config)?;
     run_update(&config, runtime, services, repos).await
 }
 
@@ -24,11 +24,15 @@ pub async fn update<R: Runtime + 'static>(
 async fn run_update<R: Runtime + 'static>(
     config: &Config,
     runtime: R,
-    services: RegistryServices,
+    services: Services,
     repos: Vec<String>,
 ) -> Result<()> {
     // Create InstallAction for metadata operations
-    let action = InstallAction::new(&runtime, &services.registry, config.install_root.clone());
+    let action = InstallAction::new(
+        &runtime,
+        &services.provider_factory,
+        config.install_root.clone(),
+    );
     let pkg_repo = action.package_repo();
 
     let packages = pkg_repo.find_all_with_meta()?;
@@ -60,14 +64,8 @@ async fn run_update<R: Runtime + 'static>(
 
         println!("   updating {}", repo);
 
-        // Resolve source from package metadata using InstallAction
-        let source = match action.resolve_source_from_meta(&meta) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("Failed to resolve source for {}: {}", repo, e);
-                continue;
-            }
-        };
+        // Resolve source from package metadata
+        let source = action.resolve_source_from_meta(&meta);
 
         // Fetch new metadata using InstallAction with saved API URL
         let new_meta = match action
