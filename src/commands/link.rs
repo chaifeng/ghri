@@ -113,8 +113,10 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
     if spec.version.is_some() {
         let new_link = VersionedLink {
             version: version.clone(),
-            dest: final_dest.clone(),
-            path: spec.path.clone(),
+            rule: LinkRule {
+                dest: final_dest.clone(),
+                path: spec.path.clone(),
+            },
         };
 
         // Remove any existing entry with same dest from links (default version links)
@@ -128,7 +130,7 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
         {
             // Update existing versioned link
             existing.version = new_link.version;
-            existing.path = new_link.path;
+            existing.path = new_link.rule.path;
         } else {
             // Add new versioned link
             meta.versioned_links.push(new_link);
@@ -1060,8 +1062,10 @@ mod tests {
             current_version: "v1".into(),
             versioned_links: vec![VersionedLink {
                 version: "v1".into(),
-                dest: dest.clone(),
-                path: None,
+                rule: LinkRule {
+                    dest: dest.clone(),
+                    path: None,
+                },
             }],
             ..Default::default()
         };
@@ -1319,8 +1323,10 @@ mod tests {
             links: vec![],
             versioned_links: vec![VersionedLink {
                 version: "v2".into(),
-                dest: dest.clone(),
-                path: None,
+                rule: LinkRule {
+                    dest: dest.clone(),
+                    path: None,
+                },
             }],
             ..Default::default()
         };

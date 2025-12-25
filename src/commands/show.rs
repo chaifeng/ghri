@@ -628,14 +628,16 @@ mod tests {
             .returning(|_| true);
 
         // Read meta.json -> has versioned link to v1.0.0
-        use crate::package::VersionedLink;
+        use crate::package::{LinkRule, VersionedLink};
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v2.0.0".into(), // Current is v2
             versioned_links: vec![VersionedLink {
                 version: "v1.0.0".into(), // Historical link to v1
-                dest: link_dest.clone(),
-                path: None,
+                rule: LinkRule {
+                    dest: link_dest.clone(),
+                    path: None,
+                },
             }],
             ..Default::default()
         };

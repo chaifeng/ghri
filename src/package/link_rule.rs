@@ -1,6 +1,7 @@
 //! Link rule for creating external symlinks to installed packages.
 
 use serde::{Deserialize, Serialize};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 /// A link rule that describes how to create an external symlink
@@ -21,11 +22,23 @@ pub struct LinkRule {
 pub struct VersionedLink {
     /// The version this link was created for
     pub version: String,
-    /// The destination path for the symlink
-    pub dest: PathBuf,
-    /// Relative path within version directory to link (e.g., "bin/tool")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
+    /// The link rule (dest and path)
+    #[serde(flatten)]
+    pub rule: LinkRule,
+}
+
+impl Deref for VersionedLink {
+    type Target = LinkRule;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rule
+    }
+}
+
+impl DerefMut for VersionedLink {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rule
+    }
 }
 
 #[cfg(test)]
@@ -115,13 +128,15 @@ mod tests {
 
         let link = VersionedLink {
             version: "v1.0.0".to_string(),
-            dest: PathBuf::from("/usr/local/bin/tool"),
-            path: Some("bin/tool".to_string()),
+            rule: LinkRule {
+                dest: PathBuf::from("/usr/local/bin/tool"),
+                path: Some("bin/tool".to_string()),
+            },
         };
 
         let json = serde_json::to_string(&link).unwrap();
 
-        // JSON should contain version, dest, and path
+        // JSON should contain version, dest, and path (flattened)
         assert!(json.contains("v1.0.0"));
         assert!(json.contains("/usr/local/bin/tool"));
         assert!(json.contains("bin/tool"));
@@ -129,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_versioned_link_deserialize() {
-        // Test deserializing VersionedLink from JSON
+        // Test deserializing VersionedLink from JSON (backward compatible format)
 
         let json = r#"{"version": "v1.0.0", "dest": "/usr/local/bin/tool", "path": "bin/tool"}"#;
 
