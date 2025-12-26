@@ -24,25 +24,13 @@ impl RealRuntime {
 
             debug!("Creating symlink from {:?} to {:?}", link, original);
 
-            let link_parent = link
-                .parent()
-                .context("Failed to get parent directory for symlink")?;
-
-            // If `original` is a relative path, `is_dir()` would check it against the
-            // current working directory. We need to check it relative to the directory
-            // where the symlink will be created.
+            // `is_dir()` on a relative path is relative to CWD; we want it relative to the link's parent.
             let target_path = if original.is_absolute() {
                 original.to_path_buf()
             } else {
-                link_parent.join(original)
-            };
-
-            // Prefer a relative target when possible (notably more reliable under Wine).
-            let link_target = if original.is_absolute() {
-                pathdiff::diff_paths(original, link_parent)
-                    .unwrap_or_else(|| original.to_path_buf())
-            } else {
-                original.to_path_buf()
+                link.parent()
+                    .context("Failed to get parent directory for symlink")?
+                    .join(original)
             };
 
             if target_path.is_dir() {
@@ -50,13 +38,13 @@ impl RealRuntime {
                     "Target path {} is a directory, creating directory symlink",
                     target_path.display()
                 );
-                symlink_dir(&link_target, link).context("Failed to create directory symlink")?;
+                symlink_dir(original, link).context("Failed to create directory symlink")?;
             } else {
                 trace!(
                     "Target path {} is a file, creating file",
                     target_path.display()
                 );
-                symlink_file(&link_target, link).context("Failed to create file symlink")?;
+                symlink_file(original, link).context("Failed to create file symlink")?;
             }
 
             if fs::symlink_metadata(link).is_err() {
@@ -230,7 +218,12 @@ mod tests {
 
         // Test read_link
         let read_target = runtime.read_link(&link).unwrap();
-        assert_eq!(read_target, target);
+        let resolved_read_target = if read_target.is_absolute() {
+            read_target.clone()
+        } else {
+            link.parent().unwrap_or(dir.path()).join(&read_target)
+        };
+        assert_eq!(resolved_read_target, target);
 
         // Test canonicalize
         let canonical = runtime.canonicalize(&link).unwrap();
