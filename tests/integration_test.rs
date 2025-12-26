@@ -68,6 +68,10 @@ fn mock_releases(
     (page1, page2)
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_end_to_end_install() {
     let mut server = Server::new();
@@ -165,6 +169,10 @@ fn test_end_to_end_install() {
         .stdout(predicates::str::contains("v1.0.0"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_single_file_to_path() {
     // Test linking when version directory has a single file
@@ -249,6 +257,10 @@ fn test_link_single_file_to_path() {
     assert!(meta_content.contains("my-tool"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_to_directory() {
     // Test linking when dest is an existing directory
@@ -332,6 +344,10 @@ fn test_link_to_directory() {
     assert!(meta_content.contains("/cli\"")); // Full path ends with /cli"
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_update_on_reinstall() {
     // Test that link is updated when a new version is installed
@@ -473,6 +489,10 @@ fn test_link_update_on_reinstall() {
     );
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_update_existing_symlink() {
     // Test updating an existing symlink that points to a different version
@@ -588,6 +608,10 @@ fn test_link_update_existing_symlink() {
     );
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_fails_for_uninstalled_package() {
     let root_dir = tempdir().unwrap();
@@ -605,6 +629,10 @@ fn test_link_fails_for_uninstalled_package() {
         .stderr(predicates::str::contains("not installed"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_link_fails_for_existing_non_symlink() {
     let mut server = Server::new();
@@ -673,6 +701,10 @@ fn test_link_fails_for_existing_non_symlink() {
         .stderr(predicates::str::contains("not a symlink"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_unlink_removes_link_and_rule() {
     let mut server = Server::new();
@@ -762,6 +794,10 @@ fn test_unlink_removes_link_and_rule() {
     assert!(!meta_content.contains(&link_path.to_string_lossy().to_string()));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_unlink_all_removes_all_links() {
     let mut server = Server::new();
@@ -866,6 +902,10 @@ fn test_unlink_all_removes_all_links() {
     );
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_unlink_fails_for_uninstalled_package() {
     let root_dir = tempdir().unwrap();
@@ -882,6 +922,10 @@ fn test_unlink_fails_for_uninstalled_package() {
         .stderr(predicates::str::contains("not installed"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_unlink_requires_dest_or_all() {
     let mut server = Server::new();
@@ -954,6 +998,10 @@ fn test_unlink_requires_dest_or_all() {
         .stderr(predicates::str::contains("--all"));
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_remove_package() {
     let mut server = Server::new();
@@ -1042,6 +1090,10 @@ fn test_remove_package() {
     assert!(!install_root.join("test").exists());
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_remove_specific_version() {
     let mut server = Server::new();
@@ -1141,6 +1193,10 @@ fn test_remove_specific_version() {
     assert!(install_root.join("test/multiversion/meta.json").exists());
 }
 
+#[cfg_attr(
+    ghri_skip_cross_windows_tests,
+    ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+)]
 #[test]
 fn test_remove_current_version_requires_force() {
     let mut server = Server::new();

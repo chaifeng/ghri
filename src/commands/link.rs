@@ -727,11 +727,7 @@ mod tests {
         let tool_path = version_dir.join("tool");
         let dest_parent = test_bin_dir();
         let dest = dest_parent.join("tool");
-        let other_package_path = root
-            .join("other")
-            .join("package")
-            .join("v1")
-            .join("tool");
+        let other_package_path = root.join("other").join("package").join("v1").join("tool");
 
         // --- 1. Load Metadata ---
 

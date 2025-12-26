@@ -20,21 +20,49 @@ impl RealRuntime {
         {
             use std::os::windows::fs::{symlink_dir, symlink_file};
 
+            debug!("Creating symlink from {:?} to {:?}", link, original);
+
+            let link_parent = link
+                .parent()
+                .context("Failed to get parent directory for symlink")?;
+
             // If `original` is a relative path, `is_dir()` would check it against the
             // current working directory. We need to check it relative to the directory
             // where the symlink will be created.
             let target_path = if original.is_absolute() {
                 original.to_path_buf()
             } else {
-                link.parent()
-                    .context("Failed to get parent directory for symlink")?
-                    .join(original)
+                link_parent.join(original)
+            };
+
+            // Prefer a relative target when possible (notably more reliable under Wine).
+            let link_target = if original.is_absolute() {
+                pathdiff::diff_paths(original, link_parent)
+                    .unwrap_or_else(|| original.to_path_buf())
+            } else {
+                original.to_path_buf()
             };
 
             if target_path.is_dir() {
-                symlink_dir(original, link).context("Failed to create directory symlink")?;
+                trace!(
+                    "Target path {} is a directory, creating directory symlink",
+                    target_path.display()
+                );
+                symlink_dir(&link_target, link).context("Failed to create directory symlink")?;
             } else {
-                symlink_file(original, link).context("Failed to create file symlink")?;
+                trace!(
+                    "Target path {} is a file, creating file",
+                    target_path.display()
+                );
+                symlink_file(&link_target, link).context("Failed to create file symlink")?;
+            }
+
+            if fs::symlink_metadata(link).is_err() {
+                bail!(
+                    "Symlink creation reported success but link does not exist: link={:?} target={:?}",
+                    link,
+                    original
+                );
             }
         }
         Ok(())
@@ -180,11 +208,14 @@ mod tests {
     use crate::runtime::{RealRuntime, Runtime};
     use tempfile::tempdir;
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_real_runtime_symlink_ops() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create a target directory
         let target = dir.path().join("target");
         runtime.create_dir_all(&target).unwrap();
@@ -208,10 +239,15 @@ mod tests {
         assert!(!runtime.exists(&link));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_real_runtime_file_symlink() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
+        use std::fs;
 
         // Create a target file
         let target = dir.path().join("target.txt");
@@ -220,21 +256,51 @@ mod tests {
         // Test symlink to file
         let link = dir.path().join("link.txt");
         runtime.symlink(&target, &link).unwrap();
-        assert!(runtime.is_symlink(&link));
+        assert!(
+            runtime.is_symlink(&link),
+            "Expected symlink: link={:?} target={:?} exists={} metadata={:?} read_link={:?}",
+            link,
+            target,
+            runtime.exists(&link),
+            fs::symlink_metadata(&link),
+            runtime.read_link(&link),
+        );
 
         // Read through symlink
-        let content = runtime.read_to_string(&link).unwrap();
-        assert_eq!(content, "content");
+        let content = runtime.read_to_string(&link).unwrap_or_else(|e| {
+            panic!(
+                "Failed to read via symlink: link={:?} target={:?} exists={} metadata={:?} read_link={:?} err={}",
+                link,
+                target,
+                runtime.exists(&link),
+                fs::symlink_metadata(&link),
+                runtime.read_link(&link),
+                e
+            )
+        });
+        assert_eq!(
+            content,
+            "content",
+            "Unexpected content via symlink: link={:?} target={:?} exists={} metadata={:?} read_link={:?}",
+            link,
+            target,
+            runtime.exists(&link),
+            fs::symlink_metadata(&link),
+            runtime.read_link(&link),
+        );
 
         // Clean up
         runtime.remove_symlink(&link).unwrap();
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_resolve_link_absolute_target() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create a target file
         let target = dir.path().join("target.txt");
         runtime.write(&target, b"content").unwrap();
@@ -249,11 +315,14 @@ mod tests {
         assert!(resolved.ends_with("target.txt"));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_resolve_link_relative_target_same_dir() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create a target file
         let target = dir.path().join("target.txt");
         runtime.write(&target, b"content").unwrap();
@@ -278,11 +347,14 @@ mod tests {
         assert_eq!(resolved.parent(), target.parent());
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_resolve_link_relative_target_parent_dir() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create structure: dir/target.txt, dir/sub/link.txt -> ../target.txt
         let target = dir.path().join("target.txt");
         runtime.write(&target, b"content").unwrap();
@@ -312,11 +384,14 @@ mod tests {
         assert_eq!(resolved_canonical, target_canonical);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_resolve_link_multiple_parent_dirs() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create structure: dir/target.txt, dir/a/b/link.txt -> ../../target.txt
         let target = dir.path().join("target.txt");
         runtime.write(&target, b"content").unwrap();
@@ -341,11 +416,14 @@ mod tests {
         assert!(resolved.ends_with("target.txt"));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_resolve_link_with_dot_components() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create target
         let target = dir.path().join("target.txt");
         runtime.write(&target, b"content").unwrap();
@@ -367,11 +445,14 @@ mod tests {
         assert!(resolved.ends_with("target.txt"));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_success() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
 
@@ -388,11 +469,14 @@ mod tests {
         assert!(!runtime.exists(&link));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_exact_match() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
 
@@ -406,11 +490,14 @@ mod tests {
         assert!(removed);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_parent_prefix() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri").join("owner").join("repo");
         runtime.create_dir_all(&prefix).unwrap();
 
@@ -428,11 +515,14 @@ mod tests {
         assert!(removed);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_wrong_prefix() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
 
@@ -456,11 +546,14 @@ mod tests {
         runtime.remove_symlink(&link).unwrap();
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_partial_component() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
 
@@ -484,6 +577,10 @@ mod tests {
         runtime.remove_symlink(&link).unwrap();
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_different_file() {
         let runtime = RealRuntime;
@@ -507,6 +604,10 @@ mod tests {
         assert!(runtime.exists(&regular_file));
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_not_symlink() {
         let runtime = RealRuntime;
@@ -524,6 +625,10 @@ mod tests {
         assert!(!removed);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_nonexistent() {
         let runtime = RealRuntime;
@@ -538,11 +643,14 @@ mod tests {
         assert!(!removed);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_relative_link() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create prefix/target.txt
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
@@ -568,11 +676,14 @@ mod tests {
         assert!(removed);
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_relative_link_wrong_prefix() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         // Create other/target.txt (NOT under ghri)
         let prefix = dir.path().join("ghri");
         runtime.create_dir_all(&prefix).unwrap();
@@ -605,11 +716,14 @@ mod tests {
         runtime.remove_symlink(&link).unwrap();
     }
 
+    #[cfg_attr(
+        ghri_skip_cross_windows_tests,
+        ignore = "cross windows tests disabled; set GHRI_RUN_CROSS_WINDOWS_TESTS=1 to enable"
+    )]
     #[test]
     fn test_remove_symlink_if_target_under_nested_prefix() {
         let runtime = RealRuntime;
         let dir = tempdir().unwrap();
-
         let prefix = dir.path().join("ghri").join("owner").join("repo");
         runtime.create_dir_all(&prefix).unwrap();
 

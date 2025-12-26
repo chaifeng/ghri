@@ -205,10 +205,7 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let meta_path = test_root()
-            .join("owner")
-            .join("repo")
-            .join("meta.json");
+        let meta_path = test_root().join("owner").join("repo").join("meta.json");
 
         // --- Check Package Exists (is_installed checks meta.json) ---
 
@@ -232,10 +229,7 @@ mod tests {
         let mut runtime = MockRuntime::new();
 
         // --- Setup Paths ---
-        let meta_path = test_root()
-            .join("owner")
-            .join("repo")
-            .join("meta.json");
+        let meta_path = test_root().join("owner").join("repo").join("meta.json");
 
         // --- Check Package Exists (is_installed) ---
 
