@@ -18,7 +18,9 @@ impl RealRuntime {
         }
         #[cfg(windows)]
         {
+            use anyhow::bail;
             use std::os::windows::fs::{symlink_dir, symlink_file};
+            use tracing::trace;
 
             debug!("Creating symlink from {:?} to {:?}", link, original);
 
