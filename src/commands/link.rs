@@ -177,32 +177,13 @@ mod tests {
     use super::*;
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
+    use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
-        #[cfg(not(windows))]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-
-        #[cfg(windows)]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
-
-        runtime
-            .expect_env_var()
-            .with(eq("USER"))
-            .returning(|_| Ok("user".to_string()));
-
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        runtime.expect_is_privileged().returning(|| false);
+        configure_mock_runtime_basics(runtime);
     }
 
     #[test]
@@ -213,13 +194,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
-        let dest_dir = PathBuf::from("/usr/local/bin");
-        let final_link = dest_dir.join("tool"); // /usr/local/bin/tool
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let version_dir = package_dir.join("v1");
+        let tool_path = version_dir.join("tool");
+        let dest_dir = test_bin_dir();
+        let final_link = dest_dir.join("tool");
 
         // --- 1. is_installed (exists on meta_path) ---
         runtime

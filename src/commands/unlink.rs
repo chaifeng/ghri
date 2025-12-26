@@ -233,32 +233,14 @@ mod tests {
     use super::*;
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
+    use crate::test_utils::{
+        configure_mock_runtime_basics, test_bin_dir, test_external_path, test_home, test_root,
+    };
     use mockall::predicate::*;
-    use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
-        #[cfg(not(windows))]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-
-        #[cfg(windows)]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
-
-        runtime
-            .expect_env_var()
-            .with(eq("USER"))
-            .returning(|_| Ok("user".to_string()));
-
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        runtime.expect_is_privileged().returning(|| false);
+        configure_mock_runtime_basics(runtime);
     }
 
     #[test]
@@ -269,10 +251,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = test_bin_dir().join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -284,7 +266,7 @@ mod tests {
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Read meta.json: has one link rule pointing to /usr/local/bin/tool
+        // Read meta.json: has one link rule pointing to bin/tool
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -310,7 +292,7 @@ mod tests {
             .returning(|_| true);
 
         // --- 3. Verify Symlink Target (Security Check) ---
-        let target = root.join("owner/repo/v1/tool");
+        let target = root.join("owner").join("repo").join("v1").join("tool");
         runtime
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
@@ -355,11 +337,11 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let link1 = PathBuf::from("/usr/local/bin/tool1");
-        let link2 = PathBuf::from("/usr/local/bin/tool2");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link1 = test_bin_dir().join("tool1");
+        let link2 = test_bin_dir().join("tool2");
 
         // --- 1. is_installed + load ---
         runtime
@@ -390,7 +372,7 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 2. Remove First Symlink: /usr/local/bin/tool1 ---
+        // --- 2. Remove First Symlink ---
         runtime
             .expect_exists()
             .with(eq(link1.clone()))
@@ -400,7 +382,7 @@ mod tests {
             .with(eq(link1.clone()))
             .returning(|_| true);
 
-        let target1 = root.join("owner/repo/v1/tool1");
+        let target1 = root.join("owner").join("repo").join("v1").join("tool1");
         runtime
             .expect_resolve_link()
             .with(eq(link1.clone()))
@@ -417,7 +399,7 @@ mod tests {
             .with(eq(link1.clone()))
             .returning(|_| Ok(()));
 
-        // --- 3. Remove Second Symlink: /usr/local/bin/tool2 ---
+        // --- 3. Remove Second Symlink ---
         runtime
             .expect_exists()
             .with(eq(link2.clone()))
@@ -427,7 +409,7 @@ mod tests {
             .with(eq(link2.clone()))
             .returning(|_| true);
 
-        let target2 = root.join("owner/repo/v1/tool2");
+        let target2 = root.join("owner").join("repo").join("v1").join("tool2");
         runtime
             .expect_resolve_link()
             .with(eq(link2.clone()))
@@ -466,10 +448,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = test_bin_dir().join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -536,20 +518,21 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let existing_link = PathBuf::from("/usr/local/bin/tool");
-        let nonexistent_link = PathBuf::from("/other/path/different-tool");
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
+        let existing_link = test_bin_dir().join("tool");
+        let nonexistent_link = test_external_path().join("different-tool");
+
+        // Need current_dir for relative path resolution
+        runtime.expect_current_dir().returning(|| Ok(test_home()));
 
         // --- 1. Load Metadata ---
-
-        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path))
             .returning(|_| true);
 
-        // Read meta.json: has one rule for /usr/local/bin/tool (different from requested)
+        // Read meta.json: has one rule for bin/tool (different from requested)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -565,7 +548,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        // Request unlink for /other/path/different-tool which doesn't exist in rules
+        // Request unlink for different-tool which doesn't exist in rules
         let result = unlink(
             runtime,
             "owner/repo",
@@ -584,12 +567,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
 
         // --- 1. Load Metadata ---
-
-        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path))
@@ -600,7 +581,7 @@ mod tests {
             name: "owner/repo".into(),
             current_version: "v1".into(),
             links: vec![LinkRule {
-                dest: PathBuf::from("/usr/local/bin/tool"),
+                dest: test_bin_dir().join("tool"),
                 path: None,
             }],
             ..Default::default()
@@ -624,12 +605,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
 
         // --- 1. Load Metadata ---
-
-        // File exists: /home/user/.ghri/owner/repo/meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path))
@@ -664,23 +643,24 @@ mod tests {
 
         // --- Setup Paths ---
 
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let link_dest = test_bin_dir().join("tool");
         let meta_path = package_dir.join("meta.json");
 
-        // The symlink exists but points to an external path (NOT under /home/user/.ghri)
-        let external_target = PathBuf::from("/opt/external/tool");
+        // The symlink exists but points to an external path (NOT under root)
+        let external_target = test_external_path().join("tool");
+
+        // Need current_dir for relative path resolution
+        runtime.expect_current_dir().returning(|| Ok(test_home()));
 
         // --- 1. Load Package Metadata ---
-
-        // File exists: /home/user/.ghri/owner/repo/meta.json
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Read Meta: Has a link rule for /usr/local/bin/tool
+        // Read Meta: Has a link rule for bin/tool
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(), // Set version to avoid read_link call in Meta::load
@@ -696,13 +676,13 @@ mod tests {
 
         // --- 2. Check Symlink Status ---
 
-        // File exists: /usr/local/bin/tool
+        // File exists
         runtime
             .expect_exists()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // Is Symlink: /usr/local/bin/tool -> true
+        // Is Symlink -> true
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
@@ -710,8 +690,8 @@ mod tests {
 
         // --- 3. Validate Symlink Target (Security Check) ---
 
-        // Resolve Link: /usr/local/bin/tool -> /opt/external/tool
-        // This points OUTSIDE the ghri install root (/home/user/.ghri)!
+        // Resolve Link -> points to external path!
+        // This points OUTSIDE the ghri install root!
         runtime
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
@@ -752,18 +732,18 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
         let meta_path = package_dir.join("meta.json");
 
         // Two link destinations
-        let internal_link = PathBuf::from("/usr/local/bin/internal-tool");
-        let external_link = PathBuf::from("/usr/local/bin/external-tool");
+        let internal_link = test_bin_dir().join("internal-tool");
+        let external_link = test_bin_dir().join("external-tool");
 
         // Internal symlink points to ghri managed path
-        let internal_target = package_dir.join("v1/internal-tool");
+        let internal_target = package_dir.join("v1").join("internal-tool");
         // External symlink points outside ghri
-        let external_target = PathBuf::from("/opt/other/external-tool");
+        let external_target = test_external_path().join("external-tool");
 
         // --- 1. is_installed + load ---
         runtime

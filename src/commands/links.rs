@@ -137,8 +137,13 @@ mod tests {
     use super::*;
     use crate::package::Meta;
     use crate::runtime::MockRuntime;
+    use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
     use mockall::predicate::*;
     use std::path::PathBuf;
+
+    fn configure_runtime_basics(runtime: &mut MockRuntime) {
+        configure_mock_runtime_basics(runtime);
+    }
 
     #[test]
     fn test_format_link_status() {
@@ -197,13 +202,14 @@ mod tests {
         // Test that links command fails when package is not installed
 
         let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+        let meta_path = test_root().join("owner/repo/meta.json");
 
         // --- Check Package Exists (is_installed checks meta.json) ---
 
-        // File exists: /home/user/.ghri/owner/repo/meta.json -> false (not installed!)
+        // File exists: meta.json -> false (not installed!)
         runtime
             .expect_exists()
             .with(eq(meta_path))
@@ -260,16 +266,11 @@ mod tests {
         // Test that links command uses custom install root when provided
 
         let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
         let install_root = PathBuf::from("/custom/root");
         let meta_path = install_root.join("owner/repo/meta.json"); // /custom/root/owner/repo/meta.json
-
-        // Config::load needs GITHUB_TOKEN
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
 
         // --- 1. Check Package Exists (is_installed) ---
 
@@ -293,14 +294,15 @@ mod tests {
         // NOT the current symlink path.
 
         let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
+        let root = test_root();
         let package_dir = root.join("owner/repo");
         let meta_path = package_dir.join("meta.json");
         let current_link = package_dir.join("current");
         let version_dir = package_dir.join("v1.0.0");
-        let link_dest = PathBuf::from("/usr/local/bin/tool");
+        let link_dest = test_bin_dir().join("tool");
 
         // --- Check Package Exists (is_installed) ---
         runtime

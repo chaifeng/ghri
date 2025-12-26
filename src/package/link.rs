@@ -521,14 +521,19 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
 mod tests {
     use super::*;
     use crate::runtime::MockRuntime;
+    use crate::test_utils::{test_bin_dir, test_other_path, test_root};
     use mockall::predicate::eq;
 
     #[test]
     fn test_check_link_valid() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let prefix = PathBuf::from("/home/user/.ghri/owner/repo");
-        let target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+        let dest = test_bin_dir().join("tool");
+        let prefix = test_root().join("owner").join("repo");
+        let target = test_root()
+            .join("owner")
+            .join("repo")
+            .join("v1")
+            .join("tool");
 
         runtime
             .expect_is_symlink()
@@ -547,8 +552,8 @@ mod tests {
     #[test]
     fn test_check_link_not_exists() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let prefix = PathBuf::from("/home/user/.ghri/owner/repo");
+        let dest = test_bin_dir().join("tool");
+        let prefix = test_root().join("owner").join("repo");
 
         runtime
             .expect_is_symlink()
@@ -567,9 +572,9 @@ mod tests {
     #[test]
     fn test_check_link_wrong_target() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let prefix = PathBuf::from("/home/user/.ghri/owner/repo");
-        let target = PathBuf::from("/some/other/path"); // Not under prefix
+        let dest = test_bin_dir().join("tool");
+        let prefix = test_root().join("owner").join("repo");
+        let target = test_other_path(); // Not under prefix
 
         runtime
             .expect_is_symlink()
@@ -588,8 +593,8 @@ mod tests {
     #[test]
     fn test_check_link_not_symlink() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let prefix = PathBuf::from("/home/user/.ghri/owner/repo");
+        let dest = test_bin_dir().join("tool");
+        let prefix = test_root().join("owner").join("repo");
 
         runtime
             .expect_is_symlink()
@@ -608,11 +613,15 @@ mod tests {
     #[test]
     fn test_check_links_categorizes() {
         let mut runtime = MockRuntime::new();
-        let prefix = PathBuf::from("/home/user/.ghri/owner/repo");
+        let prefix = test_root().join("owner").join("repo");
 
-        let valid_dest = PathBuf::from("/bin/valid");
-        let invalid_dest = PathBuf::from("/bin/invalid");
-        let valid_target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+        let valid_dest = test_bin_dir().join("valid");
+        let invalid_dest = test_bin_dir().join("invalid");
+        let valid_target = test_root()
+            .join("owner")
+            .join("repo")
+            .join("v1")
+            .join("tool");
 
         // Valid link
         runtime
@@ -655,10 +664,10 @@ mod tests {
     #[test]
     fn test_validate_link_valid() {
         let mut runtime = MockRuntime::new();
-        let version_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let target = version_dir.join("bin/tool");
+        let version_dir = test_root().join("owner").join("repo").join("v1");
+        let package_dir = test_root().join("owner").join("repo");
+        let dest = test_bin_dir().join("tool");
+        let target = version_dir.join("bin").join("tool");
 
         // Path exists
         runtime
@@ -697,10 +706,10 @@ mod tests {
     #[test]
     fn test_validate_link_path_not_exists() {
         let mut runtime = MockRuntime::new();
-        let version_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let target = version_dir.join("bin/notfound");
+        let version_dir = test_root().join("owner").join("repo").join("v1");
+        let package_dir = test_root().join("owner").join("repo");
+        let dest = test_bin_dir().join("tool");
+        let target = version_dir.join("bin").join("notfound");
 
         // Path doesn't exist
         runtime
@@ -728,10 +737,10 @@ mod tests {
     #[test]
     fn test_validate_link_dest_not_symlink() {
         let mut runtime = MockRuntime::new();
-        let version_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let target = version_dir.join("bin/tool");
+        let version_dir = test_root().join("owner").join("repo").join("v1");
+        let package_dir = test_root().join("owner").join("repo");
+        let dest = test_bin_dir().join("tool");
+        let target = version_dir.join("bin").join("tool");
 
         // Path exists
         runtime
@@ -788,8 +797,8 @@ mod tests {
     #[test]
     fn test_can_update_link_not_exists() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+        let dest = test_bin_dir().join("tool");
+        let package_dir = test_root().join("owner").join("repo");
 
         runtime
             .expect_exists()
@@ -809,9 +818,13 @@ mod tests {
     #[test]
     fn test_can_update_link_symlink_in_package() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+        let dest = test_bin_dir().join("tool");
+        let package_dir = test_root().join("owner").join("repo");
+        let target = test_root()
+            .join("owner")
+            .join("repo")
+            .join("v1")
+            .join("tool");
 
         runtime
             .expect_exists()
@@ -835,9 +848,9 @@ mod tests {
     #[test]
     fn test_can_update_link_symlink_outside_package() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let target = PathBuf::from("/some/other/path/tool");
+        let dest = test_bin_dir().join("tool");
+        let package_dir = test_root().join("owner").join("repo");
+        let target = test_other_path().join("tool");
 
         runtime
             .expect_exists()
@@ -861,8 +874,8 @@ mod tests {
     #[test]
     fn test_can_update_link_not_a_symlink() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
+        let dest = test_bin_dir().join("tool");
+        let package_dir = test_root().join("owner").join("repo");
 
         runtime
             .expect_exists()
@@ -882,9 +895,13 @@ mod tests {
     #[test]
     fn test_prepare_link_destination_removes_existing() {
         let mut runtime = MockRuntime::new();
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let package_dir = PathBuf::from("/home/user/.ghri/owner/repo");
-        let target = PathBuf::from("/home/user/.ghri/owner/repo/v1/tool");
+        let dest = test_bin_dir().join("tool");
+        let package_dir = test_root().join("owner").join("repo");
+        let target = test_root()
+            .join("owner")
+            .join("repo")
+            .join("v1")
+            .join("tool");
 
         // can_update_link checks
         runtime

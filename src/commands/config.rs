@@ -141,6 +141,7 @@ pub type UpgradeOptions = InstallOptions;
 mod tests {
     use super::*;
     use crate::runtime::MockRuntime;
+    use crate::test_utils::test_home;
     use mockall::predicate::eq;
 
     #[test]
@@ -149,9 +150,7 @@ mod tests {
         let mut runtime = MockRuntime::new();
 
         runtime.expect_is_privileged().returning(|| false);
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
+        runtime.expect_home_dir().returning(|| Some(test_home()));
         runtime
             .expect_env_var()
             .with(eq("GITHUB_TOKEN"))
@@ -159,7 +158,7 @@ mod tests {
 
         let config = Config::load(&runtime, None, None).unwrap();
 
-        assert_eq!(config.install_root, PathBuf::from("/home/user/.ghri"));
+        assert_eq!(config.install_root, test_home().join(".ghri"));
         assert_eq!(config.api_url, Config::DEFAULT_API_URL);
         assert!(config.token.is_none());
     }
@@ -174,14 +173,19 @@ mod tests {
             .with(eq("GITHUB_TOKEN"))
             .returning(|_| Ok("test_token".to_string()));
 
+        #[cfg(not(windows))]
+        let custom_root = PathBuf::from("/custom/root");
+        #[cfg(windows)]
+        let custom_root = PathBuf::from(r"C:\custom\root");
+
         let config = Config::load(
             &runtime,
-            Some(PathBuf::from("/custom/root")),
+            Some(custom_root.clone()),
             Some("https://github.example.com/api/v3".to_string()),
         )
         .unwrap();
 
-        assert_eq!(config.install_root, PathBuf::from("/custom/root"));
+        assert_eq!(config.install_root, custom_root);
         assert_eq!(config.api_url, "https://github.example.com/api/v3");
         assert_eq!(config.token, Some("test_token".to_string()));
     }
@@ -221,19 +225,24 @@ mod tests {
 
     #[test]
     fn test_config_path_helpers() {
+        #[cfg(not(windows))]
+        let root = PathBuf::from("/root");
+        #[cfg(windows)]
+        let root = PathBuf::from(r"C:\root");
+
         let config = Config {
-            install_root: PathBuf::from("/root"),
+            install_root: root.clone(),
             api_url: Config::DEFAULT_API_URL.to_string(),
             token: None,
         };
 
         assert_eq!(
             config.package_dir("owner", "repo"),
-            PathBuf::from("/root/owner/repo")
+            root.join("owner").join("repo")
         );
         assert_eq!(
             config.version_dir("owner", "repo", "v1.0.0"),
-            PathBuf::from("/root/owner/repo/v1.0.0")
+            root.join("owner").join("repo").join("v1.0.0")
         );
     }
 }

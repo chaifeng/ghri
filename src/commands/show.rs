@@ -112,32 +112,13 @@ mod tests {
     use super::*;
     use crate::package::{LinkRule, Meta};
     use crate::runtime::MockRuntime;
+    use crate::test_utils::configure_mock_runtime_basics;
     use mockall::predicate::*;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
-        #[cfg(not(windows))]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("/home/user")));
-
-        #[cfg(windows)]
-        runtime
-            .expect_home_dir()
-            .returning(|| Some(PathBuf::from("C:\\Users\\user")));
-
-        runtime
-            .expect_env_var()
-            .with(eq("USER"))
-            .returning(|_| Ok("user".to_string()));
-
-        runtime
-            .expect_env_var()
-            .with(eq("GITHUB_TOKEN"))
-            .returning(|_| Err(std::env::VarError::NotPresent));
-
-        runtime.expect_is_privileged().returning(|| false);
+        configure_mock_runtime_basics(runtime);
     }
 
     #[test]
