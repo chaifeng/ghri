@@ -176,14 +176,22 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
 mod tests {
     use super::*;
     use crate::package::Meta;
-    use crate::runtime::MockRuntime;
-    use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
+    use crate::runtime::{MockRuntime, relative_symlink_path};
+    use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_opt_bin, test_root};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
         configure_mock_runtime_basics(runtime);
+    }
+
+    fn expect_symlink(runtime: &mut MockRuntime, target: PathBuf, dest: PathBuf) {
+        let link_target = relative_symlink_path(&dest, &target).unwrap_or(target.clone());
+        runtime
+            .expect_symlink()
+            .with(eq(link_target), eq(dest))
+            .returning(|_, _| Ok(()));
     }
 
     #[test]
@@ -230,14 +238,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 4. find_default_target (read_dir + is_dir) ---
+        let dir_entry = vec![tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(version_dir.clone()))
-            .returning(move |_| Ok(vec![tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .with(eq(tool_path.clone()))
             .returning(|_| false);
 
         // --- 5. Analyze Destination ---
@@ -267,13 +276,7 @@ mod tests {
             .with(eq(dest_dir.clone()))
             .returning(|_| true);
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/tool")),
-                eq(final_link.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, tool_path.clone(), final_link.clone());
 
         // --- 7. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -296,13 +299,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let v2_dir = package_dir.join("v2"); // /home/user/.ghri/owner/repo/v2
-        let v2_tool_path = v2_dir.join("tool"); // /home/user/.ghri/owner/repo/v2/tool
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let v2_dir = package_dir.join("v2");
+        let v2_tool_path = v2_dir.join("tool");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
 
         // --- 1. Check is_installed (exists on meta_path) ---
         runtime
@@ -339,14 +342,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 5. find_default_target (read_dir + is_dir) ---
+        let dir_entry = vec![v2_tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(v2_dir.clone()))
-            .returning(move |_| Ok(vec![v2_tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")))
+            .with(eq(v2_tool_path.clone()))
             .returning(|_| false);
 
         // --- 6. Analyze Destination ---
@@ -366,13 +370,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| true);
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v2/tool")),
-                eq(dest.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, v2_tool_path.clone(), dest.clone());
 
         // --- 8. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -395,10 +393,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let v2_dir = root.join("owner/repo/v2"); // /home/user/.ghri/owner/repo/v2
-        let dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
+        let v2_dir = root.join("owner").join("repo").join("v2");
+        let dest = test_bin_dir().join("tool");
 
         // --- 1. Load Metadata ---
 
@@ -440,10 +438,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let current_link = root.join("owner/repo/current"); // /home/user/.ghri/owner/repo/current
-        let dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
+        let current_link = root.join("owner").join("repo").join("current");
+        let dest = test_bin_dir().join("tool");
 
         // --- 1. Load Metadata ---
 
@@ -490,13 +488,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/tool"); // /home/user/.ghri/owner/repo/v1/bin/tool
-        let dest = PathBuf::from("/usr/local/bin/mytool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let version_dir = package_dir.join("v1");
+        let explicit_path = version_dir.join("bin").join("tool");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("mytool");
 
         // --- 1. is_installed (exists on meta_path) ---
         runtime
@@ -548,15 +546,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| true);
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from(
-                    "../../../home/user/.ghri/owner/repo/v1/bin/tool",
-                )),
-                eq(dest.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, explicit_path.clone(), dest.clone());
 
         // --- 7. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -579,12 +569,12 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/notfound"); // /home/user/.ghri/owner/repo/v1/bin/notfound
-        let dest = PathBuf::from("/usr/local/bin/tool");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let version_dir = package_dir.join("v1");
+        let explicit_path = version_dir.join("bin").join("notfound");
+        let dest = test_bin_dir().join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -645,12 +635,12 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
+        let version_dir = root.join("owner").join("repo").join("v1");
+        let tool_path = version_dir.join("tool");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
 
         // --- 1. Load Metadata ---
 
@@ -679,15 +669,16 @@ mod tests {
             .returning(|_| true);
 
         // Read dir /home/user/.ghri/owner/repo/v1 -> single file [tool]
+        let dir_entry = vec![tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(version_dir))
-            .returning(move |_| Ok(vec![tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         // Check /home/user/.ghri/owner/repo/v1/tool is file (not dir) -> true
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .with(eq(tool_path.clone()))
             .returning(|_| false);
 
         // --- 3. Analyze Destination (CONFLICT) ---
@@ -730,13 +721,17 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let meta_path = root.join("owner/repo/meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = root.join("owner/repo/v1"); // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
-        let other_package_path = PathBuf::from("/home/user/.ghri/other/package/v1/tool");
+        let root = test_root();
+        let meta_path = root.join("owner").join("repo").join("meta.json");
+        let version_dir = root.join("owner").join("repo").join("v1");
+        let tool_path = version_dir.join("tool");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
+        let other_package_path = root
+            .join("other")
+            .join("package")
+            .join("v1")
+            .join("tool");
 
         // --- 1. Load Metadata ---
 
@@ -765,15 +760,16 @@ mod tests {
             .returning(|_| true);
 
         // Read dir /home/user/.ghri/owner/repo/v1 -> single file [tool]
+        let dir_entry = vec![tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(version_dir))
-            .returning(move |_| Ok(vec![tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         // Check /home/user/.ghri/owner/repo/v1/tool is file (not dir) -> true
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .with(eq(tool_path.clone()))
             .returning(|_| false);
 
         // --- 3. Analyze Destination (CONFLICT) ---
@@ -828,13 +824,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
-        let explicit_path = version_dir.join("bin/tool"); // /home/user/.ghri/owner/repo/v1/bin/tool
-        let dest_dir = PathBuf::from("/usr/local/bin");
-        let final_link = dest_dir.join("tool"); // /usr/local/bin/tool (filename from explicit path)
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let version_dir = package_dir.join("v1");
+        let explicit_path = version_dir.join("bin").join("tool");
+        let dest_dir = test_bin_dir();
+        let final_link = dest_dir.join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -894,15 +890,7 @@ mod tests {
             .with(eq(dest_dir.clone()))
             .returning(|_| true);
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from(
-                    "../../../home/user/.ghri/owner/repo/v1/bin/tool",
-                )),
-                eq(final_link.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, explicit_path.clone(), final_link.clone());
 
         // --- 6. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -930,13 +918,13 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let version_dir = package_dir.join("v1"); // /home/user/.ghri/owner/repo/v1
-        let tool_path = version_dir.join("tool"); // /home/user/.ghri/owner/repo/v1/tool
-        let dest = PathBuf::from("/opt/mytools/bin/tool");
-        let dest_parent = PathBuf::from("/opt/mytools/bin");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let version_dir = package_dir.join("v1");
+        let tool_path = version_dir.join("tool");
+        let dest_parent = test_opt_bin();
+        let dest = dest_parent.join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -964,14 +952,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 3. find_default_target ---
+        let dir_entry = vec![tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(version_dir))
-            .returning(move |_| Ok(vec![tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .with(eq(tool_path.clone()))
             .returning(|_| false);
 
         // --- 4. Analyze Destination ---
@@ -996,13 +985,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| Ok(()));
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v1/tool")),
-                eq(dest.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, tool_path.clone(), dest.clone());
 
         // --- 6. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -1025,14 +1008,14 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo"); // /home/user/.ghri/owner/repo
-        let meta_path = package_dir.join("meta.json"); // /home/user/.ghri/owner/repo/meta.json
-        let v1_tool_path = package_dir.join("v1/tool"); // /home/user/.ghri/owner/repo/v1/tool (old)
-        let v2_dir = package_dir.join("v2"); // /home/user/.ghri/owner/repo/v2
-        let v2_tool_path = v2_dir.join("tool"); // /home/user/.ghri/owner/repo/v2/tool (new)
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let v1_tool_path = package_dir.join("v1").join("tool");
+        let v2_dir = package_dir.join("v2");
+        let v2_tool_path = v2_dir.join("tool");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -1073,14 +1056,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 4. find_default_target ---
+        let dir_entry = vec![v2_tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(v2_dir))
-            .returning(move |_| Ok(vec![v2_tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")))
+            .with(eq(v2_tool_path.clone()))
             .returning(|_| false);
 
         // --- 5. Analyze Destination ---
@@ -1122,13 +1106,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| true);
 
-        runtime
-            .expect_symlink()
-            .with(
-                eq(PathBuf::from("../../../home/user/.ghri/owner/repo/v2/tool")),
-                eq(dest.clone()),
-            )
-            .returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, v2_tool_path.clone(), dest.clone());
 
         // --- 8. Save Metadata (save checks package_dir exists) ---
         runtime
@@ -1151,14 +1129,14 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
         let meta_path = package_dir.join("meta.json");
         let v1_dir = package_dir.join("v1");
         let v2_dir = package_dir.join("v2");
         let v2_tool_path = v2_dir.join("tool");
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -1198,14 +1176,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 4. find_default_target ---
+        let dir_entry = vec![v2_tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(v2_dir))
-            .returning(move |_| Ok(vec![v2_tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v2/tool")))
+            .with(eq(v2_tool_path.clone()))
             .returning(|_| false);
 
         // --- 5. Analyze Destination ---
@@ -1247,7 +1226,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| true);
 
-        runtime.expect_symlink().returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, v2_tool_path.clone(), dest.clone());
 
         // --- 8. Save Metadata ---
         runtime
@@ -1284,14 +1263,14 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let root = PathBuf::from("/home/user/.ghri");
-        let package_dir = root.join("owner/repo");
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
         let meta_path = package_dir.join("meta.json");
         let v1_dir = package_dir.join("v1");
         let v1_tool_path = v1_dir.join("tool");
         let v2_dir = package_dir.join("v2");
-        let dest = PathBuf::from("/usr/local/bin/tool");
-        let dest_parent = PathBuf::from("/usr/local/bin");
+        let dest_parent = test_bin_dir();
+        let dest = dest_parent.join("tool");
 
         // --- 1. is_installed + load ---
         runtime
@@ -1328,14 +1307,15 @@ mod tests {
             .returning(|_| true);
 
         // --- 3. find_default_target ---
+        let dir_entry = vec![v1_tool_path.clone()];
         runtime
             .expect_read_dir()
             .with(eq(v1_dir.clone()))
-            .returning(move |_| Ok(vec![v1_tool_path.clone()]));
+            .returning(move |_| Ok(dir_entry.clone()));
 
         runtime
             .expect_is_dir()
-            .with(eq(PathBuf::from("/home/user/.ghri/owner/repo/v1/tool")))
+            .with(eq(v1_tool_path.clone()))
             .returning(|_| false);
 
         // --- 4. Analyze Destination ---
@@ -1377,7 +1357,7 @@ mod tests {
             .with(eq(dest_parent))
             .returning(|_| true);
 
-        runtime.expect_symlink().returning(|_, _| Ok(()));
+        expect_symlink(&mut runtime, v1_tool_path.clone(), dest.clone());
 
         // --- 7. Save Metadata ---
         runtime

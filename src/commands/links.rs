@@ -205,7 +205,10 @@ mod tests {
         configure_runtime_basics(&mut runtime);
 
         // --- Setup Paths ---
-        let meta_path = test_root().join("owner/repo/meta.json");
+        let meta_path = test_root()
+            .join("owner")
+            .join("repo")
+            .join("meta.json");
 
         // --- Check Package Exists (is_installed checks meta.json) ---
 
@@ -217,7 +220,7 @@ mod tests {
 
         // --- Execute & Verify ---
 
-        let result = links(runtime, "owner/repo", Config::for_test("/home/user/.ghri"));
+        let result = links(runtime, "owner/repo", Config::for_test(test_root()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
     }
@@ -229,7 +232,10 @@ mod tests {
         let mut runtime = MockRuntime::new();
 
         // --- Setup Paths ---
-        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
+        let meta_path = test_root()
+            .join("owner")
+            .join("repo")
+            .join("meta.json");
 
         // --- Check Package Exists (is_installed) ---
 
@@ -257,7 +263,7 @@ mod tests {
 
         // --- Execute ---
 
-        let result = links(runtime, "owner/repo", Config::for_test("/home/user/.ghri"));
+        let result = links(runtime, "owner/repo", Config::for_test(test_root()));
         assert!(result.is_ok());
     }
 
