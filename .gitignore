@@ -29,3 +29,6 @@
 
 # Coverage reports
 tarpaulin-report.html
+
+# Environment variables
+.env
