@@ -4,11 +4,10 @@
 //! associated with installed packages, including creation, validation,
 //! and removal of external links.
 
+use crate::domain::model::link::{LinkRule, VersionedLink};
+use crate::runtime::{Runtime, is_path_under, relative_symlink_path};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-
-use crate::package::{LinkRule, VersionedLink};
-use crate::runtime::{Runtime, is_path_under, relative_symlink_path};
 
 /// Status of a symlink check.
 #[derive(Debug, Clone, PartialEq)]

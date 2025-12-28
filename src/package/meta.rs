@@ -1,140 +1,23 @@
-use anyhow::Result;
-use serde::{Deserialize, Deserializer, Serialize};
-use std::path::{Path, PathBuf};
-
-use crate::provider::{Release, RepoId, RepoMetadata};
+use crate::domain::model::LinkRule;
 use crate::runtime::Runtime;
+use anyhow::Result;
+use std::path::Path;
 
-use super::LinkRule;
+// Re-export for backward compatibility
+pub use crate::domain::model::Meta;
 
 const DEFAULT_API_URL: &str = "https://api.github.com";
 
-/// Deserialize a string that may be null as empty string
-fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let opt: Option<String> = Option::deserialize(deserializer)?;
-    Ok(opt.unwrap_or_default())
+/// Extension methods for Meta that depend on Runtime (which we want to keep out of domain models)
+pub trait MetaExt {
+    fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Meta>;
+    fn apply_defaults<R: Runtime>(&mut self, runtime: &R, meta_path: &Path);
 }
 
-/// Package metadata stored locally for installed packages
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Meta {
-    pub name: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub api_url: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub repo_info_url: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub releases_url: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub homepage: Option<String>,
-    #[serde(default)]
-    pub license: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub updated_at: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    pub current_version: String,
-    #[serde(default)]
-    pub releases: Vec<Release>,
-    /// List of link rules for creating external symlinks (updated on install/update)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub links: Vec<LinkRule>,
-    /// List of versioned links for historical version links (not updated on install/update)
-    /// These are links created with explicit version specifiers (e.g., owner/repo@v1.0.0)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub versioned_links: Vec<super::link_rule::VersionedLink>,
-    /// Legacy: Path where the current version is linked to (external symlink)
-    /// Deprecated: Use `links` instead. Kept for backward compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linked_to: Option<PathBuf>,
-    /// Legacy: Relative path within version directory to link
-    /// Deprecated: Use `links` instead. Kept for backward compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linked_path: Option<String>,
-    /// Asset filter patterns used during install/update
-    /// These patterns are saved and reused when updating the package
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<String>,
-}
-
-impl Meta {
-    pub fn from(
-        repo: RepoId,
-        info: RepoMetadata,
-        releases: Vec<Release>,
-        current: &str,
-        api_url: &str,
-    ) -> Self {
-        Meta {
-            name: format!("{}/{}", repo.owner, repo.repo),
-            api_url: api_url.to_string(),
-            repo_info_url: format!("{}/repos/{}/{}", api_url, repo.owner, repo.repo),
-            releases_url: format!("{}/repos/{}/{}/releases", api_url, repo.owner, repo.repo),
-            description: info.description,
-            homepage: info.homepage,
-            license: info.license,
-            updated_at: info.updated_at.unwrap_or_default(),
-            current_version: current.to_string(),
-            releases: {
-                let mut r: Vec<Release> = releases;
-                Meta::sort_releases_internal(&mut r);
-                r
-            },
-            links: vec![],
-            versioned_links: vec![],
-            linked_to: None,
-            linked_path: None,
-            filters: vec![],
-        }
-    }
-
-    fn sort_releases_internal(releases: &mut [Release]) {
-        releases.sort_by(|a, b| {
-            match (&a.published_at, &b.published_at) {
-                (Some(at_a), Some(at_b)) => at_b.cmp(at_a),  // Descending
-                (Some(_), None) => std::cmp::Ordering::Less, // Published comes before unpublished
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.tag.cmp(&a.tag), // Version descending fallback
-            }
-        });
-    }
-
-    pub fn sort_releases(&mut self) {
-        Self::sort_releases_internal(&mut self.releases);
-    }
-
-    pub fn get_latest_stable_release(&self) -> Option<&Release> {
-        self.releases
-            .iter()
-            .filter(|r| !r.prerelease)
-            .max_by(|a, b| {
-                // Simplified version comparison: tag_name might not be semver-compliant,
-                // but published_at is a good proxy for "latest".
-                // If published_at is missing, fall back to version string comparison.
-                match (&a.published_at, &b.published_at) {
-                    (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                    _ => a.tag.cmp(&b.tag),
-                }
-            })
-    }
-
-    /// Get the latest release including pre-releases
-    pub fn get_latest_release(&self) -> Option<&Release> {
-        self.releases
-            .iter()
-            .max_by(|a, b| match (&a.published_at, &b.published_at) {
-                (Some(at_a), Some(at_b)) => at_a.cmp(at_b),
-                _ => a.tag.cmp(&b.tag),
-            })
-    }
-
+impl MetaExt for Meta {
     /// Load meta.json and apply default values for missing fields
     #[tracing::instrument(skip(runtime, path))]
-    pub fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
+    fn load<R: Runtime>(runtime: &R, path: &Path) -> Result<Self> {
         let content = runtime.read_to_string(path)?;
         let mut meta: Meta = serde_json::from_str(&content)?;
 
@@ -144,41 +27,28 @@ impl Meta {
         Ok(meta)
     }
 
-    /// Check if a string is effectively empty (None, empty, or whitespace-only)
-    fn is_empty_or_blank(s: &str) -> bool {
-        s.trim().is_empty()
-    }
-
-    /// Check if an Option<String> is effectively empty
-    fn is_option_empty_or_blank(s: &Option<String>) -> bool {
-        match s {
-            None => true,
-            Some(s) => Self::is_empty_or_blank(s),
-        }
-    }
-
     /// Apply semantic default values for fields that are empty after deserialization
     fn apply_defaults<R: Runtime>(&mut self, runtime: &R, meta_path: &Path) {
         // Parse owner/repo from name
         let (owner, repo) = self.parse_owner_repo();
 
         // Default api_url to GitHub API
-        if Self::is_empty_or_blank(&self.api_url) {
+        if Meta::is_empty_or_blank(&self.api_url) {
             self.api_url = DEFAULT_API_URL.to_string();
         }
 
         // Default repo_info_url based on api_url and name
-        if Self::is_empty_or_blank(&self.repo_info_url) && !owner.is_empty() && !repo.is_empty() {
+        if Meta::is_empty_or_blank(&self.repo_info_url) && !owner.is_empty() && !repo.is_empty() {
             self.repo_info_url = format!("{}/repos/{}/{}", self.api_url, owner, repo);
         }
 
         // Default releases_url based on api_url and name
-        if Self::is_empty_or_blank(&self.releases_url) && !owner.is_empty() && !repo.is_empty() {
+        if Meta::is_empty_or_blank(&self.releases_url) && !owner.is_empty() && !repo.is_empty() {
             self.releases_url = format!("{}/repos/{}/{}/releases", self.api_url, owner, repo);
         }
 
         // Default homepage to GitHub repo page (also handle empty string in Some)
-        if Self::is_option_empty_or_blank(&self.homepage) && !owner.is_empty() && !repo.is_empty() {
+        if Meta::is_option_empty_or_blank(&self.homepage) && !owner.is_empty() && !repo.is_empty() {
             // Convert API URL to web URL
             let web_url = if self.api_url.contains("api.github.com") {
                 "https://github.com".to_string()
@@ -190,7 +60,7 @@ impl Meta {
         }
 
         // Default current_version by reading the 'current' symlink
-        if Self::is_empty_or_blank(&self.current_version)
+        if Meta::is_empty_or_blank(&self.current_version)
             && let Some(parent) = meta_path.parent()
         {
             let current_link = parent.join("current");
@@ -252,57 +122,13 @@ impl Meta {
             }
         }
     }
-
-    /// Parse owner and repo from the name field (format: "owner/repo")
-    fn parse_owner_repo(&self) -> (String, String) {
-        let parts: Vec<&str> = self.name.splitn(2, '/').collect();
-        if parts.len() == 2 {
-            (parts[0].to_string(), parts[1].to_string())
-        } else {
-            (String::new(), String::new())
-        }
-    }
-
-    pub fn merge(&mut self, other: Meta) -> bool {
-        let mut changed = false;
-
-        if self.description != other.description {
-            self.description = other.description;
-            changed = true;
-        }
-        if self.homepage != other.homepage {
-            self.homepage = other.homepage;
-            changed = true;
-        }
-        if self.license != other.license {
-            self.license = other.license;
-            changed = true;
-        }
-
-        for new_release in other.releases {
-            if let Some(existing) = self.releases.iter_mut().find(|r| r.tag == new_release.tag) {
-                if existing != &new_release {
-                    *existing = new_release;
-                    changed = true;
-                }
-            } else {
-                self.releases.push(new_release);
-                changed = true;
-            }
-        }
-
-        if changed {
-            self.sort_releases();
-        }
-
-        changed
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::ReleaseAsset;
+    use crate::provider::{Release, RepoId, RepoMetadata};
     use crate::runtime::MockRuntime;
     use mockall::predicate::eq;
     use std::path::PathBuf;

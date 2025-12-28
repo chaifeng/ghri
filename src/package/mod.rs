@@ -13,6 +13,6 @@ mod version;
 pub use discovery::find_all_packages;
 pub use link::{CheckedLink, LinkManager, LinkStatus, LinkValidation, RemoveLinkResult};
 pub use link_rule::{LinkRule, VersionedLink};
-pub use meta::Meta;
+pub use meta::{Meta, MetaExt};
 pub use repository::PackageRepository;
 pub use version::{VersionConstraint, VersionResolver};
