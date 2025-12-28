@@ -393,7 +393,7 @@ verify_metadata_contains_n_links() {
       dest_list+=("$line")
   done < <(get_link_dest "$meta_file" "$path")
 
-  for dest in "${dest_list[@]}"; do
+  for dest in "${dest_list[@]-}"; do
       note "Link dest in meta.json: '${path}' -> $dest"
       expect_symlink_to_be_relative "${meta_file%/*}" "$dest"
       actual_count=$((actual_count + 1))
@@ -472,7 +472,7 @@ verify_metadata_contains_n_versioned_links() {
       dest_list+=("$line")
   done < <(get_versioned_link_dest "$meta_file" "$version" "$path")
 
-  for dest in "${dest_list[@]}"; do
+  for dest in "${dest_list[@]-}"; do
       note "Versioned link dest in meta.json: $version '${path}' -> $dest"
       expect_symlink_to_be_relative "${meta_file%/*}" "$dest"
       actual_count=$((actual_count + 1))
