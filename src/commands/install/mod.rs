@@ -11,15 +11,15 @@ use super::config::{Config, InstallOptions};
 use super::prune::prune_package_dir;
 use super::services::Services;
 
-mod installer;
+mod ui;
 
-pub use crate::domain::service::install_manager::{
+pub use crate::domain::service::release_installer::{
     DefaultReleaseInstaller, ReleaseInstaller, get_download_plan,
 };
 
 #[cfg(test)]
 #[allow(unused_imports)]
-pub use crate::domain::service::install_manager::MockReleaseInstaller;
+pub use crate::domain::service::release_installer::MockReleaseInstaller;
 
 #[tracing::instrument(skip(runtime, config, options))]
 pub async fn install<R: Runtime + 'static>(
@@ -103,7 +103,7 @@ pub async fn run_install<R: Runtime + 'static>(
     let plan = get_download_plan(&release, &effective_filters)?;
 
     if !options.yes {
-        installer::show_install_plan(
+        ui::show_install_plan(
             repo,
             &release,
             &target_dir,

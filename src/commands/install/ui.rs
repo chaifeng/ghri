@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    domain::service::install_manager::DownloadPlan,
+    domain::service::release_installer::DownloadPlan,
     package::Meta,
     provider::{Release, RepoId},
 };

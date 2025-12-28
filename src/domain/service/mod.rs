@@ -1,2 +1,2 @@
-pub mod install_manager;
-pub use install_manager::*;
+pub mod release_installer;
+pub use release_installer::*;
