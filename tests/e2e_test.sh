@@ -314,35 +314,35 @@ expect() {
     elif dsl_match command to fail: % === "$@"; then
         expect_command_to_fail "Command ${DSL_ARGS[*]}" "${DSL_ARGS[@]}"
 
-    elif dsl_match link dest found in _ for path _ === "$@"; then
-        verify_metadata_contains_link "${DSL_ARGS[0]}" "${DSL_ARGS[1]}"
+    elif dsl_match link to _ in meta === "$@"; then
+        verify_metadata_contains_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json"
 
-    elif dsl_match link dest found in _ for default path === "$@"; then
-        verify_metadata_contains_link "${DSL_ARGS[0]}"
+    elif dsl_match link to _ at version _ in meta === "$@"; then
+        verify_metadata_contains_versioned_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}"
 
-    elif dsl_match link dest correctly not found in _ for path _ === "$@"; then
-        verify_metadata_does_not_contain_link "${DSL_ARGS[0]}" "${DSL_ARGS[1]}"
+    elif dsl_match link to _ at version _ with path _ in meta === "$@"; then
+        verify_metadata_contains_versioned_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}" "${DSL_ARGS[2]}"
 
-    elif dsl_match link dest correctly not found in _ for default path === "$@"; then
-        verify_metadata_does_not_contain_link "${DSL_ARGS[0]}"
+    elif dsl_match link to _ with path _ in meta === "$@"; then
+        verify_metadata_contains_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}"
 
-    elif dsl_match _ link dests found in _ for path _ === "$@"; then
-        verify_metadata_contains_n_links "${DSL_ARGS[0]}" "${DSL_ARGS[1]}" "${DSL_ARGS[2]}"
+    elif dsl_match _ links to _ in meta === "$@"; then
+        verify_metadata_contains_n_links "${DSL_ARGS[0]}" "$GHRI_ROOT/${DSL_ARGS[1]}/meta.json"
 
-    elif dsl_match _ link dests found in _ for default path === "$@"; then
-        verify_metadata_contains_n_links "${DSL_ARGS[0]}" "${DSL_ARGS[1]}"
+    elif dsl_match _ links to _ at version _ in meta === "$@"; then
+        verify_metadata_contains_n_versioned_links "${DSL_ARGS[0]}" "$GHRI_ROOT/${DSL_ARGS[1]}/meta.json" "${DSL_ARGS[2]}"
 
-    elif dsl_match versioned link dest _ found in _ for path _ === "$@"; then
-        verify_metadata_contains_versioned_link "${DSL_ARGS[1]}" "${DSL_ARGS[0]}" "${DSL_ARGS[2]}"
+    elif dsl_match no link to _ in meta === "$@"; then
+        verify_metadata_does_not_contain_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json"
 
-    elif dsl_match versioned link dest _ found in _ for default path === "$@"; then
-        verify_metadata_contains_versioned_link "${DSL_ARGS[1]}" "${DSL_ARGS[0]}"
+    elif dsl_match no link to _ at version _ in meta === "$@"; then
+        verify_metadata_does_not_contain_versioned_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}"
 
-    elif dsl_match versioned link dest _ correctly not found in _ for path _ === "$@"; then
-        verify_metadata_does_not_contain_versioned_link "${DSL_ARGS[1]}" "${DSL_ARGS[0]}" "${DSL_ARGS[2]}"
+    elif dsl_match no link to _ with path _ in meta === "$@"; then
+        verify_metadata_does_not_contain_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}"
 
-    elif dsl_match versioned link dest _ correctly not found in _ for default path === "$@"; then
-        verify_metadata_does_not_contain_versioned_link "${DSL_ARGS[1]}" "${DSL_ARGS[0]}"
+    elif dsl_match no link to _ at version _ with path _ in meta === "$@"; then
+        verify_metadata_does_not_contain_versioned_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json" "${DSL_ARGS[1]}" "${DSL_ARGS[2]}"
 
     elif dsl_match path _ not to exist === "$@"; then
         expect_path_not_to_exist "${DSL_ARGS[0]}"
@@ -454,6 +454,28 @@ verify_metadata_does_not_contain_versioned_link() {
     else
         fail "Unexpectedly found versioned link dest in meta.json for version $version and path '${path}': $dest"
     fi
+}
+
+# shellcheck disable=SC2329
+verify_metadata_contains_n_versioned_links() {
+  local expected_count="$1"
+  local meta_file="$2"
+  local version="$3"
+  local path="${4:-}"
+  local actual_count=0
+  local -a dest_list
+  mapfile -t dest_list < <(get_versioned_link_dest "$meta_file" "$version" "$path")
+
+  for dest in "${dest_list[@]}"; do
+      note "Versioned link dest in meta.json: $version '${path}' -> $dest"
+      expect_symlink_to_be_relative "${meta_file%/*}" "$dest"
+      actual_count=$((actual_count + 1))
+  done
+  if [[ "$actual_count" -eq "$expected_count" ]]; then
+      pass "Found expected number of versioned link dests ($expected_count) in meta.json for version $version and path '${path}'"
+  else
+      fail "Expected $expected_count versioned link dests but found $actual_count in meta.json for version $version and path '${path}'"
+  fi
 }
 
 # shellcheck disable=SC2329
@@ -646,7 +668,8 @@ expect_command_to_fail() {
 #######################################
 
 # shellcheck disable=SC2329
-scenario_basic_usage_with_bach_repo() (
+scenario_basic_usage_with_bach_repo() {
+    local GHRI_ROOT
     describe_scenario "Test: Bach Lifecycle (Install, Verify, Link, Unlink, Remove)"
     using_root "$TEST_ROOT/bach_lifecycle"
     local bin_dir="$TEST_ROOT/bach_bin"
@@ -683,7 +706,7 @@ scenario_basic_usage_with_bach_repo() (
 
     # Verify link in meta.json is relative to package directory
     local meta_file="$GHRI_ROOT/bach-sh/bach/meta.json"
-    expect link dest found in "$meta_file" for default path
+    expect link to bach-sh/bach in meta
 
     # Verify show command
     output should contain "$link_path" from command: ghri show bach-sh/bach
@@ -697,19 +720,19 @@ scenario_basic_usage_with_bach_repo() (
     note "6. Unlinking..."
     ensure "$link_path" exists
     ghri unlink bach-sh/bach "$link_path"
-    expect link dest correctly not found in "$meta_file" for default path
+    expect no link to bach-sh/bach in meta
     expect symlink "$link_path" not to exist
 
     # 7. Link Multiple & Unlink All
     note "7. Linking multiple and unlinking all..."
     ghri link bach-sh/bach "$bin_dir/link1" >/dev/null
     ghri link bach-sh/bach "$bin_dir/link2" >/dev/null
-    expect 2 link dests found in "$meta_file" for default path
+    expect 2 links to bach-sh/bach in meta
 
     ghri unlink bach-sh/bach --all
     expect symlink "$bin_dir/link1" not to exist
     expect symlink "$bin_dir/link2" not to exist
-    expect 0 link dests found in "$meta_file" for default path
+    expect 0 links to bach-sh/bach in meta
 
     # 8. Install an old version and verify current
     note "8. Installing specific old version (0.6.0)..."
@@ -718,36 +741,37 @@ scenario_basic_usage_with_bach_repo() (
 
     # 9. Link versioned link
     note "9. Creating versioned link for 0.6.0..."
-    expect versioned link dest "0.6.0" correctly not found in "$GHRI_ROOT/bach-sh/bach/meta.json" for default path
+    expect no link to bach-sh/bach at version 0.6.0 in meta
     ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
     expect symlink "$bin_dir/bach-v0.6.0" to exist &&
         expect symlink "$(readlink "$bin_dir/bach-v0.6.0")" to be relative to "${bin_dir}"
-    expect versioned link dest "0.6.0" found in "$GHRI_ROOT/bach-sh/bach/meta.json" for path ""
+    expect link to bach-sh/bach at version 0.6.0 in meta
 
 #    # 10. Unlink versioned link
 #    note "10. Unlinking versioned link for 0.6.0..."
 #    ghri unlink bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
-#    expect versioned link dest "0.6.0" correctly not found in "$GHRI_ROOT/bach-sh/bach/meta.json" for default path
+#    expect no link to bach-sh/bach at version 0.6.0 in meta
 #    expect symlink "$bin_dir/bach-v0.6.0" not to exist
 #    note "Default links should still exist"
-#    expect link dest found in "$GHRI_ROOT/bach-sh/bach/meta.json" for default path
+#    expect link to bach-sh/bach in meta
 #
 #    # 11. Unlinking all versioned links for 0.6.0...
 #    note "11. Unlinking all versioned links for 0.6.0..."
 #    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0-1" >/dev/null
 #    ghri unlink bach-sh/bach@0.6.0 --all
-#    expect versioned link dest "0.6.0" correctly not found in "$GHRI_ROOT/bach-sh/bach/meta.json" for default path
+#    expect no link to bach-sh/bach at version 0.6.0 in meta
 #    note "Default links should still exist"
-#    expect link dest found in "$GHRI_ROOT/bach-sh/bach/meta.json" for default path
+#    expect link to bach-sh/bach in meta
 
     # 12. Remove
     note "12. Removing package..."
     ghri remove -y bach-sh/bach
     expect path "$GHRI_ROOT/bach-sh/bach" not to exist
-)
+}
 
 # shellcheck disable=SC2329
-scenario_version_management_and_upgrades() (
+scenario_version_management_and_upgrades() {
+    local GHRI_ROOT
     describe_scenario "Test: Version Lifecycle (Install specific, Upgrade, Versioned Links, Remove)"
     using_root "$TEST_ROOT/version_lifecycle"
     local bin_dir="$TEST_ROOT/version_bin"
@@ -761,7 +785,7 @@ scenario_version_management_and_upgrades() (
     # 2. Create Versioned Link
     note "2. Creating versioned link..."
     ghri link bach-sh/bach@0.7.1 "$bin_dir/bach-v1"
-    expect versioned link dest "0.7.1" found in "$meta_file" for default path
+    expect link to bach-sh/bach at version 0.7.1 in meta
     expect path "$bin_dir/bach-v1" to exist &&
         expect symlink "$bin_dir/bach-v1" to exist
 
@@ -794,10 +818,11 @@ scenario_version_management_and_upgrades() (
     # Now with force
     ghri remove -y bach-sh/bach@0.7.2 --force
     expect path "$GHRI_ROOT/bach-sh/bach/0.7.2" not to exist
-)
+}
 
 # shellcheck disable=SC2329
-scenario_filtering_and_path_linking() (
+scenario_filtering_and_path_linking() {
+    local GHRI_ROOT
     describe_scenario "Test: Zidr Lifecycle (Filter, Link Dir, Unlink Path)"
     using_root "$TEST_ROOT/zidr_lifecycle"
     local bin_dir="$TEST_ROOT/zidr_bin"
@@ -833,7 +858,7 @@ scenario_filtering_and_path_linking() (
     if [[ -n "$link_name" ]]; then
         ghri link "chaifeng/zidr:$link_name" "$bin_dir"
         expect path "$bin_dir/$link_name" to exist
-        expect link dest found in "$GHRI_ROOT/chaifeng/zidr/meta.json" for path "$link_name"
+        expect link to chaifeng/zidr with path "$link_name" in meta
     else
         warn "Could not find link to verify"
     fi
@@ -846,10 +871,11 @@ scenario_filtering_and_path_linking() (
     else
         warn "Could not find link to unlink"
     fi
-)
+}
 
 # shellcheck disable=SC2329
-scenario_upgrade_mechanism_mocked() (
+scenario_upgrade_mechanism_mocked() {
+    local GHRI_ROOT
     describe_scenario "Test: Upgrade after update (Mocked)"
     # This test is valuable as it tests the update logic without needing to download an old version
 
@@ -902,10 +928,11 @@ EOF
 
     # Verify current now points to latest version
     expect symlink "$pkg_dir/current" to point to "0.7.2"
-)
+}
 
 # shellcheck disable=SC2329
-scenario_error_handling() (
+scenario_error_handling() {
+    local GHRI_ROOT
     describe_scenario "Test: Error Cases"
     using_root "$TEST_ROOT/errors"
 
@@ -930,10 +957,11 @@ scenario_error_handling() (
 
     # Unlink missing args
     expect command to fail: ghri unlink bach-sh/bach
-)
+}
 
 # shellcheck disable=SC2329
-scenario_edge_cases_and_concurrency() (
+scenario_edge_cases_and_concurrency() {
+    local GHRI_ROOT
     describe_scenario "Test: Edge Cases (Env Root, Relative Paths, Concurrent)"
 
     # 1. Custom Root via Env
@@ -977,14 +1005,15 @@ scenario_edge_cases_and_concurrency() (
 
     expect directory "$conc_root/bach-sh/bach" to exist
     expect directory "$conc_root/chaifeng/zidr" to exist
-)
+}
 
 # shellcheck disable=SC2329
-scenario_help_and_version_info() (
+scenario_help_and_version_info() {
+    local GHRI_ROOT
     describe_scenario "Test: Help & Version"
     expect command to succeed: ghri --help
     expect command to succeed: ghri --version
-)
+}
 
 #######################################
 # Main
