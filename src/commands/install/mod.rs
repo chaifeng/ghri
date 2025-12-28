@@ -12,7 +12,6 @@ use super::prune::prune_package_dir;
 use super::services::Services;
 
 mod download;
-mod external_links;
 mod installer;
 
 pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
@@ -22,7 +21,6 @@ pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
 pub use download::MockReleaseInstaller;
 
 use download::get_download_plan;
-use external_links::update_external_links;
 
 #[tracing::instrument(skip(runtime, config, options))]
 pub async fn install<R: Runtime + 'static>(
@@ -136,9 +134,7 @@ pub async fn run_install<R: Runtime + 'static>(
     action.update_current_link(repo, &release.tag)?;
 
     // Update external links
-    if let Some(package_dir) = target_dir.parent()
-        && let Err(e) = update_external_links(runtime.as_ref(), package_dir, &target_dir, &meta)
-    {
+    if let Err(e) = action.update_external_links(&meta, &target_dir) {
         warn!("Failed to update external links: {}. Continuing.", e);
     }
 
@@ -279,6 +275,11 @@ mod tests {
         action
             .expect_update_current_link()
             .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| Ok(()));
+
+        // Mock update_external_links
+        action
+            .expect_update_external_links()
             .returning(|_, _| Ok(()));
 
         // Mock save_meta
@@ -602,6 +603,10 @@ mod tests {
         action
             .expect_update_current_link()
             .with(eq(repo.clone()), eq("v2.0.0"))
+            .returning(|_, _| Ok(()));
+
+        action
+            .expect_update_external_links()
             .returning(|_, _| Ok(()));
 
         action.expect_save_meta().returning(|_, _| Ok(()));

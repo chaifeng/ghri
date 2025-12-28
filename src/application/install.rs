@@ -86,6 +86,9 @@ pub trait InstallOperations: Send + Sync {
     /// Update the 'current' symlink after installation
     fn update_current_link(&self, repo: &RepoId, version: &str) -> Result<()>;
 
+    /// Update external links based on metadata
+    fn update_external_links(&self, meta: &Meta, version_dir: &Path) -> Result<()>;
+
     /// Save metadata after successful installation
     fn save_meta(&self, repo: &RepoId, meta: &Meta) -> Result<()>;
 
@@ -277,45 +280,101 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
 
     /// Update external links based on metadata
     ///
-    /// Note: This is a simplified implementation. For full atomic update behavior,
-    /// use `crate::commands::install::external_links::update_external_links` instead.
-    #[allow(dead_code)]
+    /// Uses atomic approach: first validate all links, then execute all updates
+    #[tracing::instrument(skip(self, meta, version_dir))]
     pub fn update_external_links(&self, meta: &Meta, version_dir: &Path) -> Result<()> {
-        if let Some(package_dir) = version_dir.parent() {
-            // Check and update valid links
-            let (valid_links, _invalid_links) =
-                self.link_manager.check_links(&meta.links, package_dir);
+        use crate::package::{LinkRule, LinkValidation};
 
-            for link_info in valid_links {
-                if link_info.status.is_valid() || link_info.status.is_creatable() {
-                    // Determine the target path
-                    let target = if let Some(ref path) = link_info.path {
-                        version_dir.join(path)
-                    } else {
-                        // Use default target (find executable in version_dir)
-                        match self.link_manager.find_default_target(version_dir) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                warn!(
-                                    "Failed to find default target for {}: {}. Skipping.",
-                                    link_info.dest.display(),
-                                    e
-                                );
-                                continue;
-                            }
-                        }
-                    };
+        // Collect all rules to process (including legacy linked_to)
+        let mut all_rules: Vec<LinkRule> = meta.links.clone();
+        if let Some(ref linked_to) = meta.linked_to {
+            all_rules.push(LinkRule {
+                dest: linked_to.clone(),
+                path: meta.linked_path.clone(),
+            });
+        }
 
-                    if let Err(e) = self.link_manager.create_link(&target, &link_info.dest) {
-                        warn!(
-                            "Failed to update link {}: {}. Continuing.",
-                            link_info.dest.display(),
-                            e
-                        );
-                    }
+        if all_rules.is_empty() {
+            return Ok(());
+        }
+
+        let package_dir = version_dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Version directory has no parent"))?;
+
+        // --- Phase 1: Validate all links ---
+        #[derive(Debug)]
+        struct ValidatedLink {
+            target: PathBuf,
+            dest: PathBuf,
+            needs_removal: bool,
+        }
+
+        let mut validated_links: Vec<ValidatedLink> = Vec::new();
+        let mut skipped: Vec<(PathBuf, String)> = Vec::new();
+        let mut errors: Vec<(PathBuf, String)> = Vec::new();
+
+        for rule in &all_rules {
+            match self
+                .link_manager
+                .validate_link(rule, version_dir, package_dir)
+            {
+                LinkValidation::Valid {
+                    target,
+                    dest,
+                    needs_removal,
+                } => {
+                    validated_links.push(ValidatedLink {
+                        target,
+                        dest,
+                        needs_removal,
+                    });
+                }
+                LinkValidation::Skip { dest, reason } => {
+                    log::debug!("Skipping link {:?}: {}", dest, reason);
+                    eprintln!("Warning: Skipping {:?} - {}", dest, reason);
+                    skipped.push((dest, reason));
+                }
+                LinkValidation::Error { dest, error } => {
+                    eprintln!("Error validating link {:?}: {}", dest, error);
+                    errors.push((dest, error));
                 }
             }
         }
+
+        // If there are validation errors, fail before making any changes
+        if !errors.is_empty() {
+            let error_msgs: Vec<String> = errors
+                .iter()
+                .map(|(dest, e)| format!("{:?}: {}", dest, e))
+                .collect();
+            anyhow::bail!(
+                "Link validation failed for {} link(s):\n  {}",
+                errors.len(),
+                error_msgs.join("\n  ")
+            );
+        }
+
+        // --- Phase 2: Execute all validated link updates ---
+        for validated in &validated_links {
+            // Remove existing symlink if needed
+            if validated.needs_removal {
+                self.link_manager.remove_link(&validated.dest)?;
+            }
+
+            // Create new symlink (create_link handles parent directory and relative path)
+            self.link_manager
+                .create_link(&validated.target, &validated.dest)?;
+            info!(
+                "Updated external link {:?} -> {:?}",
+                validated.dest, validated.target
+            );
+        }
+
+        if !skipped.is_empty() {
+            warn!("{} link(s) were skipped", skipped.len());
+        }
+
         Ok(())
     }
 
@@ -475,6 +534,10 @@ impl<'a, R: Runtime + 'static> InstallOperations for InstallAction<'a, R> {
     fn update_current_link(&self, repo: &RepoId, version: &str) -> Result<()> {
         let package_dir = self.package_dir(repo);
         self.link_manager.update_current_link(&package_dir, version)
+    }
+
+    fn update_external_links(&self, meta: &Meta, version_dir: &Path) -> Result<()> {
+        self.update_external_links(meta, version_dir)
     }
 
     fn save_meta(&self, repo: &RepoId, meta: &Meta) -> Result<()> {
@@ -686,5 +749,169 @@ mod tests {
         };
         let dir = action.package_dir(&repo);
         assert_eq!(dir, PathBuf::from("/root/owner/repo"));
+    }
+
+    #[test]
+    fn test_update_external_links_no_links() {
+        let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| std::path::PathBuf::from("/tmp"));
+
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/root".into());
+
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            links: vec![],
+            ..Default::default()
+        };
+
+        let version_dir = PathBuf::from("/root/o/r/v1");
+        let result = action.update_external_links(&meta, &version_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_external_links_updates_existing_symlink() {
+        let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| std::path::PathBuf::from("/tmp"));
+
+        let linked_to = PathBuf::from("/usr/local/bin/tool");
+        let version_dir = PathBuf::from("/root/o/r/v2");
+        let link_target = PathBuf::from("/root/o/r/v2/tool");
+        let old_target = PathBuf::from("/root/o/r/v1/tool");
+
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v2".into(),
+            links: vec![crate::package::LinkRule {
+                dest: linked_to.clone(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+
+        // 1. Determine Link Target
+        runtime
+            .expect_read_dir()
+            .with(mockall::predicate::eq(version_dir.clone()))
+            .returning(|_| Ok(vec![PathBuf::from("/root/o/r/v2/tool")]));
+        runtime
+            .expect_is_dir()
+            .with(mockall::predicate::eq(link_target.clone()))
+            .returning(|_| false);
+
+        // 2. Check if Destination Exists
+        runtime
+            .expect_exists()
+            .with(mockall::predicate::eq(linked_to.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_is_symlink()
+            .with(mockall::predicate::eq(linked_to.clone()))
+            .returning(|_| true);
+
+        // 3. Verify Symlink Target
+        runtime
+            .expect_resolve_link()
+            .with(mockall::predicate::eq(linked_to.clone()))
+            .returning(move |_| Ok(old_target.clone()));
+
+        // 4. Remove Old Symlink
+        runtime
+            .expect_is_symlink()
+            .with(mockall::predicate::eq(linked_to.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_remove_symlink()
+            .with(mockall::predicate::eq(linked_to.clone()))
+            .returning(|_| Ok(()));
+
+        // 5. Create New Symlink
+        runtime
+            .expect_exists()
+            .with(mockall::predicate::eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
+        runtime
+            .expect_symlink()
+            .with(
+                mockall::predicate::eq(PathBuf::from("../../../root/o/r/v2/tool")),
+                mockall::predicate::eq(linked_to.clone()),
+            )
+            .returning(|_, _| Ok(()));
+
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/root".into());
+        let result = action.update_external_links(&meta, &version_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_external_links_fails_atomically_on_validation_error() {
+        let mut runtime = MockRuntime::new();
+        runtime
+            .expect_temp_dir()
+            .returning(|| std::path::PathBuf::from("/tmp"));
+
+        let version_dir = PathBuf::from("/root/o/r/v1");
+        let linked_to1 = PathBuf::from("/usr/local/bin/tool1");
+        let linked_to2 = PathBuf::from("/usr/local/bin/tool2");
+        let link_target = PathBuf::from("/root/o/r/v1/tool");
+
+        let meta = Meta {
+            name: "o/r".into(),
+            current_version: "v1".into(),
+            links: vec![
+                crate::package::LinkRule {
+                    dest: linked_to1.clone(),
+                    path: None,
+                },
+                crate::package::LinkRule {
+                    dest: linked_to2.clone(),
+                    path: Some("nonexistent".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Validation Phase
+        let link_target_for_read = link_target.clone();
+        runtime
+            .expect_read_dir()
+            .with(mockall::predicate::eq(version_dir.clone()))
+            .returning(move |_| Ok(vec![link_target_for_read.clone()]));
+        runtime
+            .expect_is_dir()
+            .with(mockall::predicate::eq(link_target.clone()))
+            .returning(|_| false);
+
+        runtime
+            .expect_exists()
+            .with(mockall::predicate::eq(linked_to1.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_is_symlink()
+            .with(mockall::predicate::eq(linked_to1.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_exists()
+            .with(mockall::predicate::eq(PathBuf::from("/usr/local/bin")))
+            .returning(|_| true);
+
+        runtime
+            .expect_exists()
+            .with(mockall::predicate::eq(version_dir.join("nonexistent")))
+            .returning(|_| false);
+
+        let factory = make_test_factory();
+        let action = InstallAction::new(&runtime, &factory, "/root".into());
+        let result = action.update_external_links(&meta, &version_dir);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("validation failed") || err_msg.contains("does not exist"));
     }
 }
