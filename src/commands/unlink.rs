@@ -3,7 +3,7 @@ use log::{debug, info, warn};
 use std::path::PathBuf;
 
 use crate::application::LinkAction;
-use crate::package::{LinkRule, RemoveLinkResult};
+use crate::domain::model::{LinkRule, RemoveLinkResult};
 use crate::runtime::{Runtime, resolve_relative_path};
 
 use super::config::Config;
@@ -231,7 +231,7 @@ pub fn unlink<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::MockRuntime;
     use crate::test_utils::{
         configure_mock_runtime_basics, test_bin_dir, test_external_path, test_home, test_root,

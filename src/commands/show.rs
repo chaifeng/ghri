@@ -110,7 +110,7 @@ pub fn show<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::{LinkRule, Meta};
+    use crate::domain::model::{LinkRule, Meta};
     use crate::runtime::MockRuntime;
     use crate::test_utils::configure_mock_runtime_basics;
     use mockall::predicate::*;
@@ -598,7 +598,7 @@ mod tests {
             .returning(|_| true);
 
         // Read meta.json -> has versioned link to v1.0.0
-        use crate::package::VersionedLink;
+        use crate::domain::model::VersionedLink;
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v2.0.0".into(), // Current is v2

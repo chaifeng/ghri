@@ -2,7 +2,7 @@ use anyhow::Result;
 use log::warn;
 
 use crate::application::InstallAction;
-use crate::package::VersionResolver;
+use crate::domain::model::VersionResolver;
 use crate::provider::RepoId;
 use crate::runtime::Runtime;
 

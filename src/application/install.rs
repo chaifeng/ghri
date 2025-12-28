@@ -15,7 +15,8 @@ use async_trait::async_trait;
 use log::{info, warn};
 
 use crate::commands::InstallOptions;
-use crate::package::{LinkManager, Meta, PackageRepository, VersionResolver};
+use crate::domain::model::{Meta, VersionResolver};
+use crate::domain::service::{LinkManager, PackageRepository};
 use crate::provider::{Provider, ProviderFactory, Release, RepoId};
 use crate::runtime::Runtime;
 
@@ -283,7 +284,7 @@ impl<'a, R: Runtime> InstallAction<'a, R> {
     /// Uses atomic approach: first validate all links, then execute all updates
     #[tracing::instrument(skip(self, meta, version_dir))]
     pub fn update_external_links(&self, meta: &Meta, version_dir: &Path) -> Result<()> {
-        use crate::package::{LinkRule, LinkValidation};
+        use crate::domain::model::{LinkRule, LinkValidation};
 
         // Collect all rules to process (including legacy linked_to)
         let mut all_rules: Vec<LinkRule> = meta.links.clone();
@@ -788,7 +789,7 @@ mod tests {
         let meta = Meta {
             name: "o/r".into(),
             current_version: "v2".into(),
-            links: vec![crate::package::LinkRule {
+            links: vec![crate::domain::model::LinkRule {
                 dest: linked_to.clone(),
                 path: None,
             }],
@@ -866,11 +867,11 @@ mod tests {
             name: "o/r".into(),
             current_version: "v1".into(),
             links: vec![
-                crate::package::LinkRule {
+                crate::domain::model::LinkRule {
                     dest: linked_to1.clone(),
                     path: None,
                 },
-                crate::package::LinkRule {
+                crate::domain::model::LinkRule {
                     dest: linked_to2.clone(),
                     path: Some("nonexistent".to_string()),
                 },

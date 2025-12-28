@@ -5,7 +5,7 @@ pub mod commands;
 pub mod domain;
 pub mod download;
 pub mod http;
-pub mod package;
+// pub mod package;
 pub mod platform;
 pub mod provider;
 pub mod runtime;

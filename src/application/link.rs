@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::package::{LinkManager, LinkStatus, Meta, PackageRepository};
+use crate::domain::model::{LinkStatus, Meta};
+use crate::domain::service::{LinkManager, PackageRepository};
 use crate::runtime::Runtime;
 
 /// Link action - manages symlinks for installed packages

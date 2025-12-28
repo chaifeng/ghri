@@ -31,7 +31,7 @@ pub fn list<R: Runtime>(runtime: R, config: Config) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;
     use std::path::PathBuf;

@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::application::LinkAction;
-use crate::package::{LinkRule, VersionedLink};
+use crate::domain::model::{LinkRule, VersionedLink};
 use crate::runtime::{Runtime, resolve_relative_path};
 
 use super::config::Config;
@@ -173,7 +173,7 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::{MockRuntime, relative_symlink_path};
     use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_opt_bin, test_root};
     use mockall::predicate::*;

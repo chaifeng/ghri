@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use crate::runtime::Runtime;
 
-use super::{Meta, MetaExt, find_all_packages};
+use crate::domain::model::{Meta, MetaExt};
+use crate::domain::service::find_all_packages;
 
 /// Repository for managing locally installed packages.
 ///

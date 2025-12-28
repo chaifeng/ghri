@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::package::{LinkRule, PackageRepository};
+use crate::domain::model::LinkRule;
+use crate::domain::service::PackageRepository;
 use crate::provider::{PackageSpec, Release};
 use crate::runtime::Runtime;
 
@@ -32,7 +33,7 @@ pub struct PackageDetails {
     /// Link rules
     pub links: Vec<LinkRule>,
     /// Versioned links
-    pub versioned_links: Vec<crate::package::VersionedLink>,
+    pub versioned_links: Vec<crate::domain::model::VersionedLink>,
     /// Path to current symlink
     pub current_version_path: Option<PathBuf>,
 }
@@ -111,7 +112,7 @@ impl<'a, R: Runtime> ShowAction<'a, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::eq;
 

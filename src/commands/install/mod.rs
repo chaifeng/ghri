@@ -169,7 +169,7 @@ pub async fn run_install<R: Runtime + 'static>(
 mod tests {
     use super::*;
     use crate::application::MockInstallOperations;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::provider::{MockProvider, Release, RepoId};
     use crate::runtime::MockRuntime;
     use mockall::predicate::*;

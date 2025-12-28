@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::package::PackageRepository;
+use crate::domain::service::PackageRepository;
 use crate::runtime::Runtime;
 
 /// Information about an installed package
@@ -50,7 +50,7 @@ impl<'a, R: Runtime> ListAction<'a, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::MockRuntime;
     use mockall::predicate::eq;
 

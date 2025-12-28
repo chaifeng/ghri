@@ -3,7 +3,7 @@ use log::debug;
 use std::path::Path;
 
 use crate::application::LinkAction;
-use crate::package::{LinkRule, LinkStatus, VersionedLink};
+use crate::domain::model::{LinkRule, LinkStatus, VersionedLink};
 use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
@@ -135,7 +135,7 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::Meta;
+    use crate::domain::model::Meta;
     use crate::runtime::MockRuntime;
     use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
     use mockall::predicate::*;

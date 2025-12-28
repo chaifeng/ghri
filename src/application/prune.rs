@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::package::PackageRepository;
+use crate::domain::service::PackageRepository;
 use crate::runtime::Runtime;
 
 /// Information about versions to prune for a package

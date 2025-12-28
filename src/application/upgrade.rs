@@ -10,11 +10,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::package::{Meta, PackageRepository};
+use crate::domain::model::Meta;
+use crate::domain::service::PackageRepository;
 use crate::provider::{Provider, ProviderFactory, RepoId};
 use crate::runtime::Runtime;
 
-use super::install::InstallAction;
+use crate::application::InstallAction;
 
 /// Result of checking for an update
 #[derive(Debug)]

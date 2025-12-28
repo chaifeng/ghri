@@ -3,7 +3,8 @@ use log::debug;
 use std::path::Path;
 
 use crate::application::LinkAction;
-use crate::package::{LinkManager, Meta, PackageRepository};
+use crate::domain::model::Meta;
+use crate::domain::service::{LinkManager, PackageRepository};
 use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
@@ -339,7 +340,7 @@ fn remove_package<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::package::LinkRule;
+    use crate::domain::model::LinkRule;
     use crate::runtime::MockRuntime;
     use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
     use mockall::predicate::*;

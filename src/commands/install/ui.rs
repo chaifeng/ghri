@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::{
+    domain::model::Meta,
     domain::service::release_installer::DownloadPlan,
-    package::Meta,
     provider::{Release, RepoId},
 };
 

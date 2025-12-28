@@ -4,100 +4,12 @@
 //! associated with installed packages, including creation, validation,
 //! and removal of external links.
 
-use crate::domain::model::link::{LinkRule, VersionedLink};
+use crate::domain::model::link::{
+    CheckedLink, LinkRule, LinkStatus, LinkValidation, RemoveLinkResult, VersionedLink,
+};
 use crate::runtime::{Runtime, is_path_under, relative_symlink_path};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-
-/// Status of a symlink check.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LinkStatus {
-    /// Link exists and points to the expected location
-    Valid,
-    /// Link doesn't exist yet (will be created)
-    NotExists,
-    /// Link exists but points to a different location
-    WrongTarget,
-    /// Path exists but is not a symlink
-    NotSymlink,
-    /// Cannot resolve the symlink target
-    Unresolvable,
-}
-
-/// Result of a safe link removal operation.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RemoveLinkResult {
-    /// Link was successfully removed
-    Removed,
-    /// Link doesn't exist (nothing to remove)
-    NotExists,
-    /// Path exists but is not a symlink
-    NotSymlink,
-    /// Link points to external path (not under expected prefix)
-    ExternalTarget,
-    /// Cannot resolve the symlink target
-    Unresolvable,
-}
-
-impl LinkStatus {
-    /// Get a human-readable reason for this status.
-    pub fn reason(&self) -> &'static str {
-        match self {
-            LinkStatus::Valid => "valid",
-            LinkStatus::NotExists => "does not exist",
-            LinkStatus::WrongTarget => "points to different location",
-            LinkStatus::NotSymlink => "not a symlink",
-            LinkStatus::Unresolvable => "cannot resolve target",
-        }
-    }
-
-    /// Check if this status indicates a valid link.
-    pub fn is_valid(&self) -> bool {
-        matches!(self, LinkStatus::Valid)
-    }
-
-    /// Check if this status indicates the link will be created.
-    pub fn is_creatable(&self) -> bool {
-        matches!(self, LinkStatus::NotExists)
-    }
-
-    /// Check if this status indicates a problem.
-    pub fn is_problematic(&self) -> bool {
-        matches!(
-            self,
-            LinkStatus::WrongTarget | LinkStatus::NotSymlink | LinkStatus::Unresolvable
-        )
-    }
-}
-
-/// A checked link with its status.
-#[derive(Debug, Clone)]
-pub struct CheckedLink {
-    /// The destination path (symlink location)
-    pub dest: PathBuf,
-    /// The status of this link
-    pub status: LinkStatus,
-    /// Optional path within version directory
-    pub path: Option<String>,
-}
-
-/// Result of validating a link for creation/update.
-#[derive(Debug)]
-pub enum LinkValidation {
-    /// Link is valid and ready to be created/updated
-    Valid {
-        /// The link target (source file in version directory)
-        target: PathBuf,
-        /// The destination path (symlink location)
-        dest: PathBuf,
-        /// Whether the destination already exists and needs to be removed first
-        needs_removal: bool,
-    },
-    /// Link should be skipped
-    Skip { dest: PathBuf, reason: String },
-    /// Link validation failed with an error
-    Error { dest: PathBuf, error: String },
-}
 
 /// Link manager for handling symlinks associated with packages.
 ///
@@ -494,6 +406,57 @@ impl<'a, R: Runtime> LinkManager<'a, R> {
             // Symlink exists and points within package, remove it
             self.remove_link(dest)?;
         }
+        Ok(())
+    }
+
+    /// Create external links for a package version.
+    pub fn create_external_links(
+        &self,
+        version_dir: &Path,
+        package_dir: &Path,
+        links: &[LinkRule],
+        versioned_links: &[VersionedLink],
+    ) -> Result<()> {
+        // Process standard links
+        for link in links {
+            self.create_link_from_rule(version_dir, package_dir, &link.path, &link.dest)?;
+        }
+
+        // Process versioned links
+        for link in versioned_links {
+            self.create_link_from_rule(version_dir, package_dir, &link.path, &link.dest)?;
+        }
+
+        Ok(())
+    }
+
+    fn create_link_from_rule(
+        &self,
+        version_dir: &Path,
+        package_dir: &Path,
+        source_path: &Option<String>, // Path inside the archive/version_dir
+        dest_path: &Path,             // Where the link should be created (e.g. ~/.local/bin/tool)
+    ) -> Result<()> {
+        // Determine the target file inside the version directory
+        let target_file = if let Some(path) = source_path {
+            version_dir.join(path)
+        } else {
+            self.find_default_target(version_dir)?
+        };
+
+        if !self.runtime.exists(&target_file) {
+            return Err(anyhow::anyhow!(
+                "Link target does not exist: {}",
+                target_file.display()
+            ));
+        }
+
+        // Prepare destination
+        self.prepare_link_destination(dest_path, package_dir)?;
+
+        // Create the link
+        self.create_link(&target_file, dest_path)?;
+
         Ok(())
     }
 

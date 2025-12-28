@@ -9,8 +9,8 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 
 use super::{Provider, ProviderKind, RepoId, create_provider};
+use crate::domain::model::Meta;
 use crate::http::HttpClient;
-use crate::package::Meta;
 
 /// Package specification for identifying a package and its provider.
 /// Format: "owner/repo" or "owner/repo@version"
