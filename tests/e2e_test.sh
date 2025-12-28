@@ -751,6 +751,7 @@ scenario_version_management_and_upgrades() (
     describe_scenario "Test: Version Lifecycle (Install specific, Upgrade, Versioned Links, Remove)"
     using_root "$TEST_ROOT/version_lifecycle"
     local bin_dir="$TEST_ROOT/version_bin"
+    local meta_file="$GHRI_ROOT/bach-sh/bach/meta.json"
     mkdir -p "$bin_dir"
 
     # 1. Install v0.7.1
@@ -760,7 +761,7 @@ scenario_version_management_and_upgrades() (
     # 2. Create Versioned Link
     note "2. Creating versioned link..."
     ghri link bach-sh/bach@0.7.1 "$bin_dir/bach-v1"
-    expect versioned link dest "0.7.1" found in "$meta_file" for path ""
+    expect versioned link dest "0.7.1" found in "$meta_file" for default path
     expect path "$bin_dir/bach-v1" to exist &&
         expect symlink "$bin_dir/bach-v1" to exist
 
@@ -828,7 +829,7 @@ scenario_filtering_and_path_linking() (
     note "3. Linking by path..."
     # Need to find the path name first
     local link_name
-    link_name="$(find "$bin_dir" -maxdepth 1 -type f | head -1 | xargs -n 1 basename)"
+    link_name="$(find "$GHRI_ROOT/chaifeng/zidr/current/" -maxdepth 1 -type f | head -1 | xargs -n 1 basename)"
     if [[ -n "$link_name" ]]; then
         ghri link "chaifeng/zidr:$link_name" "$bin_dir"
         expect path "$bin_dir/$link_name" to exist
