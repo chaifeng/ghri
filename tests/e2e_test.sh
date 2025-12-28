@@ -158,6 +158,7 @@ trap teardown EXIT
 #######################################
 
 # Run a command, pass if succeeds, fail and exit if fails
+# shellcheck disable=SC2329
 run() {
     if "$@"; then
         pass "$*"
@@ -168,6 +169,7 @@ run() {
 }
 
 # Run a command silently, pass if succeeds, fail and exit if fails
+# shellcheck disable=SC2329
 quietly() {
     if "$@" >/dev/null 2>&1; then
         pass "$*"
@@ -386,8 +388,10 @@ verify_metadata_contains_n_links() {
   local meta_file="$2"
   local path="${3:-}"
   local actual_count=0
-  local -a dest_list
-  mapfile -t dest_list < <(get_link_dest "$meta_file" "$path")
+  local -a dest_list=()
+  while IFS= read -r line; do
+      dest_list+=("$line")
+  done < <(get_link_dest "$meta_file" "$path")
 
   for dest in "${dest_list[@]}"; do
       note "Link dest in meta.json: '${path}' -> $dest"
@@ -463,8 +467,10 @@ verify_metadata_contains_n_versioned_links() {
   local version="$3"
   local path="${4:-}"
   local actual_count=0
-  local -a dest_list
-  mapfile -t dest_list < <(get_versioned_link_dest "$meta_file" "$version" "$path")
+  local -a dest_list=()
+  while IFS= read -r line; do
+      dest_list+=("$line")
+  done < <(get_versioned_link_dest "$meta_file" "$version" "$path")
 
   for dest in "${dest_list[@]}"; do
       note "Versioned link dest in meta.json: $version '${path}' -> $dest"
