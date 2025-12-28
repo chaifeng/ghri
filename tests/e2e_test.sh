@@ -43,6 +43,8 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     exit 1
 fi
 
+exec 9>&2
+
 # Test counters
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -57,24 +59,24 @@ GHRI_BIN=""
 # shellcheck disable=SC2329
 note() {
     echo -e "${BLUE}[INFO]${NC} $*"
-}
+} >&9
 
 # shellcheck disable=SC2329
 pass() {
     echo -e "${GREEN}[PASS]${NC} $*"
     TESTS_PASSED=$((TESTS_PASSED + 1))
-}
+} >&9
 
 # shellcheck disable=SC2329
 fail() {
     echo -e "${RED}[FAIL]${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
-}
+} >&9
 
 # shellcheck disable=SC2329
 warn() {
     echo -e "${YELLOW}[WARN]${NC} $*"
-}
+} >&9
 
 # shellcheck disable=SC2329
 describe_scenario() {
@@ -82,7 +84,7 @@ describe_scenario() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}$*${NC}"
     echo -e "${BLUE}========================================${NC}"
-}
+} >&9
 
 #######################################
 # Setup and teardown
@@ -311,10 +313,10 @@ expect() {
         expect_symlink_to_be_relative "${DSL_ARGS[1]}" "${DSL_ARGS[0]}"
 
     elif dsl_match command to succeed: % === "$@"; then
-        expect_command_to_succeed "Command ${DSL_ARGS[*]}" "${DSL_ARGS[@]}"
+        expect_command_to_succeed "${DSL_ARGS[@]}"
 
     elif dsl_match command to fail: % === "$@"; then
-        expect_command_to_fail "Command ${DSL_ARGS[*]}" "${DSL_ARGS[@]}"
+        expect_command_to_fail "${DSL_ARGS[@]}"
 
     elif dsl_match link to _ in meta === "$@"; then
         verify_metadata_contains_link "$GHRI_ROOT/${DSL_ARGS[0]}/meta.json"
@@ -643,30 +645,28 @@ expect_file_to_contain() {
 
 # shellcheck disable=SC2329
 expect_command_to_succeed() {
-    local msg="$1"
-    shift
-
-    if "$@" >/dev/null 2>&1; then
+    note "Executing command: $*"
+    local msg="Command should succeed: "
+    if "$@"; then
         pass "$msg"
         return 0
     else
         fail "$msg (command failed: $*)"
         return 1
-    fi
+    fi 2>&1 | sed 's/^/\t| /'
 }
 
 # shellcheck disable=SC2329
 expect_command_to_fail() {
-    local msg="$1"
-    shift
-
-    if ! "$@" >/dev/null 2>&1; then
+    note "Executing command (should fail): $*"
+    local msg="Command should fail: "
+    if ! "$@"; then
         pass "$msg"
         return 0
     else
         fail "$msg (command should have failed: $*)"
         return 1
-    fi
+    fi 2>&1 | sed 's/^/\t| /'
 }
 
 #######################################
@@ -740,37 +740,8 @@ scenario_basic_usage_with_bach_repo() {
     expect symlink "$bin_dir/link2" not to exist
     expect 0 links to bach-sh/bach in meta
 
-    # 8. Install an old version and verify current
-    note "8. Installing specific old version (0.6.0)..."
-    ghri install -y bach-sh/bach@0.6.0
-    expect symlink "$GHRI_ROOT/bach-sh/bach/current" to point to "0.6.0"
-
-    # 9. Link versioned link
-    note "9. Creating versioned link for 0.6.0..."
-    expect no link to bach-sh/bach at version 0.6.0 in meta
-    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
-    expect symlink "$bin_dir/bach-v0.6.0" to exist &&
-        expect symlink "$(readlink "$bin_dir/bach-v0.6.0")" to be relative to "${bin_dir}"
-    expect link to bach-sh/bach at version 0.6.0 in meta
-
-#    # 10. Unlink versioned link
-#    note "10. Unlinking versioned link for 0.6.0..."
-#    ghri unlink bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
-#    expect no link to bach-sh/bach at version 0.6.0 in meta
-#    expect symlink "$bin_dir/bach-v0.6.0" not to exist
-#    note "Default links should still exist"
-#    expect link to bach-sh/bach in meta
-#
-#    # 11. Unlinking all versioned links for 0.6.0...
-#    note "11. Unlinking all versioned links for 0.6.0..."
-#    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0-1" >/dev/null
-#    ghri unlink bach-sh/bach@0.6.0 --all
-#    expect no link to bach-sh/bach at version 0.6.0 in meta
-#    note "Default links should still exist"
-#    expect link to bach-sh/bach in meta
-
-    # 12. Remove
-    note "12. Removing package..."
+    # 8. Remove
+    note "8. Removing package..."
     ghri remove -y bach-sh/bach
     expect path "$GHRI_ROOT/bach-sh/bach" not to exist
 }
@@ -824,6 +795,71 @@ scenario_version_management_and_upgrades() {
     # Now with force
     ghri remove -y bach-sh/bach@0.7.2 --force
     expect path "$GHRI_ROOT/bach-sh/bach/0.7.2" not to exist
+}
+
+# shellcheck disable=SC2329
+scenario_versioned_linking() {
+    local GHRI_ROOT
+    describe_scenario "Test: Versioned Linking (Link, Unlink)"
+    using_root "$TEST_ROOT/bach_versioned_links"
+    local bin_dir="$TEST_ROOT/bach_bin"
+    mkdir -p "$bin_dir"
+
+    # 1. Install an old version and verify current
+    note "1. Installing specific old version (0.6.0)..."
+    ghri install -y bach-sh/bach@0.6.0
+    ghri link bach-sh/bach "$bin_dir/bach-latest"
+    expect link to bach-sh/bach in meta
+    expect symlink "$bin_dir/bach-latest" to exist &&
+        expect symlink "$(readlink "$bin_dir/bach-latest")" to be relative to "${bin_dir}"
+    expect symlink "$GHRI_ROOT/bach-sh/bach/current" to point to "0.6.0"
+
+    # 2. Link versioned link
+    note "2. Creating versioned link for 0.6.0..."
+    expect no link to bach-sh/bach at version 0.6.0 in meta
+    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
+    expect symlink "$bin_dir/bach-v0.6.0" to exist &&
+        expect symlink "$(readlink "$bin_dir/bach-v0.6.0")" to be relative to "${bin_dir}"
+    expect link to bach-sh/bach at version 0.6.0 in meta
+
+    note "Cannot unlink versioned link with non-versioned unlink"
+    expect command to fail: ghri unlink bach-sh/bach "$bin_dir/bach-v0.6.0"
+    expect symlink "$bin_dir/bach-v0.6.0" to exist &&
+        expect symlink "$(readlink "$bin_dir/bach-v0.6.0")" to be relative to "${bin_dir}"
+    expect link to bach-sh/bach at version 0.6.0 in meta
+
+    # 3. Unlink versioned link
+    note "3. Unlinking versioned link for 0.6.0..."
+    ghri unlink bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
+    expect no link to bach-sh/bach at version 0.6.0 in meta
+    expect symlink "$bin_dir/bach-v0.6.0" not to exist
+    note "Default links should still exist"
+    expect link to bach-sh/bach in meta
+
+    # 4. Override versioned link with non-versioned link
+    note "4. Overriding versioned link with non-versioned link..."
+    ghri link bach-sh/bach "$bin_dir/bach-v0.6.0"
+    expect symlink "$bin_dir/bach-v0.6.0" to exist
+    expect link to bach-sh/bach in meta
+    note "Versioned links should not exist"
+    expect no link to bach-sh/bach at version 0.6.0 in meta
+
+#    # 5. Override non-versioned link with versioned link
+#    note "5. Overriding non-versioned link with versioned link..."
+#    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0"
+#    expect symlink "$bin_dir/bach-v0.6.0" to exist
+#    expect link to bach-sh/bach at version 0.6.0 in meta
+#    note "Default links should not exist"
+#    expect no link to bach-sh/bach in meta
+
+#    # 6. Unlinking all versioned links for 0.6.0...
+#    note "6. Unlinking all versioned links for 0.6.0..."
+#    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0-1" >/dev/null
+#    ghri unlink bach-sh/bach@0.6.0 --all
+#    expect no link to bach-sh/bach at version 0.6.0 in meta
+#    note "Default links should still exist"
+#    expect link to bach-sh/bach in meta
+
 }
 
 # shellcheck disable=SC2329
@@ -1038,6 +1074,7 @@ main() {
         scenario_help_and_version_info
         scenario_basic_usage_with_bach_repo
         scenario_version_management_and_upgrades
+        scenario_versioned_linking
         scenario_filtering_and_path_linking
         scenario_upgrade_mechanism_mocked
         scenario_error_handling

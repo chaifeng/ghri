@@ -45,57 +45,102 @@ pub fn unlink<R: Runtime>(
         anyhow::bail!("Package {} is not installed.", spec.repo);
     }
 
+    let package_dir = action.package_dir(owner, repo);
     let mut meta = action.load_meta(owner, repo)?;
     debug!("Found {} link rules before unlink", meta.links.len());
 
-    if meta.links.is_empty() {
+    if meta.links.is_empty() && meta.versioned_links.is_empty() {
         println!("No link rules for {}.", spec.repo);
         return Ok(());
     }
 
     // Determine which rules to remove
-    let rules_to_remove: Vec<LinkRule> = if all {
-        debug!("Removing all link rules");
+    let mut rules_to_remove: Vec<LinkRule> = Vec::new();
+
+    // Select candidates based on whether a version is specified
+    let candidates: Vec<LinkRule> = if let Some(ref version) = spec.version {
+        debug!("Version {} specified, looking in versioned_links", version);
+        meta.versioned_links
+            .iter()
+            .filter(|v| v.version == *version)
+            .map(|v| LinkRule {
+                dest: v.dest.clone(),
+                path: v.path.clone(),
+            })
+            .collect()
+    } else {
+        debug!("No version specified, looking in standard links");
         meta.links.clone()
+    };
+
+    if all {
+        debug!("Removing all matching link rules");
+        rules_to_remove.extend(candidates);
     } else if let Some(ref dest_path) = dest {
         debug!("Looking for rule with dest {:?}", dest_path);
+
+        let is_match = |dest: &PathBuf| {
+            let rule_dest = if dest.is_relative() {
+                resolve_relative_path(&package_dir, dest)
+            } else {
+                dest.clone()
+            };
+            rule_dest == *dest_path
+        };
+
         // Find rules matching the destination
-        let matching: Vec<_> = meta
-            .links
-            .iter()
-            .filter(|r| r.dest == *dest_path)
-            .cloned()
-            .collect();
-        if matching.is_empty() {
+        rules_to_remove.extend(candidates.iter().filter(|r| is_match(&r.dest)).cloned());
+
+        if rules_to_remove.is_empty() {
             // Try to find by partial match (filename)
             let dest_filename = dest_path.file_name().and_then(|s| s.to_str());
             debug!("No exact match, trying filename match: {:?}", dest_filename);
-            meta.links
-                .iter()
-                .filter(|r| r.dest.file_name().and_then(|s| s.to_str()) == dest_filename)
-                .cloned()
-                .collect()
-        } else {
-            matching
+
+            let is_filename_match = |dest: &PathBuf| {
+                let rule_dest = if dest.is_relative() {
+                    resolve_relative_path(&package_dir, dest)
+                } else {
+                    dest.clone()
+                };
+                rule_dest.file_name().and_then(|s| s.to_str()) == dest_filename
+            };
+
+            rules_to_remove.extend(
+                candidates
+                    .iter()
+                    .filter(|r| is_filename_match(&r.dest))
+                    .cloned(),
+            );
         }
     } else if let Some(ref path) = spec.path {
         // Filter by path in the link rule (e.g., "bach-sh/bach:bach.sh")
         debug!("Looking for rule with path {:?}", path);
-        meta.links
-            .iter()
-            .filter(|r| r.path.as_ref() == Some(path))
-            .cloned()
-            .collect()
+        rules_to_remove.extend(
+            candidates
+                .iter()
+                .filter(|r| r.path.as_ref() == Some(path))
+                .cloned(),
+        );
     } else {
         debug!("No destination specified and --all not set");
+        let mut all_links = Vec::new();
+
+        if let Some(ref version) = spec.version {
+            for r in &meta.versioned_links {
+                if r.version == *version {
+                    all_links.push(format!("  {:?} (version {})", r.dest, r.version));
+                }
+            }
+        } else {
+            for r in &meta.links {
+                all_links.push(format!("  {:?}", r.dest));
+            }
+        }
+
         anyhow::bail!(
             "Please specify a destination path or use --all to remove all links.\n\
              Current link rules:\n{}",
-            meta.links
-                .iter()
-                .map(|r| format!("  {:?}", r.dest))
-                .collect::<Vec<_>>()
-                .join("\n")
+            all_links.join("\n")
         );
     };
 
@@ -106,21 +151,37 @@ pub fn unlink<R: Runtime>(
             .map(|d| format!("{:?}", d))
             .or_else(|| spec.path.as_ref().map(|p| format!("path '{}'", p)))
             .unwrap_or_else(|| "unknown".to_string());
+
+        let mut all_links = Vec::new();
+
+        if let Some(ref version) = spec.version {
+            for r in &meta.versioned_links {
+                if r.version == *version {
+                    if let Some(ref p) = r.path {
+                        all_links.push(format!("  {} -> {:?} (version {})", p, r.dest, r.version));
+                    } else {
+                        all_links.push(format!(
+                            "  (default) -> {:?} (version {})",
+                            r.dest, r.version
+                        ));
+                    }
+                }
+            }
+        } else {
+            for r in &meta.links {
+                if let Some(ref p) = r.path {
+                    all_links.push(format!("  {} -> {:?}", p, r.dest));
+                } else {
+                    all_links.push(format!("  (default) -> {:?}", r.dest));
+                }
+            }
+        }
+
         anyhow::bail!(
             "No link rule found matching {}.\n\
              Current link rules:\n{}",
             search_target,
-            meta.links
-                .iter()
-                .map(|r| {
-                    if let Some(ref p) = r.path {
-                        format!("  {} -> {:?}", p, r.dest)
-                    } else {
-                        format!("  (default) -> {:?}", r.dest)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            all_links.join("\n")
         );
     }
 
@@ -128,7 +189,6 @@ pub fn unlink<R: Runtime>(
     let mut removed_count = 0;
     let mut error_count = 0;
     let mut skipped_external = Vec::new();
-    let package_dir = action.package_dir(owner, repo);
 
     for rule in &rules_to_remove {
         debug!("Processing rule: {:?}", rule);
@@ -203,9 +263,10 @@ pub fn unlink<R: Runtime>(
 
         // Remove the rule from meta
         meta.links.retain(|r| r.dest != rule.dest);
+        meta.versioned_links.retain(|r| r.dest != rule.dest);
         debug!(
             "Removed rule from meta, {} rules remaining",
-            meta.links.len()
+            meta.links.len() + meta.versioned_links.len()
         );
     }
 
@@ -231,7 +292,7 @@ pub fn unlink<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::model::Meta;
+    use crate::domain::model::{Meta, VersionedLink};
     use crate::runtime::MockRuntime;
     use crate::test_utils::{
         configure_mock_runtime_basics, test_bin_dir, test_external_path, test_home, test_root,
@@ -241,6 +302,150 @@ mod tests {
     // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
         configure_mock_runtime_basics(runtime);
+    }
+
+    #[test]
+    fn test_unlink_removes_versioned_link() {
+        // Test that unlink removes a versioned symlink and its rule from meta.json
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = test_bin_dir().join("tool-v1");
+
+        // --- 1. is_installed + load ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read meta.json: has one versioned link rule
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            versioned_links: vec![VersionedLink {
+                dest: link_dest.clone(),
+                version: "v1".into(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. Check Symlink Status ---
+        runtime
+            .expect_exists()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        // --- 3. Verify Symlink Target ---
+        let target = root.join("owner").join("repo").join("v1").join("tool");
+        runtime
+            .expect_resolve_link()
+            .with(eq(link_dest.clone()))
+            .returning(move |_| Ok(target.clone()));
+
+        // --- 4. Remove Symlink ---
+        runtime
+            .expect_is_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| true);
+
+        runtime
+            .expect_remove_symlink()
+            .with(eq(link_dest.clone()))
+            .returning(|_| Ok(()));
+
+        // --- 5. Save Updated Metadata ---
+        runtime
+            .expect_exists()
+            .with(eq(package_dir))
+            .returning(|_| true);
+
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+        let result = unlink(
+            runtime,
+            "owner/repo@v1",
+            Some(link_dest),
+            false,
+            Config::for_test(root),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unlink_ignores_versioned_links_when_version_not_specified() {
+        // Test that unlink ignores versioned links if no version is specified in the repo string
+
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let link_dest = test_bin_dir().join("tool-v1");
+
+        // Need current_dir for relative path resolution
+        runtime.expect_current_dir().returning(|| Ok(test_home()));
+
+        // --- 1. is_installed + load ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        // Read meta.json: has one versioned link rule
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            versioned_links: vec![VersionedLink {
+                dest: link_dest.clone(),
+                version: "v1".into(),
+                path: None,
+            }],
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- Execute ---
+        // We specify the destination, but NOT the version in "owner/repo"
+        // It should fail to find the rule because it only looks in standard links
+        let result = unlink(
+            runtime,
+            "owner/repo",
+            Some(link_dest),
+            false,
+            Config::for_test(root),
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No link rule found"));
     }
 
     #[test]
