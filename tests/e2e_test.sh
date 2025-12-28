@@ -961,14 +961,16 @@ scenario_error_handling() {
 
 # shellcheck disable=SC2329
 scenario_edge_cases_and_concurrency() {
-    local GHRI_ROOT
     describe_scenario "Test: Edge Cases (Env Root, Relative Paths, Concurrent)"
 
-    # 1. Custom Root via Env
+    # 1. Custom Root via --root option
     local env_root="$TEST_ROOT/env_root"
     mkdir -p "$env_root"
-    note "Testing GHRI_ROOT env var..."
-    expect command to succeed: env GHRI_ROOT="$env_root" ghri install -y bach-sh/bach
+    note "Testing --root option ..."
+    (
+        unset GHRI_ROOT
+        expect command to succeed: ghri --root "$env_root" install -y bach-sh/bach
+    )
     expect directory "$env_root/bach-sh/bach" to exist
 
     # 2. Relative Paths
@@ -983,6 +985,7 @@ scenario_edge_cases_and_concurrency() {
     # No, we need to install to test linking.
     # We'll do one more install here.
     ghri install -y bach-sh/bach --root "root" >/dev/null
+    expect directory "root/bach-sh/bach" to exist
     expect command to succeed: ghri link bach-sh/bach "bin/bach" --root "root" &&
         expect path "bin/bach" to exist &&
         expect symlink "bin/bach" to exist
