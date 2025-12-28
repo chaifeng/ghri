@@ -1,11 +1,10 @@
 use std::path::Path;
 
 use crate::{
+    domain::service::install_manager::DownloadPlan,
     package::Meta,
     provider::{Release, RepoId},
 };
-
-use super::download::DownloadPlan;
 
 /// Show installation plan to user (standalone function for use from mod.rs)
 #[allow(clippy::too_many_arguments)]

@@ -11,16 +11,15 @@ use super::config::{Config, InstallOptions};
 use super::prune::prune_package_dir;
 use super::services::Services;
 
-mod download;
 mod installer;
 
-pub use download::{DefaultReleaseInstaller, ReleaseInstaller};
+pub use crate::domain::service::install_manager::{
+    DefaultReleaseInstaller, ReleaseInstaller, get_download_plan,
+};
 
 #[cfg(test)]
 #[allow(unused_imports)]
-pub use download::MockReleaseInstaller;
-
-use download::get_download_plan;
+pub use crate::domain::service::install_manager::MockReleaseInstaller;
 
 #[tracing::instrument(skip(runtime, config, options))]
 pub async fn install<R: Runtime + 'static>(
