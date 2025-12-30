@@ -90,44 +90,43 @@ pub async fn run_install<R: Runtime + 'static>(
     // Resolve version
     let release = action.resolve_version(&meta, spec.version.clone(), options.pre)?;
 
-    // Check if already installed
-    if action.is_installed(repo, &release.tag) {
-        println!("   {} {} is already installed", repo, release.tag);
-        return Ok(());
-    }
-
     let target_dir = action.version_dir(repo, &release.tag);
     let meta_path = action.meta_path(repo);
 
-    // Get download plan and show confirmation
-    let plan = get_download_plan(&release, &effective_filters)?;
+    // Check if already installed
+    if action.is_installed(repo, &release.tag) {
+        println!("   {} {} is already installed", repo, release.tag);
+    } else {
+        // Get download plan and show confirmation
+        let plan = get_download_plan(&release, &effective_filters)?;
 
-    if !options.yes {
-        ui::show_install_plan(
-            repo,
-            &release,
-            &target_dir,
-            &meta_path,
-            &plan,
-            is_new,
-            &meta,
-        );
-        if !runtime.confirm("Proceed with installation?")? {
-            println!("Installation cancelled.");
-            return Ok(());
+        if !options.yes {
+            ui::show_install_plan(
+                repo,
+                &release,
+                &target_dir,
+                &meta_path,
+                &plan,
+                is_new,
+                &meta,
+            );
+            if !runtime.confirm("Proceed with installation?")? {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
         }
-    }
 
-    // Perform the actual download and extraction via ReleaseInstaller
-    release_installer
-        .install(
-            repo,
-            &release,
-            &target_dir,
-            &effective_filters,
-            &options.original_args,
-        )
-        .await?;
+        // Perform the actual download and extraction via ReleaseInstaller
+        release_installer
+            .install(
+                repo,
+                &release,
+                &target_dir,
+                &effective_filters,
+                &options.original_args,
+            )
+            .await?;
+    }
 
     // Update 'current' symlink
     action.update_current_link(repo, &release.tag)?;
@@ -302,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_install_already_installed() {
-        // Test that installation is skipped when version is already installed
+        // Test that installation skips download but updates links when version is already installed
 
         let runtime = MockRuntime::new();
         let mut action = MockInstallOperations::new();
@@ -313,6 +312,8 @@ mod tests {
             repo: "repo".into(),
         };
         let meta = test_meta();
+        let target_dir = PathBuf::from("/home/user/.ghri/owner/repo/v1.0.0");
+        let meta_path = PathBuf::from("/home/user/.ghri/owner/repo/meta.json");
 
         // Setup action expectations
         action
@@ -337,6 +338,31 @@ mod tests {
             .expect_is_installed()
             .with(eq(repo.clone()), eq("v1.0.0"))
             .returning(|_, _| true);
+
+        // Expect version_dir and meta_path calls (now needed for link updates)
+        let target_dir_clone = target_dir.clone();
+        action
+            .expect_version_dir()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(move |_, _| target_dir_clone.clone());
+
+        let meta_path_clone = meta_path.clone();
+        action
+            .expect_meta_path()
+            .with(eq(repo.clone()))
+            .returning(move |_| meta_path_clone.clone());
+
+        // Expect link updates and meta save
+        action
+            .expect_update_current_link()
+            .with(eq(repo.clone()), eq("v1.0.0"))
+            .returning(|_, _| Ok(()));
+
+        action
+            .expect_update_external_links()
+            .returning(|_, _| Ok(()));
+
+        action.expect_save_meta().returning(|_, _| Ok(()));
 
         // Execute
         let config = test_config();
