@@ -104,7 +104,7 @@ impl HttpClient {
                         return Err(e);
                     }
 
-                    if is_network_error(&e) && attempt < MAX_RETRIES {
+                    if attempt < MAX_RETRIES {
                         warn!(
                             "Download attempt {}/{} failed ({}), retrying...",
                             attempt, MAX_RETRIES, e
@@ -194,18 +194,6 @@ impl HttpClient {
     }
 }
 
-/// Checks if an error is a network error that can potentially be retried.
-fn is_network_error(e: &anyhow::Error) -> bool {
-    let error_str = e.to_string();
-    error_str.contains("connection")
-        || error_str.contains("timeout")
-        || error_str.contains("reset")
-        || error_str.contains("broken pipe")
-        || error_str.contains("dns")
-        || error_str.contains("resolve")
-        || error_str.contains("chunk")
-}
-
 /// Checks if an anyhow::Error is retryable based on its content.
 fn is_retryable_error(e: &anyhow::Error) -> bool {
     // Non-retryable errors should not be retried
@@ -213,7 +201,8 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
         return false;
     }
 
-    is_network_error(e)
+    // Retry everything else that isn't explicitly non-retryable
+    true
 }
 
 #[cfg(test)]
@@ -336,14 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_network_error() {
-        assert!(is_network_error(&anyhow::anyhow!("connection reset")));
-        assert!(is_network_error(&anyhow::anyhow!("timeout occurred")));
-        assert!(is_network_error(&anyhow::anyhow!("dns resolution failed")));
-        assert!(!is_network_error(&anyhow::anyhow!("some other error")));
-    }
-
-    #[test]
     fn test_is_retryable_error_timeout() {
         let err = anyhow::anyhow!("connection timeout");
         assert!(is_retryable_error(&err));
@@ -377,9 +358,9 @@ mod tests {
         let err = anyhow::anyhow!("connection reset by peer");
         assert!(is_retryable_error(&err));
 
-        // Generic error (not retryable)
+        // Generic error (now retryable)
         let err = anyhow::anyhow!("some other error");
-        assert!(!is_retryable_error(&err));
+        assert!(is_retryable_error(&err));
     }
 
     #[tokio::test]
