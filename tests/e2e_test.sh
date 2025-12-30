@@ -162,12 +162,18 @@ trap teardown EXIT
 # Run a command, pass if succeeds, fail and exit if fails
 # shellcheck disable=SC2329
 run() {
+    note "Executing command: $*"
     if "$@"; then
         pass "$*"
     else
         fail "$* (exit code: $?)"
         exit 1
-    fi
+    fi 2>&1 | sed 's/^/\t| /'
+}
+
+# shellcheck disable=SC2329
+run:() {
+    run "$@"
 }
 
 # Run a command silently, pass if succeeds, fail and exit if fails
@@ -814,6 +820,7 @@ scenario_versioned_linking() {
 
     mkdir -p "$GHRI_ROOT/bach-sh/bach/0.7.2"  # Pre-create 0.7.2 to simulate existing version
     touch "$GHRI_ROOT/bach-sh/bach/0.7.2/bach.sh"  # Dummy file for 0.7.2
+    touch "$GHRI_ROOT/bach-sh/bach/0.7.2/README.md"  # Dummy file for 0.7.2
     ghri install -y bach-sh/bach@0.7.2
 
     expect symlink "$GHRI_ROOT/bach-sh/bach/current" to point to "0.7.2"
@@ -852,22 +859,47 @@ scenario_versioned_linking() {
     note "Versioned links should not exist"
     expect no link to bach-sh/bach at version 0.6.0 in meta
 
-#    # 5. Override non-versioned link with versioned link
-#    note "5. Overriding non-versioned link with versioned link..."
-#    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-dev"
-#    expect symlink "$bin_dir/bach-dev" to exist
-#    expect link to bach-sh/bach at version 0.6.0 in meta
-#    note "Default links should not exist"
-#    expect no link to bach-sh/bach in meta
+    # 5. Override non-versioned link with versioned link
+    note "5. Overriding non-versioned link with versioned link..."
+    run: ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-latest"
+    expect symlink "$bin_dir/bach-latest" to exist &&
+        expect symlink "$bin_dir/bach-latest" to point to matching "0.6.0"
+    expect link to bach-sh/bach at version 0.6.0 in meta
+    note "Default links should not exist"
+    expect no link to bach-sh/bach in meta
 
-#    # 6. Unlinking all versioned links for 0.6.0...
-#    note "6. Unlinking all versioned links for 0.6.0..."
-#    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0-1" >/dev/null
-#    ghri unlink bach-sh/bach@0.6.0 --all
-#    expect no link to bach-sh/bach at version 0.6.0 in meta
-#    note "Default links should still exist"
-#    expect link to bach-sh/bach in meta
+    # 6. Override links again
+    note "6. Overriding links again..."
+    run: ghri link bach-sh/bach "$bin_dir/bach-latest"
+    expect symlink "$bin_dir/bach-latest/bach" not to exist
+    expect symlink "$bin_dir/bach-latest" to exist &&
+        expect symlink "$bin_dir/bach-latest" to point to matching "0.7.2"
 
+    # 7. Linking destionation ends with / (link to directory)
+    note "7. Linking destionation ends with / (link to directory)..."
+    mkdir -p "$bin_dir/foobar"
+    ln -s foobar "$bin_dir/link-path"
+    run: ghri link bach-sh/bach@0.6.0 "$bin_dir/link-path/"
+    expect symlink "$bin_dir/link-path/bach" to exist &&
+        expect symlink "$bin_dir/link-path/bach" to point to matching 0.6.0
+    expect symlink "$bin_dir/link-path/bach" to point to matching "0.6.0"
+
+    # 8. Unlinking all versioned links for 0.6.0...
+    note "8. Unlinking all versioned links for 0.6.0..."
+    note "Creating back default link"
+    ghri link bach-sh/bach "$bin_dir/bach-latest"
+    note "Creating multiple versioned links"
+    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-0.6.0"
+    ghri link bach-sh/bach@0.6.0 "$bin_dir/bach-v0.6.0-1"
+    ghri link bach-sh/bach@0.7.2 "$bin_dir/bach-0.7.2"
+    ghri unlink bach-sh/bach@0.6.0 --all
+    expect no link to bach-sh/bach at version 0.6.0 in meta &&
+        expect symlink "$bin_dir/bach-0.6.0" not to exist &&
+        expect symlink "$bin_dir/bach-v0.6.0-1" not to exist
+    note "Default links should still exist"
+    expect link to bach-sh/bach in meta
+    note "Versioned links for 0.7.2 should still exist"
+    expect link to bach-sh/bach at version 0.7.2 in meta
 }
 
 # shellcheck disable=SC2329

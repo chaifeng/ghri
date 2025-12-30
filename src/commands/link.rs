@@ -21,6 +21,11 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
         dest
     };
 
+    // Check if the original destination path had a trailing slash
+    // This indicates the user intends to treat the destination as a directory
+    // Note: We check the string representation of the path component
+    let has_trailing_slash = dest.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR);
+
     let action = LinkAction::new(&runtime, config.install_root);
 
     // Check package is installed
@@ -84,7 +89,42 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
 
     // If dest is an existing directory, create link inside it
     // Use the filename from the link target (either specified path or detected file)
-    let final_dest = if action.exists(&dest) && action.is_dir(&dest) {
+    // BUT: If dest is a symlink managed by us (points inside package_dir), we should overwrite it,
+    // even if it points to a directory.
+    // UNLESS: The user explicitly added a trailing slash, which means they want to go INSIDE the directory.
+    let is_symlink = action.runtime().is_symlink(&dest);
+    let is_dir = action.exists(&dest) && action.is_dir(&dest);
+
+    let should_treat_as_dir = if has_trailing_slash {
+        // If trailing slash is present, it MUST be treated as a directory
+        if action.exists(&dest) {
+            if !is_dir {
+                anyhow::bail!("Path '{}' is not a directory", dest.display());
+            }
+            true
+        } else {
+            // Doesn't exist, but trailing slash implies directory
+            true
+        }
+    } else if is_symlink {
+        // If it's a symlink, check if we should overwrite it
+        if action
+            .link_manager()
+            .can_update_link(&dest, &package_dir)
+            .unwrap_or(false)
+        {
+            // It's a managed symlink, we want to overwrite it, so DO NOT treat as dir
+            false
+        } else {
+            // It's an unmanaged symlink (or points outside), treat as dir if it points to one
+            is_dir
+        }
+    } else {
+        // Not a symlink, treat as dir if it is one
+        is_dir
+    };
+
+    let final_dest = if should_treat_as_dir {
         let filename = if let Some(ref path) = spec.path {
             // Use the filename from the specified path
             Path::new(path)
@@ -193,6 +233,344 @@ mod tests {
     }
 
     #[test]
+    fn test_link_overwrite_managed_symlink_to_directory() {
+        // When dest is a symlink pointing to a directory managed by the package,
+        // it should be overwritten, NOT treated as a directory to put the link inside.
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let v1_dir = package_dir.join("v1");
+        let v2_dir = package_dir.join("v2");
+        let dest_dir = test_bin_dir();
+        let dest_link = dest_dir.join("tool"); // This is the symlink we want to overwrite
+
+        // --- 1. is_installed + load ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. exists check for version_dir (v2) ---
+        // We are linking v2 (implicit or explicit doesn't matter, let's say implicit current is v1 but we link v2 explicitly to test overwrite)
+        // Actually let's just use current version v1, but dest points to v1 already? No, that would be "already correct".
+        // Let's say dest points to v1, and we want to link v2.
+        // But wait, the command uses current version if not specified.
+        // Let's say we run `ghri link owner/repo@v2 ...`
+
+        // Let's use explicit version v2
+        runtime
+            .expect_is_dir()
+            .with(eq(v2_dir.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(v2_dir.clone()))
+            .returning(|_| true);
+
+        // --- 3. find_default_target for v2 ---
+        // v2 has multiple files, so target is v2_dir itself
+        let dir_entry = vec![v2_dir.join("file1"), v2_dir.join("file2")];
+        runtime
+            .expect_read_dir()
+            .with(eq(v2_dir.clone()))
+            .returning(move |_| Ok(dir_entry.clone()));
+
+        // --- 4. Analyze Destination ---
+        // Dest exists
+        runtime
+            .expect_exists()
+            .with(eq(dest_link.clone()))
+            .returning(|_| true);
+
+        // Dest is a directory (because it points to v1_dir which is a dir)
+        runtime
+            .expect_is_dir()
+            .with(eq(dest_link.clone()))
+            .returning(|_| true);
+
+        // Dest IS a symlink
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_link.clone()))
+            .returning(|_| true);
+
+        // Dest points to v1_dir (managed by package)
+        let v1_dir_clone = v1_dir.clone();
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest_link.clone()))
+            .returning(move |_| Ok(v1_dir_clone.clone()));
+
+        // --- 5. Prepare Link Destination ---
+        // It should detect it's a managed symlink and remove it
+        // (can_update_link calls resolve_link again)
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_link.clone()))
+            .returning(|_| true);
+        let v1_dir_clone2 = v1_dir.clone();
+        runtime
+            .expect_resolve_link()
+            .with(eq(dest_link.clone()))
+            .returning(move |_| Ok(v1_dir_clone2.clone()));
+
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_link.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_remove_symlink()
+            .with(eq(dest_link.clone()))
+            .returning(|_| Ok(()));
+
+        // --- 6. Create Link ---
+        runtime
+            .expect_exists()
+            .with(eq(dest_dir))
+            .returning(|_| true);
+
+        // Should link v2_dir to dest_link (overwriting it)
+        expect_symlink(&mut runtime, v2_dir.clone(), dest_link.clone());
+
+        // --- 7. Save Metadata ---
+        runtime
+            .expect_exists()
+            .with(eq(package_dir))
+            .returning(|_| true);
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+        let result = link(runtime, "owner/repo@v2", dest_link, Config::for_test(root));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_trailing_slash_forces_directory_behavior() {
+        // Test that a trailing slash forces directory behavior, even for managed symlinks
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        // --- Setup Paths ---
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let _v1_dir = package_dir.join("v1");
+        let v2_dir = package_dir.join("v2");
+        let dest_dir = test_bin_dir();
+        let dest_link = dest_dir.join("tool");
+        // Simulate trailing slash by using a path that ends with separator
+        // Note: PathBuf normalization might strip it, but our logic checks to_string_lossy()
+        // In the test, we pass dest_link directly, but we need to ensure the logic sees it as having a trailing slash.
+        // Since we can't easily force PathBuf to keep trailing slash in test setup without OS support,
+        // we might need to mock the check or construct the path carefully.
+        // However, `link` function takes `dest: PathBuf`.
+        // If we construct `PathBuf::from("/path/to/link/")`, it should work.
+        let dest_with_slash = PathBuf::from(format!("{}/", dest_link.display()));
+
+        // --- 1. is_installed + load ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. exists check for version_dir (v2) ---
+        runtime
+            .expect_is_dir()
+            .with(eq(v2_dir.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(v2_dir.clone()))
+            .returning(|_| true);
+
+        // --- 3. find_default_target for v2 ---
+        let dir_entry = vec![v2_dir.join("file1")];
+        runtime
+            .expect_read_dir()
+            .with(eq(v2_dir.clone()))
+            .returning(move |_| Ok(dir_entry.clone()));
+
+        // v2/file1 is a file
+        runtime
+            .expect_is_dir()
+            .with(eq(v2_dir.join("file1")))
+            .returning(|_| false);
+
+        // --- 4. Analyze Destination ---
+        // Dest exists
+        runtime
+            .expect_exists()
+            .with(eq(dest_with_slash.clone())) // The logic uses the path passed in
+            .returning(|_| true);
+
+        // Dest IS a symlink (managed)
+        // But because of trailing slash, we treat it as directory!
+        // So we should NOT check if it's a managed symlink to overwrite it.
+        // Instead, we should create the link INSIDE it.
+
+        // The logic checks is_symlink on the path passed in
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_with_slash.clone()))
+            .returning(|_| true);
+
+        // Dest is a directory (because it points to v1_dir which is a dir)
+        runtime
+            .expect_is_dir()
+            .with(eq(dest_with_slash.clone()))
+            .returning(|_| true);
+
+        // The final dest will be dest_link.join("file1") (since file1 is the target name)
+        let final_dest = dest_link.join("file1");
+
+        // --- 5. Prepare Link Destination (for final_dest) ---
+        runtime
+            .expect_exists()
+            .with(eq(final_dest.clone()))
+            .returning(|_| false);
+        runtime
+            .expect_is_symlink()
+            .with(eq(final_dest.clone()))
+            .returning(|_| false);
+
+        // --- 6. Create Link ---
+        runtime
+            .expect_exists()
+            .with(eq(dest_link.clone())) // Parent of final_dest is dest_link
+            .returning(|_| true);
+
+        expect_symlink(&mut runtime, v2_dir.join("file1"), final_dest.clone());
+
+        // --- 7. Save Metadata ---
+        runtime
+            .expect_exists()
+            .with(eq(package_dir))
+            .returning(|_| true);
+        runtime.expect_write().returning(|_, _| Ok(()));
+        runtime.expect_rename().returning(|_, _| Ok(()));
+
+        // --- Execute ---
+        let result = link(
+            runtime,
+            "owner/repo@v2",
+            dest_with_slash,
+            Config::for_test(root),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_trailing_slash_error_if_not_directory() {
+        // Test that a trailing slash errors if destination is not a directory
+        let mut runtime = MockRuntime::new();
+        configure_runtime_basics(&mut runtime);
+
+        let root = test_root();
+        let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
+        let v1_dir = package_dir.join("v1");
+        let dest_dir = test_bin_dir();
+        let dest_file = dest_dir.join("file");
+        let dest_with_slash = PathBuf::from(format!("{}/", dest_file.display()));
+
+        // --- 1. is_installed + load ---
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+        runtime
+            .expect_exists()
+            .with(eq(meta_path.clone()))
+            .returning(|_| true);
+
+        let meta = Meta {
+            name: "owner/repo".into(),
+            current_version: "v1".into(),
+            ..Default::default()
+        };
+        runtime
+            .expect_read_to_string()
+            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
+
+        // --- 2. exists check for version_dir ---
+        runtime
+            .expect_exists()
+            .with(eq(v1_dir.clone()))
+            .returning(|_| true);
+
+        // --- 3. find_default_target ---
+        let dir_entry = vec![v1_dir.join("tool")];
+        runtime
+            .expect_read_dir()
+            .with(eq(v1_dir.clone()))
+            .returning(move |_| Ok(dir_entry.clone()));
+        runtime
+            .expect_is_dir()
+            .with(eq(v1_dir.join("tool")))
+            .returning(|_| false);
+
+        // --- 4. Analyze Destination ---
+        // Dest exists
+        runtime
+            .expect_exists()
+            .with(eq(dest_with_slash.clone()))
+            .returning(|_| true);
+
+        // Dest is NOT a directory (it's a file)
+        runtime
+            .expect_is_dir()
+            .with(eq(dest_with_slash.clone()))
+            .returning(|_| false);
+
+        // Dest IS a symlink (doesn't matter, trailing slash + not dir = error)
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_with_slash.clone()))
+            .returning(|_| true);
+
+        // --- Execute ---
+        let result = link(
+            runtime,
+            "owner/repo",
+            dest_with_slash,
+            Config::for_test(root),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a directory"));
+    }
+
+    #[test]
     fn test_link_dest_is_directory() {
         // When dest is an existing directory, the link should be created inside it
         // with the filename from the link target (single file case)
@@ -248,6 +626,11 @@ mod tests {
             .returning(|_| false);
 
         // --- 5. Analyze Destination ---
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_dir.clone()))
+            .returning(|_| false);
+
         runtime
             .expect_exists()
             .with(eq(dest_dir.clone()))
@@ -858,6 +1241,11 @@ mod tests {
             .returning(|_| true);
 
         // --- 4. Analyze Destination ---
+        runtime
+            .expect_is_symlink()
+            .with(eq(dest_dir.clone()))
+            .returning(|_| false);
+
         runtime
             .expect_exists()
             .with(eq(dest_dir.clone()))
