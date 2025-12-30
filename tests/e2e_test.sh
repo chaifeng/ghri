@@ -316,7 +316,7 @@ expect() {
         expect_symlink_target_to_contain "${DSL_ARGS[0]}" "${DSL_ARGS[1]}"
 
     elif dsl_match symlink _ to be relative to _ === "$@"; then
-        expect_symlink_to_be_relative "$(readlink "${DSL_ARGS[1]}")" "${DSL_ARGS[0]}"
+        expect_symlink_to_be_relative "${DSL_ARGS[0]}" "$(readlink "${DSL_ARGS[0]}")"
 
     elif dsl_match command to succeed: % === "$@"; then
         expect_command_to_succeed "${DSL_ARGS[@]}"
