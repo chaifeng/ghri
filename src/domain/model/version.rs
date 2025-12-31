@@ -5,6 +5,51 @@
 
 use crate::provider::Release;
 
+/// A resolved, normalized version tag.
+///
+/// This type guarantees that the version has been resolved against
+/// the releases list, ensuring it uses the official tag format.
+///
+/// It can only be created through `VersionResolver::resolve_version()`,
+/// which normalizes user input (e.g., "1.0" -> "v1.0" if official tag is "v1.0").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedVersion(String);
+
+impl ResolvedVersion {
+    /// Get the version string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Create a ResolvedVersion for current version (already normalized in meta).
+    ///
+    /// This is used when we have the current version from meta.json,
+    /// which is already in the official format.
+    pub fn current(version: String) -> Self {
+        Self(version)
+    }
+
+    /// Create a ResolvedVersion from an installed version directory name.
+    ///
+    /// This is used when we read version names from the filesystem,
+    /// which are already in the official format.
+    pub fn from_installed(version: impl Into<String>) -> Self {
+        Self(version.into())
+    }
+}
+
+impl std::fmt::Display for ResolvedVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for ResolvedVersion {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Version constraint for selecting a release.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum VersionConstraint {
@@ -44,6 +89,23 @@ impl VersionResolver {
         releases
             .iter()
             .find(|r| Self::versions_match(&r.tag, version))
+    }
+
+    /// Resolve a user-input version to an official version from releases.
+    ///
+    /// Returns a `ResolvedVersion` containing the official tag if found,
+    /// otherwise returns the original input wrapped in `ResolvedVersion`.
+    ///
+    /// This allows users to specify versions with or without the 'v' prefix
+    /// while internally using the official tag.
+    ///
+    /// Example: If official tag is "v1.0.0", user input "1.0.0" returns ResolvedVersion("v1.0.0").
+    /// Example: If official tag is "1.0.0", user input "v1.0.0" returns ResolvedVersion("1.0.0").
+    pub fn resolve_user_version(releases: &[Release], user_version: &str) -> ResolvedVersion {
+        let normalized = Self::find_exact(releases, user_version)
+            .map(|r| r.tag.clone())
+            .unwrap_or_else(|| user_version.to_string());
+        ResolvedVersion(normalized)
     }
 
     /// Find the latest stable (non-prerelease) release.
@@ -152,6 +214,54 @@ mod tests {
         // No match
         let result = VersionResolver::find_exact(&releases, "v3.0.0");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_user_version_with_v_prefix() {
+        // Official tags have 'v' prefix
+        let releases = vec![
+            make_release("v1.0.0", Some("2024-01-01T00:00:00Z"), false),
+            make_release("v2.0.0", Some("2024-02-01T00:00:00Z"), false),
+        ];
+
+        // User input without 'v' should return official tag with 'v'
+        assert_eq!(
+            VersionResolver::resolve_user_version(&releases, "1.0.0").as_str(),
+            "v1.0.0"
+        );
+
+        // User input with 'v' should return as-is (matches official)
+        assert_eq!(
+            VersionResolver::resolve_user_version(&releases, "v2.0.0").as_str(),
+            "v2.0.0"
+        );
+
+        // Non-existent version returns input as-is
+        assert_eq!(
+            VersionResolver::resolve_user_version(&releases, "3.0.0").as_str(),
+            "3.0.0"
+        );
+    }
+
+    #[test]
+    fn test_resolve_user_version_without_v_prefix() {
+        // Official tags do NOT have 'v' prefix
+        let releases = vec![
+            make_release("1.0.0", Some("2024-01-01T00:00:00Z"), false),
+            make_release("2.0.0", Some("2024-02-01T00:00:00Z"), false),
+        ];
+
+        // User input with 'v' should return official tag without 'v'
+        assert_eq!(
+            VersionResolver::resolve_user_version(&releases, "v1.0.0").as_str(),
+            "1.0.0"
+        );
+
+        // User input without 'v' should return as-is (matches official)
+        assert_eq!(
+            VersionResolver::resolve_user_version(&releases, "2.0.0").as_str(),
+            "2.0.0"
+        );
     }
 
     #[test]

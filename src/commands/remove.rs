@@ -1,10 +1,8 @@
 use anyhow::Result;
 use log::debug;
-use std::path::Path;
 
-use crate::application::LinkAction;
-use crate::domain::model::Meta;
-use crate::domain::service::{LinkManager, PackageRepository};
+use crate::application::RemoveAction;
+use crate::domain::model::PackageContext;
 use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
@@ -23,145 +21,102 @@ pub fn remove<R: Runtime>(
     let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let action = LinkAction::new(&runtime, config.install_root.clone());
-    let package_dir = action.package_dir(&spec.repo.owner, &spec.repo.repo);
-    debug!("Package directory: {:?}", package_dir);
+    let action = RemoveAction::new(&runtime, &config.install_root);
 
-    if !action
-        .package_repo()
-        .package_exists(&spec.repo.owner, &spec.repo.repo)
-    {
-        debug!("Package directory not found");
-        anyhow::bail!("Package {} is not installed.", spec.repo);
-    }
+    // Load package context - version may be None if not specified and no current
+    let ctx = action.package_repo().load_context_any(
+        &spec.repo.owner,
+        &spec.repo.repo,
+        spec.version.as_deref(),
+    )?;
 
-    // Load meta if exists
-    let meta = action
-        .package_repo()
-        .load(&spec.repo.owner, &spec.repo.repo)?;
-
-    if let Some(ref version) = spec.version {
-        // Remove specific version only
+    if ctx.version_specified {
+        // Remove specific version
+        let version = ctx.version();
         debug!("Removing specific version: {}", version);
 
         // Show removal plan and confirm
         if !yes {
-            show_version_removal_plan(&action, &spec.repo, version, meta.as_ref())?;
+            show_version_removal_plan(&ctx, &action);
             if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
         }
 
-        remove_version(
-            &runtime,
-            action.package_repo(),
-            &spec.repo.owner,
-            &spec.repo.repo,
+        // Check if this is current before removal (for warning message)
+        let was_current =
+            action
+                .package_repo()
+                .is_current_version(&ctx.owner, &ctx.repo, version.as_str());
+
+        action.remove_version(&ctx, force)?;
+        println!(
+            "Removed version {} from {}",
             version,
-            meta.as_ref(),
-            force,
-        )?;
+            ctx.package_dir.display()
+        );
+
+        if was_current {
+            println!("Warning: Removed current version symlink. No version is now active.");
+        }
     } else {
         // Remove entire package
         debug!("Removing entire package");
 
         // Show removal plan and confirm
         if !yes {
-            show_package_removal_plan(&action, &spec.repo, &package_dir, meta.as_ref());
+            show_package_removal_plan(&ctx);
             if !runtime.confirm("Proceed with removal?")? {
                 println!("Removal cancelled.");
                 return Ok(());
             }
         }
 
-        remove_package(&action, &spec.repo.owner, &spec.repo.repo, meta.as_ref())?;
+        action.remove_package(&ctx)?;
+        println!("Removed package {}", ctx.display_name);
     }
 
     Ok(())
 }
 
-fn show_package_removal_plan<R: Runtime>(
-    action: &LinkAction<'_, R>,
-    repo: &crate::provider::RepoId,
-    package_dir: &Path,
-    meta: Option<&Meta>,
-) {
+fn show_package_removal_plan(ctx: &PackageContext) {
     println!();
     println!("=== Removal Plan ===");
     println!();
-    println!("Package: {}", repo);
+    println!("Package: {}", ctx.display_name);
     println!();
 
     println!("Directories to remove:");
-    println!("  [DEL] {}", package_dir.display());
+    println!("  [DEL] {}", ctx.package_dir.display());
 
-    if let Some(meta) = meta {
-        // Check regular links
-        let (valid_links, invalid_links) =
-            action.link_manager().check_links(&meta.links, package_dir);
-
-        // Check versioned links
-        let (valid_versioned, invalid_versioned) = action
-            .link_manager()
-            .check_versioned_links(&meta.versioned_links, package_dir);
-
-        // Combine valid links (only those that actually exist and point to package)
-        let all_valid: Vec<_> = valid_links
-            .iter()
-            .chain(valid_versioned.iter())
-            .filter(|l| l.status.is_valid())
-            .collect();
-
-        // Combine invalid links
-        let all_invalid: Vec<_> = invalid_links
-            .iter()
-            .chain(invalid_versioned.iter())
-            .chain(valid_links.iter().filter(|l| l.status.is_creatable()))
-            .chain(valid_versioned.iter().filter(|l| l.status.is_creatable()))
-            .collect();
-
-        if !all_valid.is_empty() {
-            println!();
-            println!("Symlinks to remove:");
-            for link in &all_valid {
-                println!("  [DEL] {}", link.dest.display());
-            }
+    if !ctx.meta.links.is_empty() || !ctx.meta.versioned_links.is_empty() {
+        println!();
+        println!("Link rules that will be removed:");
+        for link in &ctx.meta.links {
+            println!("  {:?}", link.dest);
         }
-
-        if !all_invalid.is_empty() {
-            println!();
-            println!("Symlinks to skip (will not be removed):");
-            for link in &all_invalid {
-                println!(
-                    "  [SKIP] {} ({})",
-                    link.dest.display(),
-                    link.status.reason()
-                );
-            }
+        for link in &ctx.meta.versioned_links {
+            println!("  {:?} (version {})", link.dest, link.version);
         }
     }
     println!();
 }
 
-fn show_version_removal_plan<R: Runtime>(
-    action: &LinkAction<'_, R>,
-    repo: &crate::provider::RepoId,
-    version: &str,
-    meta: Option<&Meta>,
-) -> Result<()> {
-    let package_dir = action.package_dir(&repo.owner, &repo.repo);
-    let version_dir = package_dir.join(version);
+fn show_version_removal_plan<R: Runtime>(ctx: &PackageContext, action: &RemoveAction<'_, R>) {
+    let version = ctx.version();
+    let version_dir = ctx.version_dir();
 
     // Check if this is the current version
-    let is_current = action
-        .package_repo()
-        .is_current_version(&repo.owner, &repo.repo, version);
+    let is_current =
+        action
+            .package_repo()
+            .is_current_version(&ctx.owner, &ctx.repo, version.as_str());
 
     println!();
     println!("=== Removal Plan ===");
     println!();
-    println!("Package: {}", repo);
+    println!("Package: {}", ctx.display_name);
     println!("Version: {}", version);
     if is_current {
         println!("  (This is the current version!)");
@@ -174,210 +129,58 @@ fn show_version_removal_plan<R: Runtime>(
     if is_current {
         println!();
         println!("Symlinks to remove:");
-        println!("  [DEL] {}/current", package_dir.display());
+        println!("  [DEL] {}/current", ctx.package_dir.display());
     }
 
-    // Show links that will be removed
-    if let Some(meta) = meta {
-        // Check regular links pointing to this version
-        let (valid_links, _) = action.link_manager().check_links(&meta.links, &version_dir);
-        let regular_valid: Vec<_> = valid_links.iter().filter(|l| l.status.is_valid()).collect();
+    // Show versioned links for this version
+    let versioned_for_this: Vec<_> = ctx
+        .meta
+        .versioned_links
+        .iter()
+        .filter(|l| l.version == version.as_str())
+        .collect();
 
-        // Check versioned links for this version
-        let (valid_versioned, invalid_versioned) = action
-            .link_manager()
-            .check_versioned_links_for_version(&meta.versioned_links, version, &version_dir);
-        let versioned_valid: Vec<_> = valid_versioned
-            .iter()
-            .filter(|l| l.status.is_valid())
-            .collect();
-
-        // Combine all valid links
-        let all_valid: Vec<_> = regular_valid.iter().chain(versioned_valid.iter()).collect();
-
-        if !all_valid.is_empty() {
-            if !is_current {
-                println!();
-                println!("Symlinks to remove:");
-            }
-            for link in &all_valid {
-                println!("  [DEL] {}", link.dest.display());
-            }
-        }
-
-        // Show invalid versioned links (only versioned links matter here, regular links pointing elsewhere are fine)
-        let all_invalid: Vec<_> = invalid_versioned
-            .iter()
-            .chain(valid_versioned.iter().filter(|l| l.status.is_creatable()))
-            .collect();
-
-        if !all_invalid.is_empty() {
-            println!();
-            println!("Symlinks to skip (will not be removed):");
-            for link in &all_invalid {
-                println!(
-                    "  [SKIP] {} ({})",
-                    link.dest.display(),
-                    link.status.reason()
-                );
-            }
+    if !versioned_for_this.is_empty() {
+        println!();
+        println!("Versioned links to remove:");
+        for link in versioned_for_this {
+            println!("  {:?}", link.dest);
         }
     }
 
     println!();
-    Ok(())
-}
-
-/// Remove a specific version of a package
-pub(crate) fn remove_version<R: Runtime>(
-    runtime: &R,
-    pkg_repo: &PackageRepository<'_, R>,
-    owner: &str,
-    repo: &str,
-    version: &str,
-    meta: Option<&Meta>,
-    force: bool,
-) -> Result<()> {
-    let package_dir = pkg_repo.package_dir(owner, repo);
-    let version_dir = package_dir.join(version);
-    debug!("Version directory: {:?}", version_dir);
-
-    if !pkg_repo.is_version_installed(owner, repo, version) {
-        anyhow::bail!("Version {} is not installed.", version);
-    }
-
-    // Check if this is the current version
-    let is_current = pkg_repo.is_current_version(owner, repo, version);
-
-    if is_current && !force {
-        anyhow::bail!(
-            "Version {} is the current version. Use --force to remove it anyway.",
-            version
-        );
-    }
-
-    // Remove links pointing to this version using LinkManager
-    let link_manager = LinkManager::new(runtime);
-    if let Some(meta) = meta {
-        for rule in &meta.links {
-            // For regular links, only remove if pointing to this specific version
-            let _ = link_manager.remove_link_if_under(&rule.dest, &version_dir);
-        }
-        // Also remove versioned links for this version
-        for link in &meta.versioned_links {
-            if link.version == version {
-                let _ = link_manager.remove_link_if_under(&link.dest, &version_dir);
-            }
-        }
-    }
-
-    // Update meta.json to remove versioned_links for this version
-    if let Ok(Some(mut updated_meta)) = pkg_repo.load(owner, repo) {
-        let original_len = updated_meta.versioned_links.len();
-        updated_meta
-            .versioned_links
-            .retain(|l| l.version != version);
-        if updated_meta.versioned_links.len() != original_len {
-            debug!(
-                "Removed {} versioned link(s) from meta.json",
-                original_len - updated_meta.versioned_links.len()
-            );
-            pkg_repo.save(owner, repo, &updated_meta)?;
-        }
-    }
-
-    // Remove the version directory
-    debug!("Removing version directory {:?}", version_dir);
-    pkg_repo.remove_version_dir(owner, repo, version)?;
-    println!("Removed version {} from {}", version, package_dir.display());
-
-    // If this was the current version, remove the current symlink
-    if is_current {
-        debug!("Removing current symlink");
-        let current_link = pkg_repo.current_link(owner, repo);
-        let _ = link_manager.remove_link(&current_link);
-        println!("Warning: Removed current version symlink. No version is now active.");
-    }
-
-    Ok(())
-}
-
-/// Remove an entire package
-fn remove_package<R: Runtime>(
-    action: &LinkAction<'_, R>,
-    owner: &str,
-    repo: &str,
-    meta: Option<&Meta>,
-) -> Result<()> {
-    let package_dir = action.package_dir(owner, repo);
-
-    // Remove all external links first using LinkManager
-    if let Some(meta) = meta {
-        debug!("Removing {} link(s)", meta.links.len());
-        for rule in &meta.links {
-            let _ = action
-                .link_manager()
-                .remove_link_if_under(&rule.dest, &package_dir);
-        }
-        // Also remove versioned links
-        debug!("Removing {} versioned link(s)", meta.versioned_links.len());
-        for link in &meta.versioned_links {
-            let _ = action
-                .link_manager()
-                .remove_link_if_under(&link.dest, &package_dir);
-        }
-    }
-
-    // Remove the package directory (also cleans up empty owner directory)
-    debug!("Removing package directory {:?}", package_dir);
-    action.package_repo().remove_package_dir(owner, repo)?;
-
-    println!("Removed package {}/{}", owner, repo);
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::model::LinkRule;
+    use crate::domain::model::{LinkRule, Meta};
     use crate::runtime::MockRuntime;
     use crate::test_utils::{configure_mock_runtime_basics, test_bin_dir, test_root};
     use mockall::predicate::*;
     use std::path::PathBuf;
 
-    // Helper to configure simple home dir and user
     fn configure_runtime_basics(runtime: &mut MockRuntime) {
         configure_mock_runtime_basics(runtime);
     }
 
     #[test]
     fn test_remove_package() {
-        // Test removing an entire package (directory and all links)
-
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // --- Setup Paths ---
         let root = test_root();
         let owner_dir = root.join("owner");
         let package_dir = owner_dir.join("repo");
         let meta_path = package_dir.join("meta.json");
         let link_dest = test_bin_dir().join("tool");
 
-        // --- 1. Check Package Exists ---
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // --- 2. Load Metadata ---
+        // Load Metadata
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Read meta.json -> package with one link rule
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -391,45 +194,35 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Remove External Symlinks (via LinkManager) ---
-
-        // LinkManager.remove_link_if_under checks:
-        // 1. is_symlink
+        // Remove link (via LinkManager)
         runtime
             .expect_is_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| true);
 
-        // 2. resolve_link -> points to package directory
         let resolved_target = package_dir.join("v1").join("tool");
         runtime
             .expect_resolve_link()
             .with(eq(link_dest.clone()))
             .returning(move |_| Ok(resolved_target.clone()));
 
-        // 3. remove_symlink
         runtime
             .expect_remove_symlink()
             .with(eq(link_dest.clone()))
             .returning(|_| Ok(()));
 
-        // --- 4. Remove Package Directory (via PackageRepository) ---
-
-        // PackageRepository.remove_package_dir checks exists first
+        // Remove package directory
         runtime
             .expect_exists()
             .with(eq(package_dir.clone()))
             .returning(|_| true);
 
-        // Remove package dir
         runtime
             .expect_remove_dir_all()
             .with(eq(package_dir.clone()))
             .returning(|_| Ok(()));
 
-        // --- 5. Cleanup Empty Owner Directory ---
-
-        // Check if owner dir exists and is empty -> yes
+        // Cleanup empty owner directory
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -437,15 +230,12 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![])); // Empty!
+            .returning(|_| Ok(vec![]));
 
-        // Remove empty owner directory
         runtime
             .expect_remove_dir_all()
             .with(eq(owner_dir.clone()))
             .returning(|_| Ok(()));
-
-        // --- Execute ---
 
         let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_ok());
@@ -453,12 +243,9 @@ mod tests {
 
     #[test]
     fn test_remove_specific_version() {
-        // Test removing a specific version (not the current version)
-
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // --- Setup Paths ---
         let root = test_root();
         let owner_dir = root.join("owner");
         let package_dir = owner_dir.join("repo");
@@ -467,21 +254,12 @@ mod tests {
         let current_link = package_dir.join("current");
         let link_dest = test_bin_dir().join("tool");
 
-        // --- 1. Check Package Exists ---
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // --- 2. Load Metadata ---
-
-        // File exists: meta.json -> true
+        // Load Metadata
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Read meta.json -> current version is v2 (not v1 being removed)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v2".into(), // Different from version being removed
@@ -495,23 +273,19 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Check Version Exists (is_version_installed uses is_dir) ---
+        // Check version installed
         runtime
             .expect_is_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
-        // --- 4. Check if v1 is Current Version ---
-
-        // Read current symlink: -> v2 (not v1, so safe to remove)
+        // Check if v1 is current version
         runtime
             .expect_read_link()
             .with(eq(current_link.clone()))
             .returning(|_| Ok(PathBuf::from("v2")));
 
-        // --- 5. Check Link Target ---
-
-        // Resolve link -> points to v2, not v1
+        // Check link target (points to v2, not v1)
         let v2_target = root.join("owner").join("repo").join("v2").join("tool");
         runtime
             .expect_is_symlink()
@@ -522,23 +296,18 @@ mod tests {
             .with(eq(link_dest.clone()))
             .returning(move |_| Ok(v2_target.clone()));
 
-        // --- 6. Remove Version Directory (remove_version_dir checks exists then removes) ---
-
-        // Check exists for remove_version_dir
+        // Remove version directory
         runtime
             .expect_exists()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
-        // Remove version dir
         runtime
             .expect_remove_dir_all()
             .with(eq(version_dir.clone()))
             .returning(|_| Ok(()));
 
-        // --- 7. Cleanup Check ---
-
-        // Check owner directory still has content (not empty)
+        // Cleanup check (not empty)
         runtime
             .expect_exists()
             .with(eq(owner_dir.clone()))
@@ -546,9 +315,7 @@ mod tests {
         runtime
             .expect_read_dir()
             .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![PathBuf::from("repo")])); // Not empty
-
-        // --- Execute ---
+            .returning(|_| Ok(vec![PathBuf::from("repo")]));
 
         let result = remove(
             runtime,
@@ -562,33 +329,20 @@ mod tests {
 
     #[test]
     fn test_remove_current_version_requires_force() {
-        // Test that removing current version requires --force flag
-
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // --- Setup Paths ---
         let root = test_root();
         let package_dir = root.join("owner").join("repo");
         let version_dir = package_dir.join("v1");
         let meta_path = package_dir.join("meta.json");
         let current_link = package_dir.join("current");
 
-        // --- 1. Check Package Exists ---
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // --- 2. Load Metadata ---
-
-        // File exists: meta.json -> true
         runtime
             .expect_exists()
             .with(eq(meta_path.clone()))
             .returning(|_| true);
 
-        // Read meta.json -> current version is v1 (same as being removed!)
         let meta = Meta {
             name: "owner/repo".into(),
             current_version: "v1".into(),
@@ -598,25 +352,17 @@ mod tests {
             .expect_read_to_string()
             .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
 
-        // --- 3. Check Version Exists (is_version_installed uses is_dir) ---
-
-        // Directory exists: /home/user/.ghri/owner/repo/v1 -> true
         runtime
             .expect_is_dir()
             .with(eq(version_dir.clone()))
             .returning(|_| true);
 
-        // --- 4. Check if v1 is Current Version ---
-
-        // Current symlink points to v1 (same as being removed!)
+        // Current symlink points to v1 (same as being removed)
         runtime
             .expect_read_link()
             .with(eq(current_link.clone()))
             .returning(|_| Ok(PathBuf::from("v1")));
 
-        // --- Execute & Verify ---
-
-        // Should fail without --force since v1 is the current version
         let result = remove(
             runtime,
             "owner/repo@v1",
@@ -630,210 +376,25 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent_package_fails() {
-        // Test that remove fails when package is not installed
-
         let mut runtime = MockRuntime::new();
         configure_runtime_basics(&mut runtime);
 
-        // --- Setup Paths ---
         let root = test_root();
         let package_dir = root.join("owner").join("repo");
+        let meta_path = package_dir.join("meta.json");
 
-        // --- 1. Check Package Exists ---
-
-        // Directory exists -> false (not installed!)
         runtime
             .expect_exists()
-            .with(eq(package_dir.clone()))
+            .with(eq(meta_path.clone()))
             .returning(|_| false);
-
-        // --- Execute & Verify ---
 
         let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not installed"));
-    }
-
-    #[test]
-    fn test_remove_package_link_points_to_wrong_location() {
-        // Test that links pointing outside the package directory are not removed
-
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-
-        // --- Setup Paths ---
-        let root = test_root();
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
-        let link_dest = test_bin_dir().join("tool");
-
-        // --- 1. Check Package Exists ---
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // --- 2. Load Metadata ---
-
-        // File exists: meta.json -> true
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        // Read meta.json -> package with one link rule
-        let meta = Meta {
-            name: "owner/repo".into(),
-            current_version: "v1".into(),
-            links: vec![LinkRule {
-                dest: link_dest.clone(),
-                path: None,
-            }],
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // --- 3. Try to Remove Link (Points to Different Package) ---
-
-        // LinkManager.remove_link_if_under checks:
-        // 1. is_symlink
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| true);
-
-        // 2. resolve_link -> points to different package (not removed)
-        let other_package_target = root.join("other").join("package").join("tool");
-        runtime
-            .expect_resolve_link()
-            .with(eq(link_dest.clone()))
-            .returning(move |_| Ok(other_package_target.clone()));
-
-        // remove_symlink should NOT be called because target is not under package_dir
-
-        // --- 4. Remove Package Directory (via PackageRepository) ---
-
-        // PackageRepository.remove_package_dir checks exists first
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // Remove package dir
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(package_dir.clone()))
-            .returning(|_| Ok(()));
-
-        // --- 5. Cleanup Empty Owner Directory ---
-
-        runtime
-            .expect_exists()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![]));
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(()));
-
-        // --- Execute ---
-
-        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_remove_package_link_not_symlink() {
-        // Test that regular files (not symlinks) are not removed
-
-        let mut runtime = MockRuntime::new();
-        configure_runtime_basics(&mut runtime);
-
-        // --- Setup Paths ---
-        let root = test_root();
-        let owner_dir = root.join("owner");
-        let package_dir = owner_dir.join("repo");
-        let meta_path = package_dir.join("meta.json");
-        let link_dest = test_bin_dir().join("tool");
-
-        // --- 1. Check Package Exists ---
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // --- 2. Load Metadata ---
-
-        // File exists: meta.json -> true
-        runtime
-            .expect_exists()
-            .with(eq(meta_path.clone()))
-            .returning(|_| true);
-
-        // Read meta.json -> package with one link rule
-        let meta = Meta {
-            name: "owner/repo".into(),
-            current_version: "v1".into(),
-            links: vec![LinkRule {
-                dest: link_dest.clone(),
-                path: None,
-            }],
-            ..Default::default()
-        };
-        runtime
-            .expect_read_to_string()
-            .returning(move |_| Ok(serde_json::to_string(&meta).unwrap()));
-
-        // --- 3. Try to Remove Link (Not a Symlink) ---
-
-        // LinkManager.remove_link_if_under checks is_symlink first
-        // /usr/local/bin/tool is not a symlink -> skipped
-        runtime
-            .expect_is_symlink()
-            .with(eq(link_dest.clone()))
-            .returning(|_| false);
-
-        // remove_symlink should NOT be called because it's not a symlink
-
-        // --- 4. Remove Package Directory (via PackageRepository) ---
-
-        // PackageRepository.remove_package_dir checks exists first
-        runtime
-            .expect_exists()
-            .with(eq(package_dir.clone()))
-            .returning(|_| true);
-
-        // Remove /home/user/.ghri/owner/repo
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(package_dir.clone()))
-            .returning(|_| Ok(()));
-
-        // --- 5. Cleanup Empty Owner Directory ---
-
-        runtime
-            .expect_exists()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| true);
-        runtime
-            .expect_read_dir()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(vec![]));
-        runtime
-            .expect_remove_dir_all()
-            .with(eq(owner_dir.clone()))
-            .returning(|_| Ok(()));
-
-        // --- Execute ---
-
-        let result = remove(runtime, "owner/repo", false, true, Config::for_test(root));
-        assert!(result.is_ok());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not installed") || err_msg.contains("not found"),
+            "Expected 'not installed' or 'not found' in error, got: {}",
+            err_msg
+        );
     }
 }

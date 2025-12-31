@@ -7,15 +7,19 @@ mod install;
 mod link;
 mod list;
 mod prune;
+mod remove;
 mod show;
+mod update;
 mod upgrade;
 
 pub use install::{InstallAction, InstallOperations};
-pub use link::LinkAction;
+pub use link::{LinkAction, LinkResult, UnlinkResult};
 pub use list::{ListAction, PackageInfo};
 pub use prune::{PruneAction, PruneInfo};
+pub use remove::RemoveAction;
 pub use show::{PackageDetails, ShowAction};
-pub use upgrade::{UpdateCheck, UpgradeAction};
+pub use update::{UpdateAction, UpdateResult};
+pub use upgrade::{UpdateCheck, UpgradeAction, UpgradeCandidate, UpgradeCheckResult};
 
 // Re-export options from commands layer
 pub use crate::commands::{InstallOptions, UpgradeOptions};

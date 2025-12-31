@@ -1002,6 +1002,92 @@ scenario_multiple_filters_or_logic() {
 }
 
 # shellcheck disable=SC2329
+scenario_version_prefix_flexibility() {
+    local GHRI_ROOT
+    describe_scenario "Test: Version Prefix Flexibility (v prefix normalization)"
+    # Tests that users can use versions with or without 'v' prefix
+    # bach-sh/bach uses versions WITHOUT 'v' prefix (e.g., "0.7.2")
+    # chaifeng/zidr uses versions WITH 'v' prefix (e.g., "v0.2.0")
+
+    using_root "$TEST_ROOT/version_prefix"
+    local bin_dir="$TEST_ROOT/version_prefix_bin"
+    mkdir -p "$bin_dir"
+
+    # ===== Test 1: bach-sh/bach (official tags WITHOUT 'v' prefix) =====
+    note "=== Testing bach-sh/bach (tags without 'v' prefix) ==="
+
+    # 1a. Install with 'v' prefix (user adds 'v', official is '0.6.0')
+    note "1a. Installing bach-sh/bach@v0.6.0 (with 'v' prefix, official is '0.6.0')..."
+    run ghri install -y bach-sh/bach@v0.6.0
+    # Directory should be created with official name (no 'v')
+    expect directory "$GHRI_ROOT/bach-sh/bach/0.6.0" to exist
+    expect symlink "$GHRI_ROOT/bach-sh/bach/current" to point to "0.6.0"
+
+    # 1b. Link with 'v' prefix
+    note "1b. Linking bach-sh/bach@v0.6.0 (with 'v' prefix)..."
+    run ghri link bach-sh/bach@v0.6.0 "$bin_dir/bach-v-prefix"
+    expect symlink "$bin_dir/bach-v-prefix" to exist
+    expect symlink "$bin_dir/bach-v-prefix" to point to matching "0.6.0"
+    expect link to bach-sh/bach at version 0.6.0 in meta
+
+    # 1c. Unlink with 'v' prefix
+    note "1c. Unlinking bach-sh/bach@v0.6.0 (with 'v' prefix)..."
+    run ghri unlink bach-sh/bach@v0.6.0 "$bin_dir/bach-v-prefix"
+    expect symlink "$bin_dir/bach-v-prefix" not to exist
+    expect no link to bach-sh/bach at version 0.6.0 in meta
+
+    # 1d. Install another version without 'v' prefix (normal usage)
+    note "1d. Installing bach-sh/bach@0.7.2 (without 'v' prefix)..."
+    run ghri install -y bach-sh/bach@0.7.2
+    expect directory "$GHRI_ROOT/bach-sh/bach/0.7.2" to exist
+    expect symlink "$GHRI_ROOT/bach-sh/bach/current" to point to "0.7.2"
+
+    # 1e. Remove with 'v' prefix (should find and remove '0.6.0')
+    note "1e. Removing bach-sh/bach@v0.6.0 (with 'v' prefix)..."
+    run ghri remove -y -f bach-sh/bach@v0.6.0
+    expect path "$GHRI_ROOT/bach-sh/bach/0.6.0" not to exist
+    # 0.7.2 should still exist
+    expect directory "$GHRI_ROOT/bach-sh/bach/0.7.2" to exist
+
+    # ===== Test 2: chaifeng/zidr (official tags WITH 'v' prefix) =====
+    note "=== Testing chaifeng/zidr (tags with 'v' prefix) ==="
+
+    # 2a. Install without 'v' prefix (user omits 'v', official is 'v0.2.0')
+    note "2a. Installing chaifeng/zidr@0.2.0 (without 'v' prefix, official is 'v0.2.0')..."
+    run ghri install -y chaifeng/zidr@0.2.0 --filter "*-macos-none"
+    # Directory should be created with official name (with 'v')
+    expect directory "$GHRI_ROOT/chaifeng/zidr/v0.2.0" to exist
+    expect symlink "$GHRI_ROOT/chaifeng/zidr/current" to point to "v0.2.0"
+
+    # 2b. Link without 'v' prefix
+    note "2b. Linking chaifeng/zidr@0.2.0 (without 'v' prefix)..."
+    run ghri link chaifeng/zidr@0.2.0 "$bin_dir/zidr-no-v-prefix"
+    expect symlink "$bin_dir/zidr-no-v-prefix" to exist
+    expect symlink "$bin_dir/zidr-no-v-prefix" to point to matching "v0.2.0"
+    expect link to chaifeng/zidr at version v0.2.0 in meta
+
+    # 2c. Unlink without 'v' prefix
+    note "2c. Unlinking chaifeng/zidr@0.2.0 (without 'v' prefix)..."
+    run ghri unlink chaifeng/zidr@0.2.0 "$bin_dir/zidr-no-v-prefix"
+    expect symlink "$bin_dir/zidr-no-v-prefix" not to exist
+    expect no link to chaifeng/zidr at version v0.2.0 in meta
+
+    # 2d. Install another version with 'v' prefix (normal usage)
+    note "2d. Installing chaifeng/zidr@v0.1.0 (with 'v' prefix)..."
+    run ghri install -y chaifeng/zidr@v0.1.0 --filter "*-macos-none"
+    expect directory "$GHRI_ROOT/chaifeng/zidr/v0.1.0" to exist
+
+    # 2e. Remove without 'v' prefix (should find and remove 'v0.1.0')
+    note "2e. Removing chaifeng/zidr@0.2.0 (without 'v' prefix)..."
+    run ghri remove -y chaifeng/zidr@0.2.0
+    expect path "$GHRI_ROOT/chaifeng/zidr/v0.2.0" not to exist
+    # v0.2.0 should still exist
+    expect directory "$GHRI_ROOT/chaifeng/zidr/v0.1.0" to exist
+
+    pass "Version prefix flexibility tests passed"
+}
+
+# shellcheck disable=SC2329
 scenario_upgrade_mechanism_mocked() {
     local GHRI_ROOT
     describe_scenario "Test: Upgrade after update (Mocked)"
@@ -1163,6 +1249,7 @@ main() {
         scenario_versioned_linking
         scenario_filtering_and_path_linking
         scenario_multiple_filters_or_logic
+        scenario_version_prefix_flexibility
         scenario_upgrade_mechanism_mocked
         scenario_error_handling
         scenario_edge_cases_and_concurrency

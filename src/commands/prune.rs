@@ -2,30 +2,31 @@ use anyhow::Result;
 use log::{debug, info};
 use std::path::Path;
 
-use crate::application::PruneAction;
+use crate::application::{PruneAction, RemoveAction};
 use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
 use super::config::Config;
-use super::remove_version;
 
 /// Prune unused versions, keeping only the current version
 #[tracing::instrument(skip(runtime, config))]
 pub fn prune<R: Runtime>(runtime: R, repos: Vec<String>, yes: bool, config: Config) -> Result<()> {
     debug!("Using install root: {:?}", config.install_root);
 
-    let action = PruneAction::new(&runtime, config.install_root);
+    let prune_action = PruneAction::new(&runtime, config.install_root.clone());
+    let remove_action = RemoveAction::new(&runtime, &config.install_root);
 
     if repos.is_empty() {
         // Prune all packages
-        prune_all(&runtime, &action, yes)
+        prune_all(&runtime, &prune_action, &remove_action, yes)
     } else {
         // Prune specific packages
         for repo_str in &repos {
             let spec = repo_str.parse::<PackageSpec>()?;
             prune_package(
                 &runtime,
-                &action,
+                &prune_action,
+                &remove_action,
                 &spec.repo.owner,
                 &spec.repo.repo,
                 &spec.repo.to_string(),
@@ -36,8 +37,13 @@ pub fn prune<R: Runtime>(runtime: R, repos: Vec<String>, yes: bool, config: Conf
     }
 }
 
-fn prune_all<R: Runtime>(runtime: &R, action: &PruneAction<'_, R>, yes: bool) -> Result<()> {
-    let prune_infos = action.find_all_prunable()?;
+fn prune_all<R: Runtime>(
+    runtime: &R,
+    prune_action: &PruneAction<'_, R>,
+    remove_action: &RemoveAction<'_, R>,
+    yes: bool,
+) -> Result<()> {
+    let prune_infos = prune_action.find_all_prunable()?;
 
     if prune_infos.is_empty() {
         println!("No packages installed.");
@@ -48,7 +54,7 @@ fn prune_all<R: Runtime>(runtime: &R, action: &PruneAction<'_, R>, yes: bool) ->
 
     let mut total_pruned = 0;
     for info in prune_infos {
-        let pruned = do_prune(runtime, action, &info, yes)?;
+        let pruned = do_prune(runtime, prune_action, remove_action, &info, yes)?;
         total_pruned += pruned;
     }
 
@@ -61,19 +67,21 @@ fn prune_all<R: Runtime>(runtime: &R, action: &PruneAction<'_, R>, yes: bool) ->
 
 fn prune_package<R: Runtime>(
     runtime: &R,
-    action: &PruneAction<'_, R>,
+    prune_action: &PruneAction<'_, R>,
+    remove_action: &RemoveAction<'_, R>,
     owner: &str,
     repo: &str,
     name: &str,
     yes: bool,
 ) -> Result<usize> {
-    let info = action.find_prunable(owner, repo, name)?;
-    do_prune(runtime, action, &info, yes)
+    let info = prune_action.find_prunable(owner, repo, name)?;
+    do_prune(runtime, prune_action, remove_action, &info, yes)
 }
 
 fn do_prune<R: Runtime>(
     runtime: &R,
-    action: &PruneAction<'_, R>,
+    prune_action: &PruneAction<'_, R>,
+    remove_action: &RemoveAction<'_, R>,
     info: &crate::application::PruneInfo,
     yes: bool,
 ) -> Result<usize> {
@@ -102,24 +110,20 @@ fn do_prune<R: Runtime>(
         return Ok(0);
     }
 
-    // Load meta for remove_version
-    let meta = action.package_repo().load(&info.owner, &info.repo)?;
+    // Load meta for prune operations
+    let meta = prune_action.package_repo().load(&info.owner, &info.repo)?;
 
-    // Remove each version using remove_version
+    // Remove each version using RemoveAction
     let mut pruned_count = 0;
     for version in &info.versions_to_prune {
-        // force=true because we already confirmed, and these are not current versions
-        remove_version(
-            runtime,
-            action.package_repo(),
-            &info.owner,
-            &info.repo,
-            version,
-            meta.as_ref(),
-            true,
-        )?;
+        if let Some(ref m) = meta {
+            remove_action.prune_version(&info.owner, &info.repo, version, m)?;
+        }
         pruned_count += 1;
     }
+
+    // Update meta.json to remove pruned versioned_links
+    remove_action.update_meta_after_prune(&info.owner, &info.repo, &info.versions_to_prune)?;
 
     info!("Pruned {} version(s) from {}", pruned_count, info.name);
     Ok(pruned_count)
@@ -133,9 +137,10 @@ pub fn prune_package_dir<R: Runtime>(
     repo: &str,
     name: &str,
 ) -> Result<()> {
-    let action = PruneAction::new(runtime, install_root.to_path_buf());
+    let prune_action = PruneAction::new(runtime, install_root.to_path_buf());
+    let remove_action = RemoveAction::new(runtime, install_root);
 
-    let info = match action.find_prunable(owner, repo, name) {
+    let info = match prune_action.find_prunable(owner, repo, name) {
         Ok(info) => info,
         Err(_) => return Ok(()), // Package not installed, nothing to prune
     };
@@ -148,8 +153,8 @@ pub fn prune_package_dir<R: Runtime>(
         return Ok(()); // Nothing to prune
     }
 
-    // Load meta for remove_version
-    let meta = action.package_repo().load(owner, repo)?;
+    // Load meta for prune operations
+    let meta = prune_action.package_repo().load(owner, repo)?;
 
     // Remove each version
     println!(
@@ -161,16 +166,14 @@ pub fn prune_package_dir<R: Runtime>(
         if version == current_version {
             continue; // Safety check
         }
-        remove_version(
-            runtime,
-            action.package_repo(),
-            owner,
-            repo,
-            version,
-            meta.as_ref(),
-            true,
-        )?;
+
+        if let Some(ref m) = meta {
+            remove_action.prune_version(owner, repo, version, m)?;
+        }
     }
+
+    // Update meta.json to remove pruned versioned_links
+    remove_action.update_meta_after_prune(owner, repo, &info.versions_to_prune)?;
 
     Ok(())
 }
@@ -365,8 +368,17 @@ mod tests {
             .with(eq(package_dir.clone()))
             .returning(|_| false);
 
-        let action = PruneAction::new(&runtime, root);
-        let result = prune_package(&runtime, &action, "owner", "repo", "owner/repo", true);
+        let prune_action = PruneAction::new(&runtime, root.clone());
+        let remove_action = RemoveAction::new(&runtime, &root);
+        let result = prune_package(
+            &runtime,
+            &prune_action,
+            &remove_action,
+            "owner",
+            "repo",
+            "owner/repo",
+            true,
+        );
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not installed"));
@@ -393,8 +405,17 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
             });
 
-        let action = PruneAction::new(&runtime, root);
-        let result = prune_package(&runtime, &action, "owner", "repo", "owner/repo", true);
+        let prune_action = PruneAction::new(&runtime, root.clone());
+        let remove_action = RemoveAction::new(&runtime, &root);
+        let result = prune_package(
+            &runtime,
+            &prune_action,
+            &remove_action,
+            "owner",
+            "repo",
+            "owner/repo",
+            true,
+        );
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
@@ -437,8 +458,17 @@ mod tests {
             .with(eq(PathBuf::from("/root/owner/repo/meta.json")))
             .returning(|_| false);
 
-        let action = PruneAction::new(&runtime, root);
-        let result = prune_package(&runtime, &action, "owner", "repo", "owner/repo", true);
+        let prune_action = PruneAction::new(&runtime, root.clone());
+        let remove_action = RemoveAction::new(&runtime, &root);
+        let result = prune_package(
+            &runtime,
+            &prune_action,
+            &remove_action,
+            "owner",
+            "repo",
+            "owner/repo",
+            true,
+        );
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
@@ -498,8 +528,9 @@ mod tests {
             .with(eq(root.clone()))
             .returning(|_| Ok(vec![]));
 
-        let action = PruneAction::new(&runtime, root);
-        let result = prune_all(&runtime, &action, true);
+        let prune_action = PruneAction::new(&runtime, root.clone());
+        let remove_action = RemoveAction::new(&runtime, &root);
+        let result = prune_all(&runtime, &prune_action, &remove_action, true);
         assert!(result.is_ok());
     }
 
@@ -565,8 +596,9 @@ mod tests {
                 Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found").into())
             });
 
-        let action = PruneAction::new(&runtime, root);
-        let result = prune_all(&runtime, &action, true);
+        let prune_action = PruneAction::new(&runtime, root.clone());
+        let remove_action = RemoveAction::new(&runtime, &root);
+        let result = prune_all(&runtime, &prune_action, &remove_action, true);
         assert!(result.is_ok());
     }
 

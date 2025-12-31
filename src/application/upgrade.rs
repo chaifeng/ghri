@@ -3,19 +3,18 @@
 //! This action coordinates:
 //! - Finding installed packages
 //! - Checking for available updates
-//! - Delegating to InstallAction for actual installation
+//! - Returning packages that need upgrading
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use log::warn;
 
 use crate::domain::model::Meta;
 use crate::domain::service::PackageRepository;
 use crate::provider::{Provider, ProviderFactory, RepoId};
 use crate::runtime::Runtime;
-
-use crate::application::InstallAction;
 
 /// Result of checking for an update
 #[derive(Debug)]
@@ -28,11 +27,37 @@ pub struct UpdateCheck<'a> {
     pub has_update: bool,
 }
 
+/// Information about a package that needs upgrading
+#[derive(Debug, Clone)]
+pub struct UpgradeCandidate {
+    /// Repository identifier
+    pub repo: RepoId,
+    /// Current installed version
+    pub current_version: String,
+    /// Latest available version
+    pub latest_version: String,
+    /// Package metadata
+    pub meta: Meta,
+}
+
+/// Result of checking all packages for upgrades
+#[derive(Debug)]
+pub struct UpgradeCheckResult {
+    /// Packages that have updates available
+    pub upgradable: Vec<UpgradeCandidate>,
+    /// Packages that are already up to date
+    pub up_to_date: Vec<(RepoId, String)>,
+    /// Packages with no releases available
+    pub no_releases: Vec<RepoId>,
+}
+
 /// Upgrade action - checks and performs package upgrades
 pub struct UpgradeAction<'a, R: Runtime> {
+    #[allow(dead_code)]
     runtime: &'a R,
     package_repo: PackageRepository<'a, R>,
     provider_factory: &'a ProviderFactory,
+    #[allow(dead_code)]
     install_root: PathBuf,
 }
 
@@ -51,27 +76,68 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
         }
     }
 
-    /// Get the install action for performing actual installations
-    pub fn install_action(&self) -> InstallAction<'a, R> {
-        InstallAction::new(
-            self.runtime,
-            self.provider_factory,
-            self.install_root.clone(),
-        )
-    }
+    /// Check all packages for available upgrades
+    ///
+    /// Returns categorized results: upgradable, up-to-date, no-releases
+    pub fn check_all(
+        &self,
+        repo_filters: &[String],
+        include_prerelease: bool,
+    ) -> Result<UpgradeCheckResult> {
+        let packages = self.package_repo.find_all_with_meta()?;
 
-    /// Get the package repository
-    pub fn package_repo(&self) -> &PackageRepository<'a, R> {
-        &self.package_repo
-    }
+        // Parse filter repos
+        let filter_repos: Vec<RepoId> = repo_filters
+            .iter()
+            .filter_map(|r| r.parse::<RepoId>().ok())
+            .collect();
 
-    /// Find all installed packages
-    pub fn find_all_packages(&self) -> Result<Vec<(PathBuf, Meta)>> {
-        self.package_repo.find_all_with_meta()
+        let mut result = UpgradeCheckResult {
+            upgradable: Vec::new(),
+            up_to_date: Vec::new(),
+            no_releases: Vec::new(),
+        };
+
+        for (_meta_path, meta) in packages {
+            let repo = match meta.name.parse::<RepoId>() {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Invalid repo name in meta: {}", e);
+                    continue;
+                }
+            };
+
+            // Skip if not in filter list (when filter is specified)
+            if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
+                continue;
+            }
+
+            // Check for available update
+            let check = self.check_update(&meta, include_prerelease);
+
+            match check.latest_version {
+                Some(latest) if check.has_update => {
+                    result.upgradable.push(UpgradeCandidate {
+                        repo,
+                        current_version: meta.current_version.clone(),
+                        latest_version: latest,
+                        meta,
+                    });
+                }
+                Some(version) => {
+                    result.up_to_date.push((repo, version));
+                }
+                None => {
+                    result.no_releases.push(repo);
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Check if a package has an available update
-    pub fn check_update<'m>(&self, meta: &'m Meta, include_prerelease: bool) -> UpdateCheck<'m> {
+    fn check_update<'m>(&self, meta: &'m Meta, include_prerelease: bool) -> UpdateCheck<'m> {
         let latest = if include_prerelease {
             meta.get_latest_release()
         } else {
@@ -95,39 +161,9 @@ impl<'a, R: Runtime> UpgradeAction<'a, R> {
         }
     }
 
-    /// Filter packages by repository names
-    pub fn filter_packages<'m>(
-        &self,
-        packages: &'m [(PathBuf, Meta)],
-        filter_repos: &[RepoId],
-    ) -> Vec<&'m (PathBuf, Meta)> {
-        if filter_repos.is_empty() {
-            packages.iter().collect()
-        } else {
-            packages
-                .iter()
-                .filter(|(_, meta)| {
-                    if let Ok(repo) = meta.name.parse::<RepoId>() {
-                        filter_repos.contains(&repo)
-                    } else {
-                        false
-                    }
-                })
-                .collect()
-        }
-    }
-
     /// Resolve the source for a package from its metadata
     pub fn resolve_source(&self, meta: &Meta) -> Arc<dyn Provider> {
         self.provider_factory.provider_for_meta(meta)
-    }
-
-    /// Parse repository strings into RepoIds
-    pub fn parse_repo_filters(&self, repos: &[String]) -> Vec<RepoId> {
-        repos
-            .iter()
-            .filter_map(|r| r.parse::<RepoId>().ok())
-            .collect()
     }
 }
 
@@ -231,27 +267,5 @@ mod tests {
 
         assert!(!check.has_update);
         assert!(check.latest_version.is_none());
-    }
-
-    #[test]
-    fn test_parse_repo_filters() {
-        let mut runtime = MockRuntime::new();
-        runtime
-            .expect_temp_dir()
-            .returning(|| std::path::PathBuf::from("/tmp"));
-
-        let factory = make_test_factory();
-        let action = UpgradeAction::new(&runtime, &factory, "/test".into());
-
-        let repos = vec![
-            "owner1/repo1".to_string(),
-            "owner2/repo2".to_string(),
-            "invalid".to_string(), // Should be filtered out
-        ];
-        let filters = action.parse_repo_filters(&repos);
-
-        assert_eq!(filters.len(), 2);
-        assert_eq!(filters[0].owner, "owner1");
-        assert_eq!(filters[1].owner, "owner2");
     }
 }

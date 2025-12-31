@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::runtime::Runtime;
 
-use crate::domain::model::{Meta, MetaExt};
+use crate::domain::model::{Meta, MetaExt, PackageContext, ResolvedVersion, VersionResolver};
 use crate::domain::service::find_all_packages;
 
 /// Repository for managing locally installed packages.
@@ -110,6 +110,126 @@ impl<'a, R: Runtime> PackageRepository<'a, R> {
     pub fn load_required(&self, owner: &str, repo: &str) -> Result<Meta> {
         self.load(owner, repo)?
             .ok_or_else(|| anyhow::anyhow!("Package {}/{} is not installed", owner, repo))
+    }
+
+    /// Load a package context with normalized version.
+    ///
+    /// This is the primary entry point for commands that operate on installed packages.
+    /// It loads the metadata and normalizes the version in one step.
+    ///
+    /// # Arguments
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `user_version` - Optional version specified by user. If None, uses current version.
+    ///
+    /// # Returns
+    /// A `PackageContext` with all normalized information ready to use.
+    /// The version is always set (either user-specified normalized, or current).
+    ///
+    /// # Errors
+    /// - If the package is not installed
+    /// - If no version is specified and no current version exists
+    pub fn load_context(
+        &self,
+        owner: &str,
+        repo: &str,
+        user_version: Option<&str>,
+    ) -> Result<PackageContext> {
+        let display_name = format!("{}/{}", owner, repo);
+
+        // Load metadata
+        let meta = self.load_required(owner, repo)?;
+
+        // Resolve version: user-specified (normalized) or current
+        let (version, version_specified) = if let Some(v) = user_version {
+            (
+                Some(VersionResolver::resolve_user_version(&meta.releases, v)),
+                true,
+            )
+        } else if !meta.current_version.is_empty() {
+            (
+                Some(ResolvedVersion::current(meta.current_version.clone())),
+                false,
+            )
+        } else {
+            anyhow::bail!(
+                "No current version set for {}. Install a version first.",
+                display_name
+            );
+        };
+
+        // Build paths
+        let package_dir = self.package_dir(owner, repo);
+        let version_dir = version
+            .as_ref()
+            .map(|v| self.version_dir(owner, repo, v.as_str()));
+
+        Ok(PackageContext {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            display_name,
+            version,
+            version_specified,
+            package_dir,
+            version_dir,
+            meta,
+        })
+    }
+
+    /// Load a package context without requiring a version.
+    ///
+    /// Use this for commands that operate on the entire package (e.g., `remove` without version,
+    /// `links` to show all links). The version will be None if not specified and no current.
+    ///
+    /// # Arguments
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `user_version` - Optional version specified by user. If provided, it will be resolved.
+    ///
+    /// # Returns
+    /// A `PackageContext` where version may be None if not specified and no current version exists.
+    pub fn load_context_any(
+        &self,
+        owner: &str,
+        repo: &str,
+        user_version: Option<&str>,
+    ) -> Result<PackageContext> {
+        let display_name = format!("{}/{}", owner, repo);
+
+        // Load metadata
+        let meta = self.load_required(owner, repo)?;
+
+        // Resolve version if specified, otherwise use current if available
+        let (version, version_specified) = if let Some(v) = user_version {
+            (
+                Some(VersionResolver::resolve_user_version(&meta.releases, v)),
+                true,
+            )
+        } else if !meta.current_version.is_empty() {
+            (
+                Some(ResolvedVersion::current(meta.current_version.clone())),
+                false,
+            )
+        } else {
+            (None, false)
+        };
+
+        // Build paths
+        let package_dir = self.package_dir(owner, repo);
+        let version_dir = version
+            .as_ref()
+            .map(|v| self.version_dir(owner, repo, v.as_str()));
+
+        Ok(PackageContext {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            display_name,
+            version,
+            version_specified,
+            package_dir,
+            version_dir,
+            meta,
+        })
     }
 
     /// Save package metadata.

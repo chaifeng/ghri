@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::application::{InstallAction, UpgradeAction};
 use crate::cleanup::CleanupContext;
-use crate::provider::RepoId;
 use crate::runtime::Runtime;
 
 use super::config::{Config, InstallOptions, UpgradeOptions};
@@ -19,71 +18,26 @@ pub async fn upgrade<R: Runtime + 'static>(
     options: UpgradeOptions,
 ) -> Result<()> {
     let services = Services::from_config(&config)?;
-    run_upgrade(&config, runtime, services, repos, options).await
-}
 
-#[tracing::instrument(skip(config, runtime, services, repos, options))]
-async fn run_upgrade<R: Runtime + 'static>(
-    config: &Config,
-    runtime: R,
-    services: Services,
-    repos: Vec<String>,
-    options: UpgradeOptions,
-) -> Result<()> {
-    // First, use UpgradeAction to find packages and check for updates
-    let packages_to_upgrade: Vec<_> = {
+    // Check for upgrades using UpgradeAction
+    let check_result = {
         let action = UpgradeAction::new(
             &runtime,
             &services.provider_factory,
             config.install_root.clone(),
         );
-
-        // Find all installed packages
-        let packages = action.find_all_packages()?;
-
-        if packages.is_empty() {
-            println!("No packages installed.");
-            return Ok(());
-        }
-
-        // Parse and filter repositories
-        let filter_repos = action.parse_repo_filters(&repos);
-
-        // Collect packages that need upgrading
-        packages
-            .into_iter()
-            .filter_map(|(_, meta)| {
-                let repo = match meta.name.parse::<RepoId>() {
-                    Ok(r) => r,
-                    Err(_) => return None,
-                };
-
-                // Skip if not in filter list (when filter is specified)
-                if !filter_repos.is_empty() && !filter_repos.contains(&repo) {
-                    return None;
-                }
-
-                // Check for available update
-                let update_check = action.check_update(&meta, options.pre);
-
-                match update_check.latest_version {
-                    Some(latest) if update_check.has_update => {
-                        Some((repo, meta.current_version.clone(), latest))
-                    }
-                    Some(_) => {
-                        println!("   {} {} is up to date", repo, meta.current_version);
-                        None
-                    }
-                    None => {
-                        println!("   {} no release available", repo);
-                        None
-                    }
-                }
-            })
-            .collect()
+        action.check_all(&repos, options.pre)?
     };
 
-    if packages_to_upgrade.is_empty() {
+    // Display status for packages that don't need upgrading
+    for (repo, version) in &check_result.up_to_date {
+        println!("   {} {} is up to date", repo, version);
+    }
+    for repo in &check_result.no_releases {
+        println!("   {} no release available", repo);
+    }
+
+    if check_result.upgradable.is_empty() {
         println!("\nAll packages are up to date.");
         return Ok(());
     }
@@ -107,12 +61,12 @@ async fn run_upgrade<R: Runtime + 'static>(
     );
 
     let mut upgraded_count = 0;
-    let total = packages_to_upgrade.len();
+    let total = check_result.upgradable.len();
 
-    for (repo, current_version, latest_version) in packages_to_upgrade {
+    for candidate in check_result.upgradable {
         println!(
             "   upgrading {} {} -> {}",
-            repo, current_version, latest_version
+            candidate.repo, candidate.current_version, candidate.latest_version
         );
 
         // Install the new version using saved filters from meta
@@ -126,9 +80,9 @@ async fn run_upgrade<R: Runtime + 'static>(
 
         // Use run_install for unified installation path
         // Format: owner/repo@version
-        let repo_str = format!("{}@{}", repo, latest_version);
+        let repo_str = format!("{}@{}", candidate.repo, candidate.latest_version);
         if let Err(e) = run_install(
-            config,
+            &config,
             Arc::clone(&runtime),
             &action,
             &release_installer,
@@ -137,7 +91,7 @@ async fn run_upgrade<R: Runtime + 'static>(
         )
         .await
         {
-            eprintln!("   failed to upgrade {}: {}", repo, e);
+            eprintln!("   failed to upgrade {}: {}", candidate.repo, e);
         } else {
             upgraded_count += 1;
 
@@ -146,12 +100,12 @@ async fn run_upgrade<R: Runtime + 'static>(
                 && let Err(e) = prune_package_dir(
                     runtime.as_ref(),
                     &config.install_root,
-                    &repo.owner,
-                    &repo.repo,
-                    &repo.to_string(),
+                    &candidate.repo.owner,
+                    &candidate.repo.repo,
+                    &candidate.repo.to_string(),
                 )
             {
-                eprintln!("   warning: failed to prune {}: {}", repo, e);
+                eprintln!("   warning: failed to prune {}: {}", candidate.repo, e);
             }
         }
     }

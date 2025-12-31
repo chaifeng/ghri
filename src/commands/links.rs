@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::application::LinkAction;
 use crate::domain::model::{LinkRule, LinkStatus, VersionedLink};
+use crate::domain::service::PackageRepository;
 use crate::provider::PackageSpec;
 use crate::runtime::Runtime;
 
@@ -85,46 +86,41 @@ pub fn links<R: Runtime>(runtime: R, repo_str: &str, config: Config) -> Result<(
     let spec = repo_str.parse::<PackageSpec>()?;
     debug!("Using install root: {:?}", config.install_root);
 
-    let action = LinkAction::new(&runtime, config.install_root);
+    let pkg_repo = PackageRepository::new(&runtime, config.install_root.clone());
 
-    if !action.is_installed(&spec.repo.owner, &spec.repo.repo) {
-        debug!("Package not installed");
-        anyhow::bail!("Package {} is not installed.", spec.repo);
-    }
+    // Load package context without requiring version
+    let ctx =
+        pkg_repo.load_context_any(&spec.repo.owner, &spec.repo.repo, spec.version.as_deref())?;
 
-    let meta = action.load_meta(&spec.repo.owner, &spec.repo.repo)?;
     debug!(
         "Found {} link rules, {} versioned links",
-        meta.links.len(),
-        meta.versioned_links.len()
+        ctx.meta.links.len(),
+        ctx.meta.versioned_links.len()
     );
 
-    if meta.links.is_empty() && meta.versioned_links.is_empty() {
-        println!("No link rules for {}.", spec.repo);
+    if ctx.meta.links.is_empty() && ctx.meta.versioned_links.is_empty() {
+        println!("No link rules for {}.", ctx.display_name);
         return Ok(());
     }
 
-    let package_dir = action.package_dir(&spec.repo.owner, &spec.repo.repo);
-    let current_version_dir = action
-        .package_repo()
-        .current_version_dir(&spec.repo.owner, &spec.repo.repo);
+    let current_version_dir = pkg_repo.current_version_dir(&ctx.owner, &ctx.repo);
     let header = format!(
         "Link rules for {} (current: {}):",
-        spec.repo, meta.current_version
+        ctx.display_name, ctx.meta.current_version
     );
     if let Some(version_dir) = current_version_dir {
-        print_links(&runtime, &meta.links, &version_dir, Some(&header));
+        print_links(&runtime, &ctx.meta.links, &version_dir, Some(&header));
     } else {
         println!("{}", header);
         println!("  (current version symlink not found, cannot show links)");
     }
 
-    if !meta.versioned_links.is_empty() {
+    if !ctx.meta.versioned_links.is_empty() {
         println!();
         print_versioned_links(
             &runtime,
-            &meta.versioned_links,
-            &package_dir,
+            &ctx.meta.versioned_links,
+            &ctx.package_dir,
             Some("Versioned links (historical):"),
         );
     }
