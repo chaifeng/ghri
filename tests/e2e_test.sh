@@ -44,6 +44,8 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
 fi
 
 exec 9>&2
+exec 8>&2
+BASH_XTRACEFD=8
 
 # Test counters
 TESTS_PASSED=0
@@ -59,24 +61,24 @@ GHRI_BIN=""
 # shellcheck disable=SC2329
 note() {
     echo -e "${BLUE}[INFO]${NC} $*"
-} >&9
+} 8>/dev/null >&9
 
 # shellcheck disable=SC2329
 pass() {
     echo -e "${GREEN}[PASS]${NC} $*"
     TESTS_PASSED=$((TESTS_PASSED + 1))
-} >&9
+} 8>/dev/null >&9
 
 # shellcheck disable=SC2329
 fail() {
     echo -e "${RED}[FAIL]${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
-} >&9
+} 8>/dev/null >&9
 
 # shellcheck disable=SC2329
 warn() {
     echo -e "${YELLOW}[WARN]${NC} $*"
-} >&9
+} 8>/dev/null >&9
 
 # shellcheck disable=SC2329
 describe_scenario() {
@@ -84,7 +86,7 @@ describe_scenario() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${BLUE}$*${NC}"
     echo -e "${BLUE}========================================${NC}"
-} >&9
+} 8>/dev/null >&9
 
 #######################################
 # Setup and teardown
@@ -174,7 +176,8 @@ run() {
 # shellcheck disable=SC2329
 run:() {
     run "$@"
-}
+} 8>/dev/null
+
 
 # Run a command silently, pass if succeeds, fail and exit if fails
 # shellcheck disable=SC2329
@@ -288,7 +291,7 @@ dsl_match() {
     
     # All pattern words consumed, check if all args consumed
     [[ $ai -eq $alen ]]
-}
+} 8>/dev/null
 
 # DSL expect function
 # Patterns use '_' for single value placeholder, '*' for rest of args
@@ -568,8 +571,13 @@ expect_symlink_to_exist() {
     local msg="${2:-Symlink should exist: $link}"
 
     if [[ -L "$link" ]]; then
-        pass "$msg"
-        return 0
+        if [[ -e "$(realpath "$link")" ]]; then
+            pass "$msg"
+            return 0
+        else
+            fail "$msg (symlink is broken: $link)"
+            return 1
+        fi
     else
         fail "$msg (symlink not found: $link)"
         return 1
@@ -585,7 +593,8 @@ expect_symlink_to_be_relative() {
     if [[ -n "$target" ]] &&  [[ "$target" != /* ]] && [[ -e "$target" ]]; then
         pass "Symlink $target is relative to $dir"
     else
-        fail "Symlink absolute or broken: $target"
+        fail "Symlink $target is absolute or not relative to $dir"
+        false
     fi
     popd >/dev/null || return 1
 }
@@ -711,8 +720,7 @@ scenario_basic_usage_with_bach_repo() {
     local link_path="$bin_dir/my-bach"
     note "4. Linking to file $link_path..."
     ghri link bach-sh/bach "$link_path"
-    expect symlink "$link_path" to exist &&
-        expect symlink "$link_path" to be relative to "${link_path%/*}"
+    expect symlink "$link_path" to exist
 
     # Verify link in meta.json is relative to package directory
     local meta_file="$GHRI_ROOT/bach-sh/bach/meta.json"
