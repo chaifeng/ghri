@@ -98,7 +98,7 @@ ghri install <OWNER/REPO[@VERSION]> [OPTIONS]
 - `@VERSION` - Optional. Specify a version (e.g., `@v1.0.0`)
 
 **Options:**
-- `-f, --filter <PATTERN>` - Filter assets by glob pattern (can use multiple times)
+- `-f, --filter <PATTERN>` - Filter assets by glob pattern (can use multiple times; matches ANY pattern)
 - `--pre` - Allow installing pre-release versions
 - `-y, --yes` - Skip confirmation prompt
 - `--api-url <URL>` - Custom GitHub API URL (for GitHub Enterprise)
@@ -320,8 +320,9 @@ When a release has multiple assets, ghri tries to auto-match your system. If aut
 # Select musl static build
 ghri install chaifeng/zidr --filter "*musl*"
 
-# Combine multiple filters
-ghri install chaifeng/zidr --filter "*linux*" --filter "*x86_64*"
+# Match multiple patterns (OR logic)
+# This will match assets containing "aarch64" OR "x86_64"
+ghri install chaifeng/zidr --filter "*aarch64*" --filter "*x86_64*"
 ```
 
 Filters are saved to metadata. They apply automatically on future updates.

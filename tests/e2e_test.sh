@@ -964,6 +964,44 @@ scenario_filtering_and_path_linking() {
 }
 
 # shellcheck disable=SC2329
+scenario_multiple_filters_or_logic() {
+    local GHRI_ROOT
+    describe_scenario "Test: Multiple Filters with OR Logic"
+    using_root "$TEST_ROOT/multi_filter"
+
+    # Install with multiple filters (OR logic)
+    # This should match assets containing either "x86_64" OR "aarch64"
+    note "Installing chaifeng/zidr with multiple filters (OR logic)..."
+    run ghri install -y chaifeng/zidr --filter '*x86_64*' --filter '*aarch64*'
+
+    # Verify installation succeeded
+    local current_version
+    current_version="$(readlink "$GHRI_ROOT/chaifeng/zidr/current")"
+    local version_dir="$GHRI_ROOT/chaifeng/zidr/$current_version"
+    
+    # Count downloaded files
+    local file_count
+    file_count="$(find "$version_dir" -type f | wc -l | tr -d ' ')"
+    if [[ $file_count -gt 0 ]]; then
+        pass "Files downloaded with multiple filters ($file_count files)"
+    else
+        fail "No files downloaded with multiple filters"
+    fi
+
+    # Verify that we got files matching EITHER filter (OR logic)
+    # With OR logic, we should get more files than a single filter
+    local x86_count aarch64_count
+    x86_count="$(find "$version_dir" -type f -name '*x86_64*' 2>/dev/null | wc -l | tr -d ' ')"
+    aarch64_count="$(find "$version_dir" -type f -name '*aarch64*' 2>/dev/null | wc -l | tr -d ' ')"
+    
+    if [[ $x86_count -gt 0 ]] || [[ $aarch64_count -gt 0 ]]; then
+        pass "Multiple filters working with OR logic (x86_64: $x86_count, aarch64: $aarch64_count)"
+    else
+        fail "Multiple filters did not match any files"
+    fi
+}
+
+# shellcheck disable=SC2329
 scenario_upgrade_mechanism_mocked() {
     local GHRI_ROOT
     describe_scenario "Test: Upgrade after update (Mocked)"
@@ -1124,6 +1162,7 @@ main() {
         scenario_version_management_and_upgrades
         scenario_versioned_linking
         scenario_filtering_and_path_linking
+        scenario_multiple_filters_or_logic
         scenario_upgrade_mechanism_mocked
         scenario_error_handling
         scenario_edge_cases_and_concurrency

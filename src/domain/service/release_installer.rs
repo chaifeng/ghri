@@ -288,12 +288,16 @@ pub(super) async fn ensure_installed_impl<
     Ok(())
 }
 
-/// Filter assets by glob patterns. An asset matches if ALL patterns match its name.
+/// Filter assets by glob patterns. An asset matches if ANY pattern matches its name (OR logic).
+/// If filters is empty, returns all assets.
 fn filter_assets(assets: &[ReleaseAsset], filters: &[String]) -> Vec<ReleaseAsset> {
+    if filters.is_empty() {
+        return assets.to_vec();
+    }
     assets
         .iter()
         .filter(|asset| {
-            filters.iter().all(|pattern| {
+            filters.iter().any(|pattern| {
                 glob::Pattern::new(pattern)
                     .map(|p| p.matches(&asset.name))
                     .unwrap_or(false)
@@ -642,9 +646,9 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_assets_multiple_patterns_and_logic() {
-        // Test filtering assets with multiple patterns (AND logic)
-        // Pattern: "*aarch64*" AND "*darwin*" should match only darwin-aarch64
+    fn test_filter_assets_multiple_patterns_or_logic() {
+        // Test filtering assets with multiple patterns (OR logic)
+        // Pattern: "*aarch64*" OR "*x86_64*" should match both architectures
 
         let assets = vec![
             ReleaseAsset {
@@ -667,14 +671,36 @@ mod tests {
                 size: 1000,
                 download_url: "http://example.com/darwin-x86_64".into(),
             },
+            ReleaseAsset {
+                name: "checksums.txt".into(),
+                size: 100,
+                download_url: "http://example.com/checksums".into(),
+            },
         ];
 
-        let filters = vec!["*aarch64*".to_string(), "*darwin*".to_string()];
+        let filters = vec!["*aarch64*".to_string(), "*x86_64*".to_string()];
         let filtered = filter_assets(&assets, &filters);
 
-        // Should match ONLY: app-darwin-aarch64.tar.gz (both patterns must match)
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "app-darwin-aarch64.tar.gz");
+        // Should match all assets containing aarch64 OR x86_64 (4 total)
+        assert_eq!(filtered.len(), 4);
+        assert!(filtered.iter().any(|a| a.name == "app-linux-x86_64.tar.gz"));
+        assert!(
+            filtered
+                .iter()
+                .any(|a| a.name == "app-linux-aarch64.tar.gz")
+        );
+        assert!(
+            filtered
+                .iter()
+                .any(|a| a.name == "app-darwin-aarch64.tar.gz")
+        );
+        assert!(
+            filtered
+                .iter()
+                .any(|a| a.name == "app-darwin-x86_64.tar.gz")
+        );
+        // checksums.txt should NOT be included
+        assert!(!filtered.iter().any(|a| a.name == "checksums.txt"));
     }
 
     #[test]

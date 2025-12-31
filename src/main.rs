@@ -76,7 +76,7 @@ pub struct InstallArgs {
     pub api_url: Option<String>,
 
     /// Filter assets by glob pattern (can be specified multiple times)
-    /// Example: --filter "*aarch64*" --filter "*macos*"
+    /// Example: --filter "*aarch64*" --filter "*x86_64*" (matches either)
     #[arg(long = "filter", short = 'f', value_name = "PATTERN")]
     pub filters: Vec<String>,
 
