@@ -24,7 +24,11 @@ pub fn link<R: Runtime>(runtime: R, repo_str: &str, dest: PathBuf, config: Confi
     // Check if the original destination path had a trailing slash
     // This indicates the user intends to treat the destination as a directory
     // Note: We check the string representation of the path component
-    let has_trailing_slash = dest.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR);
+    // On Windows, both '/' and '\' are valid path separators, so check for both
+    let has_trailing_slash = {
+        let path_str = dest.to_string_lossy();
+        path_str.ends_with('/') || path_str.ends_with('\\')
+    };
 
     let action = LinkAction::new(&runtime, config.install_root);
 
